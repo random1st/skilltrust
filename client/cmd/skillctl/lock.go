@@ -118,7 +118,14 @@ func resolveRoot(flags *flag.FlagSet) (string, error) {
 	if flags.NArg() > 0 {
 		root = flags.Arg(0)
 	}
-	return filepath.Abs(root)
+	resolved, note, err := resolvePath(root)
+	if err != nil {
+		return "", err
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
+	}
+	return resolved, nil
 }
 
 func renderVerify(out io.Writer, report *lockfile.Report, format string) error {

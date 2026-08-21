@@ -37,6 +37,7 @@ Usage:
   skillctl digest [flags] [path] compute the canonical digest of a skill directory
   skillctl lock [flags] [path]   pin every skill by digest into skills.lock
   skillctl verify [flags] [path] report drift against skills.lock
+  skillctl hook <subcommand>     run or install the session-start drift check
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -55,6 +56,8 @@ func main() {
 		os.Exit(runLock(os.Args[2:]))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:]))
+	case "hook":
+		os.Exit(runHook(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":
@@ -96,10 +99,13 @@ func runLint(args []string) int {
 	if flags.NArg() > 0 {
 		root = flags.Arg(0)
 	}
-	absolute, err := filepath.Abs(root)
+	absolute, note, err := resolvePath(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
 
 	var threshold lint.Severity
@@ -147,6 +153,29 @@ func render(writer io.Writer, report *lint.Report, format string) error {
 	default:
 		return fmt.Errorf("unknown --format %q; use text, json or sarif", format)
 	}
+}
+
+// resolvePath returns the absolute path a command will actually operate on, plus a note
+// when getting there crossed a symlink.
+//
+// A skills directory is very often a symlink (~/.claude/skills -> ~/.agents/skills is a
+// common layout), so following one is normal and must not be an error. What is dangerous
+// is following one silently: a copy made with `cp -R` of a symlinked directory is a
+// symlink, not a copy, and every "sandboxed" write lands on the original. Printing the
+// resolved path makes that mistake visible the first time instead of the hard way.
+func resolvePath(raw string) (string, string, error) {
+	absolute, err := filepath.Abs(raw)
+	if err != nil {
+		return "", "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return absolute, "", nil
+	}
+	if resolved == absolute {
+		return absolute, "", nil
+	}
+	return resolved, fmt.Sprintf("%s is a symlink to %s", absolute, resolved), nil
 }
 
 func versionString() string {

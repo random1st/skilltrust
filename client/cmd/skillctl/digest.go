@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/random1st/skilltrust/client/internal/archive"
@@ -42,10 +41,13 @@ func runDigest(args []string) int {
 	if flags.NArg() > 0 {
 		root = flags.Arg(0)
 	}
-	absolute, err := filepath.Abs(root)
+	absolute, note, err := resolvePath(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
+	}
+	if note != "" && !*quiet {
+		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
 
 	result, err := archive.Build(absolute, archive.Limits{})
