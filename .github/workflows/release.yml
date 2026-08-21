@@ -1,8 +1,18 @@
 # Cut a release of the client.
 #
-# Everything published here is checksummed, SBOM'd and signed with the same kind of
-# machinery SkillTrust sells. Asking people to verify their skills while shipping our own
-# binary unsigned would be the clearest possible argument against us.
+# This workflow publishes artifacts, checksums, an SBOM and a keyless cosign signature. It
+# does NOT hold the Apple Developer ID key.
+#
+# GoReleaser's notarize block wants that certificate as a base64 secret, which would put
+# the key that signs every release wherever the runner lives. For a product whose pitch is
+# supply-chain integrity that is the weakest possible link, and it replaces a credential
+# boundary that already exists with a new and worse one. macOS releases are therefore
+# signed and notarized from the maintainer's machine: `make release && make notarize` in
+# client/, with the key never leaving its keychain.
+#
+# Runs here produce unsigned macOS binaries, and that is the honest outcome: a build nobody
+# can Gatekeeper-approve says what it is, while a build signed by a key sitting in shared
+# CI does not.
 name: release
 
 on:
@@ -17,7 +27,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest # macOS runner: notarization needs Apple tooling
+    runs-on: macos-latest # lipo, for the universal binary
     permissions:
       contents: write # create the release and upload artifacts
       id-token: write # keyless cosign signing via the OIDC token
@@ -43,13 +53,6 @@ jobs:
           workdir: client
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing and notarization are gated on the certificate being present, so a fork
-          # can cut an unsigned test release without editing the configuration.
-          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           # Separate token: the Homebrew tap lives in another repository, and GITHUB_TOKEN
           # is scoped to this one.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

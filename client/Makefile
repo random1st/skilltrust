@@ -1,7 +1,7 @@
 # skillctl — the SkillTrust client
 #
 # Everything here runs offline. `make check` is what CI runs.
-.PHONY: build check fmt lint test snapshot install clean
+.PHONY: build check fmt lint test snapshot install clean release notarize
 
 GOFLAGS ?=
 VERSION ?= dev
@@ -38,6 +38,16 @@ reproducible:
 	 b=$$(shasum -a 256 /tmp/skillctl-repro-b | cut -d' ' -f1); \
 	 rm -f /tmp/skillctl-repro-a /tmp/skillctl-repro-b; \
 	 if [ "$$a" = "$$b" ]; then echo "reproducible: $$a"; else echo "DIVERGED: $$a != $$b"; exit 1; fi
+
+# Cut a release from this machine. The Developer ID key stays in the local keychain
+# rather than being exported into CI secrets — see scripts/sign-macos.sh for why.
+release:
+	@test -n "$$APPLE_SIGNING_IDENTITY" || \
+		{ echo "set APPLE_SIGNING_IDENTITY, e.g. \"Developer ID Application: Name (TEAMID)\""; exit 1; }
+	goreleaser release --clean
+
+notarize:
+	./scripts/notarize-macos.sh dist
 
 clean:
 	rm -rf bin dist

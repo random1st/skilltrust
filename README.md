@@ -84,6 +84,16 @@ verifier you cannot rebuild is a verifier you have to trust, which is the thing 
 avoid. Releases are checksummed, SBOM'd and cosign-signed; the verification command ships in
 each release's notes.
 
+macOS builds are signed and notarized from the maintainer's machine, not from CI. Putting the
+Developer ID key into a CI secret would place the key that signs every release wherever the
+runner lives — for this product in particular, that is the weakest link available.
+
+## Licence
+
+Proprietary; see [LICENSE.txt](LICENSE.txt). The model is deliberately undecided: a licence
+can be widened later, but source released under an open one cannot be withdrawn from anyone
+who already has it.
+
 ## Status
 
 Working today, tested on Linux, macOS and Windows: `lint`, `digest`, `lock`, `verify`, `hook`.

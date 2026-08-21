@@ -46,23 +46,11 @@ universal_binaries:
       - skillctl
     replace: true
     name_template: skillctl
-
-# Gatekeeper refuses unsigned downloads on macOS. Signing and notarization run only when
-# the credentials are present, so a fork can still cut an unsigned test release.
-notarize:
-  macos:
-    - ids:
-        - skillctl-macos
-      enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      sign:
-        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
-        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
-      notarize:
-        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
-        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
-        key: "{{ .Env.MACOS_NOTARY_KEY }}"
-        wait: true
-        timeout: 20m
+    hooks:
+      # Signed with the local keychain identity; see scripts/sign-macos.sh for why the
+      # certificate is not exported into CI secrets.
+      post:
+        - ./scripts/sign-macos.sh "{{ .Path }}"
 
 archives:
   - id: skillctl

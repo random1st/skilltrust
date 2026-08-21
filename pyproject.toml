@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Provider-neutral trust, notarization, revocation, and distribution control plane for agent skills"
 readme = "README.md"
 requires-python = ">=3.13"
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE.txt" }
 authors = [{ name = "SkillTrust contributors" }]
 dependencies = [
   "cryptography>=45,<47",
