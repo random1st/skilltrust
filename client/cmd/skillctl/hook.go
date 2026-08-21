@@ -65,7 +65,7 @@ func runHookSessionStart(args []string) int {
 		"exit non-zero on drift; most clients treat that as a blocked session")
 	verbose := flags.Bool("verbose", false, "also report when everything matches")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
@@ -229,7 +229,7 @@ func runHookInstall(args []string) int {
 	settings := flags.String("settings", "", "settings file to modify (default the client's user settings)")
 	apply := flags.Bool("apply", false, "write the change instead of printing it")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 	if *client != "claude" {

@@ -38,6 +38,7 @@ Usage:
   skillctl lock [flags] [path]   pin every skill by digest into skills.lock
   skillctl verify [flags] [path] report drift against skills.lock
   skillctl hook <subcommand>     run or install the session-start drift check
+  skillctl attest <subcommand>   sign and verify approvals over a skill's digest
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -58,6 +59,8 @@ func main() {
 		os.Exit(runVerify(os.Args[2:]))
 	case "hook":
 		os.Exit(runHook(os.Args[2:]))
+	case "attest":
+		os.Exit(runAttest(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":
@@ -91,7 +94,7 @@ func runLint(args []string) int {
 	maxDirs := flags.Int("max-dirs", lint.DefaultMaxDirectories,
 		"maximum number of directories to visit")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
@@ -153,6 +156,51 @@ func render(writer io.Writer, report *lint.Report, format string) error {
 	default:
 		return fmt.Errorf("unknown --format %q; use text, json or sarif", format)
 	}
+}
+
+// parseArgs accepts flags and positional arguments in any order.
+//
+// Go's flag package stops at the first non-flag token, so `attest sign demo --key k` would
+// silently print usage and exit 3 while `attest sign --key k demo` worked. In a script that
+// reads as an unexplained failure, and a security tool that is fussy about argument order
+// is one people wrap in something that gets the order wrong once.
+func parseArgs(flags *flag.FlagSet, args []string) error {
+	var options, positional []string
+
+	for index := 0; index < len(args); index++ {
+		token := args[index]
+		if token == "--" {
+			positional = append(positional, args[index+1:]...)
+			break
+		}
+		if len(token) < 2 || token[0] != '-' {
+			positional = append(positional, token)
+			continue
+		}
+
+		options = append(options, token)
+		name := strings.TrimLeft(token, "-")
+		if equals := strings.IndexByte(name, '='); equals >= 0 {
+			continue // --flag=value carries its own value
+		}
+		definition := flags.Lookup(name)
+		if definition == nil {
+			continue // unknown: let flag.Parse produce the error
+		}
+		if boolean, ok := definition.Value.(interface{ IsBoolFlag() bool }); ok && boolean.IsBoolFlag() {
+			continue // boolean flags never consume the next token
+		}
+		if index+1 < len(args) {
+			index++
+			options = append(options, args[index])
+		}
+	}
+
+	// The explicit terminator matters: a positional that begins with a dash (a path like
+	// -weird, or anything after an author's own --) must not be re-read as a flag once the
+	// two groups are concatenated.
+	reordered := append(options, "--")
+	return flags.Parse(append(reordered, positional...))
 }
 
 // resolvePath returns the absolute path a command will actually operate on, plus a note

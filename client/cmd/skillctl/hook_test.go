@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,5 +120,57 @@ func TestResolvePathReportsSymlinkHops(t *testing.T) {
 	// /private/var, so a temp directory legitimately produces a note.
 	if _, note, err := resolvePath(expected); err != nil || note != "" {
 		t.Fatalf("an already-resolved path must produce no note: note=%q err=%v", note, err)
+	}
+}
+
+// Go's flag package stops at the first non-flag token, so without permutation
+// `attest sign demo --key k` would print usage and exit 3 while the same command with the
+// path last worked. A tool that is fussy about argument order gets wrapped in a script
+// that gets the order wrong exactly once.
+func TestParseArgsAcceptsEitherOrder(t *testing.T) {
+	build := func() (*flag.FlagSet, *string, *bool) {
+		flags := flag.NewFlagSet("test", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		key := flags.String("key", "", "")
+		force := flags.Bool("force", false, "")
+		return flags, key, force
+	}
+
+	cases := map[string][]string{
+		"flags first":      {"--key", "k", "--force", "demo"},
+		"positional first": {"demo", "--key", "k", "--force"},
+		"interleaved":      {"--key", "k", "demo", "--force"},
+		"equals form":      {"demo", "--key=k", "--force"},
+	}
+
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			flags, key, force := build()
+			if err := parseArgs(flags, args); err != nil {
+				t.Fatal(err)
+			}
+			if *key != "k" || !*force {
+				t.Fatalf("key=%q force=%v", *key, *force)
+			}
+			if flags.NArg() != 1 || flags.Arg(0) != "demo" {
+				t.Fatalf("positional = %v", flags.Args())
+			}
+		})
+	}
+}
+
+func TestParseArgsStopsAtDoubleDash(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	key := flags.String("key", "", "")
+
+	if err := parseArgs(flags, []string{"--key", "k", "--", "--not-a-flag"}); err != nil {
+		t.Fatal(err)
+	}
+	if *key != "k" {
+		t.Fatalf("key = %q", *key)
+	}
+	if flags.NArg() != 1 || flags.Arg(0) != "--not-a-flag" {
+		t.Fatalf("positional = %v", flags.Args())
 	}
 }

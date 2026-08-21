@@ -33,7 +33,7 @@ func runDigest(args []string) int {
 	expect := flags.String("expect", "", "fail unless the computed digest equals this value")
 	quiet := flags.Bool("quiet", false, "print only the digest")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 

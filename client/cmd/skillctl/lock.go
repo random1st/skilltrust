@@ -27,7 +27,7 @@ func runLock(args []string) int {
 	output := flags.String("output", "", "lock file to write (default <path>/"+lockfile.FileName+")")
 	maxDepth := flags.Int("max-depth", lint.DefaultMaxDepth, "maximum directory depth to scan")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
@@ -75,7 +75,7 @@ func runVerify(args []string) int {
 	format := flags.String("format", "text", "output format: text or json")
 	maxDepth := flags.Int("max-depth", lint.DefaultMaxDepth, "maximum directory depth to scan")
 
-	if err := flags.Parse(args); err != nil {
+	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
