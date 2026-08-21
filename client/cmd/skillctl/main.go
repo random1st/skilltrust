@@ -33,6 +33,7 @@ const (
 const usage = `skillctl - know what your agents are running
 
 Getting started:
+  skillctl add <git-url>         install skills from a repository, signing each one
   skillctl setup                 do everything once: a key, a signature per skill,
                                  and the client hooks that check them
   skillctl status                what is installed, what changed, what is approved
@@ -62,6 +63,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "add", "update":
+		os.Exit(runAdd(os.Args[2:]))
 	case "setup":
 		os.Exit(runSetup(os.Args[2:]))
 	case "init":

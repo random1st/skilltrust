@@ -199,7 +199,7 @@ func TestVerifyRootsChecksAReceiptOnlyTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &receipt.Receipt{Name: "alpha", Digest: built.Digest, Source: "alpha.tar"}
+	record := &receipt.Receipt{Name: "alpha", Digest: built.Digest, Source: receipt.Origin{Bundle: "alpha.tar"}}
 	if err := record.Save(receipt.Path(root, "alpha")); err != nil {
 		t.Fatal(err)
 	}

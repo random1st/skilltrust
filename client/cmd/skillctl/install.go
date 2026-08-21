@@ -180,7 +180,7 @@ func runInstall(args []string) int {
 	}
 
 	record := &receipt.Receipt{
-		Name: name, Digest: expected, Source: bundlePath,
+		Name: name, Digest: expected, Source: receipt.Origin{Bundle: bundlePath},
 		InstalledAt: time.Now(), Approval: approval,
 	}
 	if err := record.Save(receipt.Path(skillsRoot, name)); err != nil {
@@ -229,7 +229,7 @@ func runReceipts(args []string) int {
 	unapproved := 0
 	for _, record := range records {
 		fmt.Printf("  %-28s %s\n", record.Name, shortDigest(record.Digest))
-		fmt.Printf("  %-28s from %s\n", "", record.Source)
+		fmt.Printf("  %-28s from %s\n", "", record.Source.Describe())
 		if record.Approval == nil {
 			unapproved++
 			fmt.Printf("  %-28s unapproved\n", "")

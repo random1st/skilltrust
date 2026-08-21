@@ -12,7 +12,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	approvedAt := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 
 	record := &Receipt{
-		Name: "demo", Digest: "sha256:aa", Source: "demo.tar", InstalledAt: time.Now(),
+		Name: "demo", Digest: "sha256:aa", Source: Origin{Bundle: "demo.tar"}, InstalledAt: time.Now(),
 		Approval: &Approval{By: "reviewer", At: approvedAt, KeyID: "sha256:bb"},
 	}
 	if err := record.Save(Path(root, "demo")); err != nil {
@@ -35,7 +35,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 // the absence of an approval is recorded as absence rather than filled in.
 func TestUnapprovedInstallHasNoApproval(t *testing.T) {
 	root := t.TempDir()
-	record := &Receipt{Name: "demo", Digest: "sha256:aa", Source: "demo.tar", InstalledAt: time.Now()}
+	record := &Receipt{Name: "demo", Digest: "sha256:aa", Source: Origin{Bundle: "demo.tar"}, InstalledAt: time.Now()}
 	if err := record.Save(Path(root, "demo")); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestLoadAllIsSortedAndToleratesAnAbsentDirectory(t *testing.T) {
 	}
 
 	for _, name := range []string{"zeta", "alpha"} {
-		record := &Receipt{Name: name, Digest: "sha256:aa", Source: "x", InstalledAt: time.Now()}
+		record := &Receipt{Name: name, Digest: "sha256:aa", Source: Origin{Bundle: "x"}, InstalledAt: time.Now()}
 		if err := record.Save(Path(root, name)); err != nil {
 			t.Fatal(err)
 		}

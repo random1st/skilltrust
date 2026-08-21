@@ -20,7 +20,7 @@ func writeReceipt(t *testing.T, root, name string) {
 		t.Fatal(err)
 	}
 	record := &receipt.Receipt{
-		Name: name, Digest: built.Digest, Source: name + ".tar", InstalledAt: time.Now(),
+		Name: name, Digest: built.Digest, Source: receipt.Origin{Bundle: name + ".tar"}, InstalledAt: time.Now(),
 	}
 	if err := record.Save(receipt.Path(root, name)); err != nil {
 		t.Fatal(err)

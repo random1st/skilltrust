@@ -20,8 +20,11 @@ import (
 // the way of clients, which look for directories containing SKILL.md and ignore this one.
 const Directory = ".skilltrust"
 
-// Version is the receipt schema version.
-const Version = 1
+// Version is the receipt schema version. It went to 2 when Source stopped being a bare
+// string: "installed from pdf-tools.tar" cannot answer which repository and which commit
+// those bytes came from, and that is the question an update has to answer before it can
+// tell a legitimate upstream change from a local one.
+const Version = 2
 
 // Approval is the attestation a skill was installed under, when there was one.
 type Approval struct {
@@ -31,12 +34,42 @@ type Approval struct {
 	Notes string    `json:"notes,omitempty"`
 }
 
+// Origin is where the installed bytes came from.
+//
+// A repository and a commit make an update decidable: the tool can fetch that same source
+// again, see what moved, and say whether the change came from upstream or from this machine.
+// A bundle path can only say a file was read once, from somewhere, at some time.
+type Origin struct {
+	Repository string `json:"repository,omitempty"`
+	Commit     string `json:"commit,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Bundle     string `json:"bundle,omitempty"`
+}
+
+// Describe renders the origin for a person reading a report.
+func (o Origin) Describe() string {
+	switch {
+	case o.Repository != "" && o.Commit != "":
+		commit := o.Commit
+		if len(commit) > 12 {
+			commit = commit[:12]
+		}
+		return o.Repository + " @ " + commit
+	case o.Repository != "":
+		return o.Repository
+	case o.Bundle != "":
+		return o.Bundle
+	default:
+		return "unknown"
+	}
+}
+
 // Receipt is the record written beside an installed skill.
 type Receipt struct {
 	Version     int       `json:"version"`
 	Name        string    `json:"name"`
 	Digest      string    `json:"digest"`
-	Source      string    `json:"source"`
+	Source      Origin    `json:"source"`
 	InstalledAt time.Time `json:"installed_at"`
 	// Approval is absent when a skill was installed without an attestation. That absence
 	// is meaningful and is recorded as such rather than filled in with a placeholder: an

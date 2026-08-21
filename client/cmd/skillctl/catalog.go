@@ -368,7 +368,7 @@ func reportSync(
 					status.name, relativeOr(status.directory, root))
 			} else if status.record.Approval == nil {
 				fmt.Printf("  unapproved %s\n             installed from %s\n\n",
-					status.name, status.record.Source)
+					status.name, status.record.Source.Describe())
 			}
 		}
 	}
