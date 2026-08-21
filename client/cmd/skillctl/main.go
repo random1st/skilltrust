@@ -33,10 +33,11 @@ const (
 const usage = `skillctl - inventory and verify Agent Skills
 
 Usage:
+  skillctl digest [flags] [path] compute the canonical digest of a skill directory
   skillctl lint [flags] [path]   inventory a tree of skills and report risk indicators
   skillctl version               print version information
 
-Run "skillctl lint -h" for lint flags.
+Run "skillctl <command> -h" for per-command flags.
 `
 
 func main() {
@@ -46,6 +47,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "digest":
+		os.Exit(runDigest(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":
