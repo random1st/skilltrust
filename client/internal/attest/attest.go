@@ -94,42 +94,27 @@ func pae(payloadType string, payload []byte) []byte {
 		len(payloadType), payloadType, len(payload), payload))
 }
 
-// Sign marshals the statement, signs those exact bytes, and returns the envelope.
-func Sign(statement Statement, key ed25519.PrivateKey) (*Envelope, *Statement, error) {
-	statement.Version = StatementVersion
-	if statement.Subject.Name == "" || statement.Subject.Digest == "" {
-		return nil, nil, errors.New("a statement needs a subject name and digest")
-	}
-	if statement.ApprovedBy == "" {
-		return nil, nil, errors.New("a statement needs an approver; an unattributed " +
-			"approval cannot answer the question an audit asks")
-	}
-	if statement.ApprovedAt.IsZero() {
-		return nil, nil, errors.New("a statement needs an approval time")
-	}
-	statement.ApprovedAt = statement.ApprovedAt.UTC().Truncate(time.Second)
-
-	payload, err := json.Marshal(statement)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	signature := ed25519.Sign(key, pae(PayloadType, payload))
+// SignPayload signs exact bytes under a payload type and returns a DSSE envelope.
+//
+// The payload type is bound into the signed bytes, so a signature made for one kind of
+// document cannot be presented as a signature over another. Callers pass the bytes they
+// mean to sign; nothing is re-serialized on the way in or out.
+func SignPayload(payloadType string, payload []byte, key ed25519.PrivateKey) *Envelope {
+	signature := ed25519.Sign(key, pae(payloadType, payload))
 	return &Envelope{
-		PayloadType: PayloadType,
+		PayloadType: payloadType,
 		Payload:     base64.StdEncoding.EncodeToString(payload),
 		Signatures: []Signature{{
 			KeyID: KeyID(key.Public().(ed25519.PublicKey)),
 			Sig:   base64.StdEncoding.EncodeToString(signature),
 		}},
-	}, &statement, nil
+	}
 }
 
-// Verify checks the envelope against the trusted keys and returns the statement it
-// asserts. It never returns a statement it could not verify: an unverified claim being
-// handed back for inspection is how one ends up acting on it.
-func Verify(envelope *Envelope, trusted *TrustedKeys) (*Statement, string, error) {
-	if envelope.PayloadType != PayloadType {
+// VerifyPayload checks an envelope of the expected type against the pinned keys and
+// returns the exact bytes that were signed, plus the key that signed them.
+func VerifyPayload(envelope *Envelope, expectedType string, trusted *TrustedKeys) ([]byte, string, error) {
+	if envelope.PayloadType != expectedType {
 		return nil, "", fmt.Errorf("%w: %q", ErrWrongPayload, envelope.PayloadType)
 	}
 	if len(envelope.Signatures) == 0 {
@@ -157,22 +142,55 @@ func Verify(envelope *Envelope, trusted *TrustedKeys) (*Statement, string, error
 		if !ed25519.Verify(public, signed, raw) {
 			return nil, "", fmt.Errorf("%w for key %s", ErrBadSignature, signature.KeyID)
 		}
-
-		var statement Statement
-		if err := json.Unmarshal(payload, &statement); err != nil {
-			return nil, "", fmt.Errorf("%w: payload is not a statement: %v",
-				ErrMalformedEnvelope, err)
-		}
-		if statement.Version != StatementVersion {
-			return nil, "", fmt.Errorf("%w: version %d", ErrUnknownVersion, statement.Version)
-		}
-		return &statement, signature.KeyID, nil
+		return payload, signature.KeyID, nil
 	}
 
 	if !sawTrustedKey {
 		return nil, "", ErrUntrustedKey
 	}
 	return nil, "", ErrBadSignature
+}
+
+// Sign marshals the statement, signs those exact bytes, and returns the envelope.
+func Sign(statement Statement, key ed25519.PrivateKey) (*Envelope, *Statement, error) {
+	statement.Version = StatementVersion
+	if statement.Subject.Name == "" || statement.Subject.Digest == "" {
+		return nil, nil, errors.New("a statement needs a subject name and digest")
+	}
+	if statement.ApprovedBy == "" {
+		return nil, nil, errors.New("a statement needs an approver; an unattributed " +
+			"approval cannot answer the question an audit asks")
+	}
+	if statement.ApprovedAt.IsZero() {
+		return nil, nil, errors.New("a statement needs an approval time")
+	}
+	statement.ApprovedAt = statement.ApprovedAt.UTC().Truncate(time.Second)
+
+	payload, err := json.Marshal(statement)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return SignPayload(PayloadType, payload, key), &statement, nil
+}
+
+// Verify checks the envelope against the trusted keys and returns the statement it
+// asserts. It never returns a statement it could not verify: an unverified claim being
+// handed back for inspection is how one ends up acting on it.
+func Verify(envelope *Envelope, trusted *TrustedKeys) (*Statement, string, error) {
+	payload, keyID, err := VerifyPayload(envelope, PayloadType, trusted)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var statement Statement
+	if err := json.Unmarshal(payload, &statement); err != nil {
+		return nil, "", fmt.Errorf("%w: payload is not a statement: %v", ErrMalformedEnvelope, err)
+	}
+	if statement.Version != StatementVersion {
+		return nil, "", fmt.Errorf("%w: version %d", ErrUnknownVersion, statement.Version)
+	}
+	return &statement, keyID, nil
 }
 
 // KeyID is a stable identifier for a public key: the digest of its PKIX encoding.

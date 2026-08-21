@@ -55,9 +55,27 @@ speaks every session is one people stop reading.
 | `lock` | Pin every skill under a path into `skills.lock`. |
 | `verify` | Recompute and report drift. `--frozen` also fails on unpinned skills; use it in CI. |
 | `hook` | Run or install the session-start drift check. |
+| `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
+| `catalog` | Revoke digests in a signed, expiring snapshot. |
+| `sync` | Reconcile installed skills against the catalog; `--prune` removes revoked ones. |
 
 Exit codes are part of the contract: `0` clean, `1` findings or drift, `3` error. "We checked
 and it is bad" and "we could not check" are different facts and never share a code.
+
+## Revocation
+
+A signature says these bytes were approved. Revocation says this digest is no longer allowed
+*now*, and a claim about the present cannot be proved once and cached forever:
+
+```bash
+skillctl catalog revoke sha256:… --key signer.key --reason "credential exfiltration"
+skillctl sync ~/.claude/skills --prune
+```
+
+The catalog carries a monotonic sequence and an expiry. Replaying an older catalog to
+un-revoke something is refused even though its signature is genuine, and a stale catalog is a
+refusal rather than an answer of "nothing revoked". Revocation is keyed by digest, so it
+follows the bytes through a rename, a move, or a copy.
 
 ## What this does not claim
 
@@ -96,13 +114,15 @@ who already has it.
 
 ## Status
 
-Working today, tested on Linux, macOS and Windows: `lint`, `digest`, `lock`, `verify`, `hook`.
+Working today, tested on Linux, macOS and Windows: `lint`, `digest`, `lock`, `verify`, `hook`, `attest`, `catalog`, `sync`.
+Signing is ed25519 with a locally held key; keyless Sigstore belongs behind the same interface
+later, as the low-friction path for public skills.
 
-Not built yet: the notary, the signed catalog, and revocation that reaches installed copies.
-The Python tree under `src/skilltrust/` is the control plane those will be built from. It
-implements EKU-separated certificate profiles, a fail-closed admission decision where `FAIL`
-and `UNKNOWN` both deny, SLSA provenance and Git review adapters bound to an exact repository
-and head SHA — but none of it is wired to the client yet.
+Not built yet: distribution. There is no registry, no hosted notary and no way to fetch a
+catalog other than putting the file where the client can read it. The Python tree under
+`src/skilltrust/` is the control plane those will be built from — EKU-separated certificate
+profiles, a fail-closed admission decision, SLSA provenance, Git review adapters bound to an
+exact repository and head SHA — but none of it is wired to the client yet.
 
 One known limitation, pinned by a test rather than a footnote: Windows has no executable bit,
 so a skill containing executables does not produce the same digest there as on POSIX. The bit

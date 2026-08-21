@@ -39,6 +39,8 @@ Usage:
   skillctl verify [flags] [path] report drift against skills.lock
   skillctl hook <subcommand>     run or install the session-start drift check
   skillctl attest <subcommand>   sign and verify approvals over a skill's digest
+  skillctl catalog <subcommand>  manage the signed revocation catalog
+  skillctl sync [flags] [path]   reconcile installed skills against revocations
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -61,6 +63,10 @@ func main() {
 		os.Exit(runHook(os.Args[2:]))
 	case "attest":
 		os.Exit(runAttest(os.Args[2:]))
+	case "catalog":
+		os.Exit(runCatalog(os.Args[2:]))
+	case "sync":
+		os.Exit(runSync(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":
