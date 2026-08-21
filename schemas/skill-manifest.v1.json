@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "CapabilityRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "justification": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Justification",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "justification"
+      ],
+      "title": "CapabilityRequest",
+      "type": "object"
+    },
+    "FileRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        },
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "digest",
+        "size"
+      ],
+      "title": "FileRecord",
+      "type": "object"
+    },
+    "PayloadTier": {
+      "enum": [
+        "declarative",
+        "executable"
+      ],
+      "title": "PayloadTier",
+      "type": "string"
+    },
+    "SkillDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "artifact_digest"
+      ],
+      "title": "SkillDependency",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "clone_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Clone Url",
+          "type": "string"
+        },
+        "commit_sha": {
+          "pattern": "^[0-9a-f]{40,64}$",
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "contribution_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contribution Id"
+        },
+        "provider": {
+          "enum": [
+            "github",
+            "azure-devops",
+            "generic-git"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "repository_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository_id",
+        "clone_url",
+        "commit_sha"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "const": "skilltrust.dev/v1",
+      "default": "skilltrust.dev/v1",
+      "title": "Api Version",
+      "type": "string"
+    },
+    "capabilities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CapabilityRequest"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "dependencies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SkillDependency"
+      },
+      "title": "Dependencies",
+      "type": "array"
+    },
+    "description": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "entrypoints": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Entrypoints",
+      "type": "array"
+    },
+    "files": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FileRecord"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "kind": {
+      "const": "SkillManifest",
+      "default": "SkillManifest",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Metadata",
+      "type": "object"
+    },
+    "name": {
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+      "title": "Name",
+      "type": "string"
+    },
+    "payload_tier": {
+      "$ref": "#/$defs/PayloadTier"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceRef"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "payload_tier",
+    "source",
+    "description"
+  ],
+  "title": "SkillManifestV1",
+  "type": "object"
+}

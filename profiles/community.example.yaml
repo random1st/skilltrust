@@ -1,0 +1,20 @@
+api_version: skilltrust.dev/v1
+kind: TrustPolicy
+policy_id: community-example
+version: 1
+trust_domain: community
+accepted_oidc_issuers:
+  - https://token.actions.githubusercontent.com
+accepted_identities:
+  - https://github.com/example/skills/.github/workflows/notarize.yml@refs/heads/main
+required_validators:
+  - archive-safety
+  - manifest-policy
+  - secret-scan
+declarative_lease: P7D
+executable_lease: PT24H
+max_offline_lease: P7D
+runtime_capability_adapters:
+  - bubblewrap-v1
+hooks: []
+

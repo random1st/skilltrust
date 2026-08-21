@@ -1,0 +1,826 @@
+{
+  "$defs": {
+    "CapabilityRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "justification": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Justification",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "justification"
+      ],
+      "title": "CapabilityRequest",
+      "type": "object"
+    },
+    "CatalogVerificationV1": {
+      "additionalProperties": false,
+      "description": "Freshness result from a domain-specific TUF client and root.",
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "root_version": {
+          "minimum": 1,
+          "title": "Root Version",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ValidationStatus"
+        },
+        "timestamp_version": {
+          "minimum": 1,
+          "title": "Timestamp Version",
+          "type": "integer"
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/TrustDomain"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "trust_domain",
+        "artifact_digest",
+        "status",
+        "code",
+        "checked_at",
+        "valid_until",
+        "root_version",
+        "timestamp_version"
+      ],
+      "title": "CatalogVerificationV1",
+      "type": "object"
+    },
+    "FileRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        },
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "digest",
+        "size"
+      ],
+      "title": "FileRecord",
+      "type": "object"
+    },
+    "HookSpecV1": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_hosts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Hosts",
+          "type": "array"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "network": {
+          "default": "none",
+          "enum": [
+            "none",
+            "allowlist"
+          ],
+          "title": "Network",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "maximum": 600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "command",
+        "timeout_seconds"
+      ],
+      "title": "HookSpecV1",
+      "type": "object"
+    },
+    "NotarizationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "skilltrust.dev/v1",
+          "default": "skilltrust.dev/v1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "artifact_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "builder_identity": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Builder Identity",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "kind": {
+          "const": "Notarization",
+          "default": "Notarization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manifest_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Digest",
+          "type": "string"
+        },
+        "predicate_type": {
+          "const": "https://skilltrust.dev/Notarization/v1",
+          "default": "https://skilltrust.dev/Notarization/v1",
+          "title": "Predicate Type",
+          "type": "string"
+        },
+        "signature_bundle_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Signature Bundle Digest",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "statement_type": {
+          "const": "https://in-toto.io/Statement/v1",
+          "default": "https://in-toto.io/Statement/v1",
+          "title": "Statement Type",
+          "type": "string"
+        },
+        "transparency_log_entry": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transparency Log Entry"
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/TrustDomain"
+        },
+        "validation_results": {
+          "items": {
+            "$ref": "#/$defs/ValidationResultV1"
+          },
+          "title": "Validation Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifact_digest",
+        "manifest_digest",
+        "source",
+        "trust_domain",
+        "builder_identity",
+        "validation_results",
+        "signature_bundle_digest",
+        "issued_at"
+      ],
+      "title": "NotarizationV1",
+      "type": "object"
+    },
+    "PayloadTier": {
+      "enum": [
+        "declarative",
+        "executable"
+      ],
+      "title": "PayloadTier",
+      "type": "string"
+    },
+    "SignatureVerificationV1": {
+      "additionalProperties": false,
+      "description": "Result produced by a Sigstore or pinned private-PKI adapter.",
+      "properties": {
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity"
+        },
+        "manifest_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manifest Digest"
+        },
+        "oidc_issuer": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Oidc Issuer"
+        },
+        "policy_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Digest"
+        },
+        "source_commit_sha": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Commit Sha"
+        },
+        "status": {
+          "$ref": "#/$defs/ValidationStatus"
+        },
+        "subject_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Subject Digest",
+          "type": "string"
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/TrustDomain"
+        }
+      },
+      "required": [
+        "subject_digest",
+        "trust_domain",
+        "status",
+        "code"
+      ],
+      "title": "SignatureVerificationV1",
+      "type": "object"
+    },
+    "SkillDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "artifact_digest"
+      ],
+      "title": "SkillDependency",
+      "type": "object"
+    },
+    "SkillManifestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "skilltrust.dev/v1",
+          "default": "skilltrust.dev/v1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CapabilityRequest"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "dependencies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SkillDependency"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "description": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "entrypoints": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Entrypoints",
+          "type": "array"
+        },
+        "files": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FileRecord"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "kind": {
+          "const": "SkillManifest",
+          "default": "SkillManifest",
+          "title": "Kind",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "payload_tier": {
+          "$ref": "#/$defs/PayloadTier"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "payload_tier",
+        "source",
+        "description"
+      ],
+      "title": "SkillManifestV1",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "clone_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Clone Url",
+          "type": "string"
+        },
+        "commit_sha": {
+          "pattern": "^[0-9a-f]{40,64}$",
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "contribution_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contribution Id"
+        },
+        "provider": {
+          "enum": [
+            "github",
+            "azure-devops",
+            "generic-git"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "repository_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository_id",
+        "clone_url",
+        "commit_sha"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    },
+    "TrustDomain": {
+      "enum": [
+        "community",
+        "enterprise"
+      ],
+      "title": "TrustDomain",
+      "type": "string"
+    },
+    "TrustPolicyV1": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_identities": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Accepted Identities",
+          "type": "array"
+        },
+        "accepted_oidc_issuers": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Accepted Oidc Issuers",
+          "type": "array"
+        },
+        "api_version": {
+          "const": "skilltrust.dev/v1",
+          "default": "skilltrust.dev/v1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "declarative_lease": {
+          "format": "duration",
+          "title": "Declarative Lease",
+          "type": "string"
+        },
+        "executable_lease": {
+          "format": "duration",
+          "title": "Executable Lease",
+          "type": "string"
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HookSpecV1"
+          },
+          "title": "Hooks",
+          "type": "array"
+        },
+        "kind": {
+          "const": "TrustPolicy",
+          "default": "TrustPolicy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_offline_lease": {
+          "format": "duration",
+          "title": "Max Offline Lease",
+          "type": "string"
+        },
+        "policy_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "required_validators": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Validators",
+          "type": "array"
+        },
+        "runtime_capability_adapters": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Runtime Capability Adapters",
+          "type": "array"
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/TrustDomain"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "version",
+        "trust_domain",
+        "accepted_oidc_issuers",
+        "accepted_identities",
+        "required_validators",
+        "declarative_lease",
+        "executable_lease",
+        "max_offline_lease"
+      ],
+      "title": "TrustPolicyV1",
+      "type": "object"
+    },
+    "ValidationResultV1": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "skilltrust.dev/v1",
+          "default": "skilltrust.dev/v1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "kind": {
+          "const": "ValidationResult",
+          "default": "ValidationResult",
+          "title": "Kind",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ValidationStatus"
+        },
+        "subject_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Subject Digest",
+          "type": "string"
+        },
+        "validator": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Validator",
+          "type": "string"
+        },
+        "validator_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Validator Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "validator",
+        "validator_version",
+        "subject_digest",
+        "status",
+        "code",
+        "message",
+        "started_at",
+        "completed_at"
+      ],
+      "title": "ValidationResultV1",
+      "type": "object"
+    },
+    "ValidationStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "title": "ValidationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifact_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Artifact Digest",
+      "type": "string"
+    },
+    "catalog": {
+      "$ref": "#/$defs/CatalogVerificationV1"
+    },
+    "evaluated_at": {
+      "format": "date-time",
+      "title": "Evaluated At",
+      "type": "string"
+    },
+    "manifest": {
+      "$ref": "#/$defs/SkillManifestV1"
+    },
+    "notarization": {
+      "$ref": "#/$defs/NotarizationV1"
+    },
+    "policy": {
+      "$ref": "#/$defs/TrustPolicyV1"
+    },
+    "revoked_artifacts": {
+      "default": [],
+      "items": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Revoked Artifacts",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "runtime_adapter": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Adapter"
+    },
+    "signature": {
+      "$ref": "#/$defs/SignatureVerificationV1"
+    }
+  },
+  "required": [
+    "artifact_digest",
+    "manifest",
+    "notarization",
+    "policy",
+    "signature",
+    "catalog",
+    "evaluated_at"
+  ],
+  "title": "VerificationInputV1",
+  "type": "object"
+}

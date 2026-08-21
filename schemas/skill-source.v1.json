@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "CapabilityRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "justification": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Justification",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "justification"
+      ],
+      "title": "CapabilityRequest",
+      "type": "object"
+    },
+    "PayloadTier": {
+      "enum": [
+        "declarative",
+        "executable"
+      ],
+      "title": "PayloadTier",
+      "type": "string"
+    },
+    "SkillDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "artifact_digest"
+      ],
+      "title": "SkillDependency",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Contributor-authored declaration; trusted source identity is injected by the builder.",
+  "properties": {
+    "api_version": {
+      "const": "skilltrust.dev/v1",
+      "default": "skilltrust.dev/v1",
+      "title": "Api Version",
+      "type": "string"
+    },
+    "capabilities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CapabilityRequest"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "dependencies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SkillDependency"
+      },
+      "title": "Dependencies",
+      "type": "array"
+    },
+    "description": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "entrypoints": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Entrypoints",
+      "type": "array"
+    },
+    "kind": {
+      "const": "SkillSource",
+      "default": "SkillSource",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Metadata",
+      "type": "object"
+    },
+    "name": {
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+      "title": "Name",
+      "type": "string"
+    },
+    "payload_tier": {
+      "$ref": "#/$defs/PayloadTier"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "payload_tier",
+    "description"
+  ],
+  "title": "SkillSourceV1",
+  "type": "object"
+}

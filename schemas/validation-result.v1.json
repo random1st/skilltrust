@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "ValidationStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "title": "ValidationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "const": "skilltrust.dev/v1",
+      "default": "skilltrust.dev/v1",
+      "title": "Api Version",
+      "type": "string"
+    },
+    "code": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Code",
+      "type": "string"
+    },
+    "completed_at": {
+      "format": "date-time",
+      "title": "Completed At",
+      "type": "string"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "kind": {
+      "const": "ValidationResult",
+      "default": "ValidationResult",
+      "title": "Kind",
+      "type": "string"
+    },
+    "message": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Message",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ValidationStatus"
+    },
+    "subject_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Subject Digest",
+      "type": "string"
+    },
+    "validator": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Validator",
+      "type": "string"
+    },
+    "validator_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Validator Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "validator",
+    "validator_version",
+    "subject_digest",
+    "status",
+    "code",
+    "message",
+    "started_at",
+    "completed_at"
+  ],
+  "title": "ValidationResultV1",
+  "type": "object"
+}
