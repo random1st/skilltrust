@@ -128,3 +128,38 @@ def test_extract_archive_rejects_per_file_size_limit(tmp_path: Path) -> None:
 
     with pytest.raises(ArchiveLimitError, match="per-file limit"):
         extract_archive(payload, tmp_path / "out", limits=ArchiveLimits(max_file_bytes=4))
+
+
+def test_python_and_go_canonicalization_disagree(tmp_path: Path) -> None:
+    """Pin the divergence that retired this implementation.
+
+    Both produce a valid tar extracting to the same tree, yet the digests differ:
+    Python pads to ``tarfile.RECORDSIZE`` where Go emits two zero blocks, and writes
+    NUL rather than octal zero into ``devmajor``/``devminor``. If someone ever changes
+    one side, this fails instead of the mismatch surfacing as a production
+    ``artifact_digest_mismatch`` with nothing looking wrong in either codebase.
+    """
+
+    # Computed by `skillctl digest` on this exact fixture; also pinned as goldenDigest
+    # in client/internal/archive/archive_test.go.
+    go_digest = "sha256:664331d6eb71c46d5ed5c8627ef0dd247c412693c9f68a3079cf8b5e15208ea8"
+
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: A demo skill.\n---\n\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "REFERENCE.md").write_text("Reference text.\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts" / "run.sh"
+    script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    built = build_archive(tmp_path)
+
+    assert built.digest != go_digest, (
+        "Python now matches skillctl. If that is intentional, delete this test and the "
+        "retirement guard in archive.py; if it is not, a signing path just changed."
+    )
+    assert len(built.payload) % tarfile.RECORDSIZE == 0, (
+        "the divergence is the record padding; if this no longer holds the reason above is stale"
+    )

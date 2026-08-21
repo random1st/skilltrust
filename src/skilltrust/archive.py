@@ -1,4 +1,22 @@
-"""Deterministic archive packaging and guarded extraction for SkillTrust."""
+"""Deterministic archive packaging and guarded extraction for SkillTrust.
+
+.. warning::
+   This module is **retired as a digest source**. The canonical archive format has
+   exactly one implementation, ``skillctl`` (Go), and this one is kept only so the
+   existing CAS tests keep describing the behaviour they were written against.
+
+   The two implementations do not agree, and the disagreement is invisible: both
+   produce a valid tar that extracts to an identical tree, yet the digests differ.
+   Python's :mod:`tarfile` pads the payload to ``RECORDSIZE`` (20 blocks, 10240
+   bytes) where Go emits only the two zero end-of-archive blocks, and Python writes
+   eight NUL bytes into ``devmajor``/``devminor`` for regular files where Go writes
+   octal zero, moving the header checksum. A notary signing one digest while a client
+   computes the other fails as ``artifact_digest_mismatch`` in production with nothing
+   in either codebase looking wrong.
+
+   Set ``SKILLTRUST_ALLOW_LEGACY_ARCHIVE=1`` to run it anyway. Nothing that crosses
+   the boundary to a client may do so.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +42,22 @@ class ArchiveLimits:
 
 
 DEFAULT_ARCHIVE_LIMITS = ArchiveLimits()
+
+#: Opt-in for the retired canonicalization. Only the tests that pin its historical
+#: behaviour are allowed to set it.
+LEGACY_ARCHIVE_ENV = "SKILLTRUST_ALLOW_LEGACY_ARCHIVE"
+
+
+def _assert_legacy_archive_allowed() -> None:
+    if os.environ.get(LEGACY_ARCHIVE_ENV) == "1":
+        return
+    raise ArchiveError(
+        "the canonical archive format is implemented only by skillctl (Go); this "
+        "Python implementation produces a different digest for the same tree and must "
+        "not be used to produce anything a client will verify. Use "
+        "`skillctl digest <dir>`, or set "
+        f"{LEGACY_ARCHIVE_ENV}=1 to run the retired implementation deliberately."
+    )
 
 
 @dataclass(frozen=True)
@@ -132,6 +166,8 @@ def build_archive(
 ) -> BuiltArchive:
     """Create a deterministic tar archive from a local directory tree."""
 
+    _assert_legacy_archive_allowed()
+
     if not source_dir.is_dir():
         raise ArchiveSourceError(
             f"source directory '{source_dir}' does not exist or is not a directory"
@@ -150,6 +186,8 @@ def extract_archive(
     payload: bytes, destination: Path, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS
 ) -> tuple[FileRecord, ...]:
     """Validate and extract a canonical archive into a caller-owned directory."""
+
+    _assert_legacy_archive_allowed()
 
     if len(payload) > limits.max_archive_bytes:
         raise ArchiveLimitError(
