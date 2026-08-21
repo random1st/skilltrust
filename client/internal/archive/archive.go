@@ -218,6 +218,15 @@ func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
 			if err != nil {
 				return err
 			}
+			// The executable bit is part of the identity, because flipping it moves a
+			// skill out of the instruction-only tier without changing a byte of content.
+			//
+			// Windows has no such bit: Go reports 0666 or 0444 there, so this is always
+			// false and a tree packed on Windows gets a different digest than the same
+			// tree packed on macOS or Linux. That is a real limitation, not an oversight,
+			// and it is asserted by TestExecutableBitIsAbsentOnWindows rather than left
+			// to a comment. Deriving the bit from content instead would make the digest
+			// portable but would stop describing what is actually on disk.
 			files = append(files, collected{
 				path:       canonical,
 				content:    content,

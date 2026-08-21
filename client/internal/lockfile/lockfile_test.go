@@ -3,6 +3,7 @@ package lockfile
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/random1st/skilltrust/client/internal/lint"
@@ -108,6 +109,9 @@ func TestModifiedSkillIsDetectedAndTheFileIsNamed(t *testing.T) {
 // A file whose bytes are unchanged but which became executable moves the skill out of the
 // instruction-only tier, so it is drift even though no content changed.
 func TestPermissionChangeIsDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no executable bit, so this drift class cannot occur there")
+	}
 	root := t.TempDir()
 	directory := writeSkill(t, root, "alpha")
 	pin(t, root)

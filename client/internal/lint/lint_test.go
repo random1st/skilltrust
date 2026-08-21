@@ -3,6 +3,7 @@ package lint
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -123,6 +124,9 @@ func TestRiskIndicators(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.rule == "risk/executable-file" && runtime.GOOS == "windows" {
+				t.Skip("Windows has no executable bit, so the file reads as plain code")
+			}
 			root := writeSkill(t, "demo", testCase.body, testCase.extra)
 			found := rules(Run(root, Options{}))
 			severity, ok := found[testCase.rule]

@@ -83,6 +83,9 @@ func TestDigestIsIndependentOfTimestampsAndOwnership(t *testing.T) {
 }
 
 func TestExecutableBitChangesTheDigest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no executable bit; see TestExecutableBitIsAbsentOnWindows")
+	}
 	root := buildFixture(t)
 	before, err := Build(root, Limits{})
 	if err != nil {
@@ -234,5 +237,27 @@ func TestRegistryAllowsRepeatedDirectories(t *testing.T) {
 	}
 	if err := registry.registerFile("notes/b.md"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Pins the platform gap so it is a known, tested property rather than a surprise: a tree
+// containing executables does not produce the same digest on Windows as on POSIX.
+func TestExecutableBitIsAbsentOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("describes Windows behaviour")
+	}
+
+	result, err := Build(buildFixture(t), Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range result.Files {
+		if file.Executable {
+			t.Fatalf("%s reports an executable bit Windows cannot store", file.Path)
+		}
+	}
+	if result.Digest == goldenDigest {
+		t.Fatal("if Windows ever matches the POSIX digest, the limitation is gone and " +
+			"this test plus the skips that reference it should go with it")
 	}
 }
