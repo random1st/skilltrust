@@ -1,0 +1,153 @@
+# Release pipeline for the SkillTrust client.
+#
+# Two properties matter more than convenience here:
+#   * Reproducibility. -trimpath, a pinned toolchain and mod_timestamp mean anyone can
+#     rebuild a released binary and get the same bytes. A verifier you cannot rebuild is a
+#     verifier you have to trust, which is the thing this product exists to avoid.
+#   * Self-application. Releases are checksummed, SBOM'd and signed with the same kind of
+#     machinery SkillTrust sells. We do not ask anyone to trust a tool we ship unsigned.
+version: 2
+
+project_name: skillctl
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: skillctl
+    main: ./cmd/skillctl
+    binary: skillctl
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+    # Pin the embedded timestamp to the commit so two builds of the same source match.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+# A single macOS binary that runs on both Intel and Apple Silicon, so the cask does not
+# have to pick.
+universal_binaries:
+  - id: skillctl-macos
+    ids:
+      - skillctl
+    replace: true
+    name_template: skillctl
+
+# Gatekeeper refuses unsigned downloads on macOS. Signing and notarization run only when
+# the credentials are present, so a fork can still cut an unsigned test release.
+notarize:
+  macos:
+    - ids:
+        - skillctl-macos
+      enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+archives:
+  - id: skillctl
+    ids:
+      - skillctl
+      - skillctl-macos
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - id: archives
+    artifacts: archive
+
+# Keyless Sigstore signatures over the checksum file: one signature covers every artifact.
+# Requires cosign on the release runner.
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+    output: true
+
+homebrew_casks:
+  - name: skillctl
+    repository:
+      owner: random1st
+      name: homebrew-tap
+      branch: main
+    directory: Casks
+    homepage: https://github.com/random1st/skilltrust
+    description: Inventory, verify and revoke Agent Skills
+    binaries:
+      - skillctl
+    # Strip the quarantine attribute only for notarized builds; without this a downloaded
+    # binary is blocked by Gatekeeper on first run.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"], print_stderr: false).exit_status == 0
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/skillctl"]
+          end
+
+release:
+  draft: true
+  prerelease: auto
+  footer: |
+    ## Verify this release
+
+    ```
+    cosign verify-blob \
+      --certificate skillctl_{{ .Version }}_checksums.txt.pem \
+      --signature   skillctl_{{ .Version }}_checksums.txt.sig \
+      --certificate-identity-regexp 'https://github.com/random1st/skilltrust/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      skillctl_{{ .Version }}_checksums.txt
+    ```
+
+    Builds are reproducible: `-trimpath` with a pinned toolchain and a commit-derived
+    timestamp. Rebuild from the tag and compare digests rather than taking our word for it.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
