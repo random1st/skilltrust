@@ -13,12 +13,28 @@ anyone approve it.
 ## Quickstart
 
 ```bash
-skillctl lint ~/.claude/skills     # what is in there, and what reaches for credentials
-skillctl lock ~/.claude/skills     # pin every skill by digest
-skillctl verify ~/.claude/skills   # has anything changed since?
+skillctl init      # once: a signing key, kept on this machine
+skillctl status    # what is installed, what changed, what is approved
 ```
 
-No account, no key, no network. `lint` runs on a tree you already have.
+```
+/Users/you/.agents/skills
+
+  skills       97
+  findings     0 high · 125 medium · 41 low
+  drift        not pinned — run `skillctl lock`
+  approvals    0 approved · 0 unapproved · 97 unmanaged
+  revocation   no catalog — not checked
+
+Next: skillctl lock     — pin these, so a later change is detectable
+```
+
+No paths to type. `status` covers every standard skills location — `.agents/skills` and
+`.claude/skills`, in the project and under your home — and deduplicates the ones that turn
+out to be the same directory. Keys, pinned keys and the catalog live in `~/.skilltrust`
+(override with `SKILLTRUST_HOME`), so no command needs to be told where they are.
+
+No account, no network. Everything below runs offline.
 
 ## Why the lock matters for your own skills
 
@@ -54,6 +70,8 @@ speaks every session is one people stop reading.
 | `digest` | The canonical digest of a directory. No source-control arguments, so a second party can re-derive it. |
 | `lock` | Pin every skill under a path into `skills.lock`. |
 | `verify` | Recompute and report drift. `--frozen` also fails on unpinned skills; use it in CI. |
+| `init` | Set up `~/.skilltrust`: a signing key and your pinned keys. Run once. |
+| `status` | One screen: installed, changed, approved, revoked. |
 | `hook` | Run or install the session-start drift check. |
 | `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
 | `catalog` | Revoke digests in a signed, expiring snapshot. |
@@ -68,9 +86,9 @@ and it is bad" and "we could not check" are different facts and never share a co
 ## Installing
 
 ```bash
-skillctl bundle skills/pdf-tools --out pdf-tools.tar
-skillctl attest sign skills/pdf-tools --key signer.key --as reviewer@corp
-skillctl install pdf-tools.tar --into ~/.agents/skills --attestation pdf-tools.att.json
+skillctl bundle skills/pdf-tools     # writes pdf-tools.tar
+skillctl attest sign skills/pdf-tools # signs it as your git email
+skillctl install pdf-tools.tar        # finds pdf-tools.att.json beside it
 ```
 
 `install` refuses without `--attestation` unless you pass `--unverified`, which the receipt

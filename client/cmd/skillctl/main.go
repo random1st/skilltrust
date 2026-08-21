@@ -30,9 +30,13 @@ const (
 	exitUsage    = 3
 )
 
-const usage = `skillctl - inventory and verify Agent Skills
+const usage = `skillctl - know what your agents are running
 
-Usage:
+Getting started:
+  skillctl init                  set up once: a signing key and your pinned keys
+  skillctl status                what is installed, what changed, what is approved
+
+Everything else:
   skillctl lint [flags] [path]   inventory a tree of skills and report risk indicators
   skillctl digest [flags] [path] compute the canonical digest of a skill directory
   skillctl lock [flags] [path]   pin every skill by digest into skills.lock
@@ -56,6 +60,10 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "init":
+		os.Exit(runInit(os.Args[2:]))
+	case "status":
+		os.Exit(runStatus(os.Args[2:]))
 	case "digest":
 		os.Exit(runDigest(os.Args[2:]))
 	case "lock":
@@ -113,17 +121,10 @@ func runLint(args []string) int {
 		return exitUsage
 	}
 
-	root := "."
-	if flags.NArg() > 0 {
-		root = flags.Arg(0)
-	}
-	absolute, note, err := resolvePath(root)
+	absolute, err := resolveSkillRoot(flags.Arg(0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
-	}
-	if note != "" {
-		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
 
 	var threshold lint.Severity

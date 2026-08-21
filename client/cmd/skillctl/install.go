@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/client/internal/archive"
@@ -72,7 +73,7 @@ func runInstall(args []string) int {
 
 	into := flags.String("into", ".agents/skills", "skills directory to install into")
 	attestation := flags.String("attestation", "", "attestation over the bundle digest")
-	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned key set")
+	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(), "pinned key set")
 	unverified := flags.Bool("unverified", false,
 		"install without an attestation; the receipt records that it was unapproved")
 	force := flags.Bool("force", false, "replace an already installed skill of the same name")
@@ -84,13 +85,20 @@ func runInstall(args []string) int {
 		flags.Usage()
 		return exitUsage
 	}
-	if *attestation == "" && !*unverified {
-		fmt.Fprintln(os.Stderr, "skillctl: pass --attestation, or --unverified to install "+
-			"without one; defaulting to unverified would make the safe path the quiet one")
+	bundlePath := flags.Arg(0)
+	attestationPath := *attestation
+	if attestationPath == "" {
+		attestationPath = findAttestation(bundlePath)
+	}
+	if attestationPath == "" && !*unverified {
+		fmt.Fprintf(os.Stderr, "skillctl: no attestation found beside %s. Pass "+
+			"--attestation, or --unverified to install without one; defaulting to "+
+			"unverified would make the safe path the quiet one\n", bundlePath)
 		return exitUsage
 	}
-
-	bundlePath := flags.Arg(0)
+	if *attestation == "" && attestationPath != "" {
+		fmt.Fprintf(os.Stderr, "skillctl: using %s\n", attestationPath)
+	}
 	payload, err := os.ReadFile(bundlePath)
 	if err != nil {
 		return fail(err)
@@ -99,12 +107,12 @@ func runInstall(args []string) int {
 	var approval *receipt.Approval
 	expected := archive.DigestOf(payload)
 
-	if *attestation != "" {
+	if attestationPath != "" {
 		trusted, err := attest.LoadTrustedKeys(*trustedPath)
 		if err != nil {
 			return fail(err)
 		}
-		envelope, err := attest.LoadEnvelope(*attestation)
+		envelope, err := attest.LoadEnvelope(attestationPath)
 		if err != nil {
 			return fail(err)
 		}
@@ -233,4 +241,22 @@ func runReceipts(args []string) int {
 
 	fmt.Printf("\n%d installed · %d unapproved\n", len(records), unapproved)
 	return exitClean
+}
+
+// findAttestation looks beside the bundle for the approval that belongs to it.
+//
+// Requiring the path to be typed out every time is the kind of friction that gets solved
+// with --unverified, and an unverified install is exactly what the flag exists to make
+// deliberate rather than convenient.
+func findAttestation(bundlePath string) string {
+	base := strings.TrimSuffix(bundlePath, filepath.Ext(bundlePath))
+	for _, candidate := range []string{
+		bundlePath + ".att.json",
+		base + ".att.json",
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
 }

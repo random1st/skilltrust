@@ -49,9 +49,9 @@ func runCatalogRevoke(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	keyPath := flags.String("key", "skilltrust.key", "signing key")
-	catalogPath := flags.String("catalog", "catalog.json", "catalog to extend, created if absent")
-	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned keys, to read the existing catalog")
+	keyPath := flags.String("key", defaultSigningKey(), "signing key")
+	catalogPath := flags.String("catalog", defaultCatalog(), "catalog to extend, created if absent")
+	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(), "pinned keys, to read the existing catalog")
 	reason := flags.String("reason", "", "why these digests are revoked")
 	validFor := flags.Duration("valid-for", 7*24*time.Hour,
 		"how long the new catalog stays fresh; consumers deny once it expires")
@@ -126,8 +126,8 @@ func runCatalogShow(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	catalogPath := flags.String("catalog", "catalog.json", "catalog to read")
-	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned key set")
+	catalogPath := flags.String("catalog", defaultCatalog(), "catalog to read")
+	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(), "pinned key set")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -191,8 +191,9 @@ func runSync(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	catalogPath := flags.String("catalog", "", "signed revocation catalog; without one, revocation is not checked")
-	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned key set")
+	catalogPath := flags.String("catalog", "",
+		"signed revocation catalog (default the one in your skilltrust home, if present)")
+	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(), "pinned key set")
 	prune := flags.Bool("prune", false, "delete revoked skills instead of only reporting them")
 	managed := flags.Bool("managed", false,
 		"require every skill to have an approved receipt; use this on a fleet you control")
@@ -210,20 +211,27 @@ func runSync(args []string) int {
 	now := time.Now().UTC()
 	var snapshot *catalog.Snapshot
 
-	if *catalogPath == "" {
+	catalogFile := *catalogPath
+	if catalogFile == "" {
+		if info, err := os.Stat(defaultCatalog()); err == nil && info.Mode().IsRegular() {
+			catalogFile = defaultCatalog()
+		}
+	}
+
+	if catalogFile == "" {
 		// Saying nothing here would let "no catalog configured" read as "nothing is
 		// revoked", which is the failure this tool refuses everywhere else.
-		fmt.Fprintln(os.Stderr, "skillctl: no --catalog given, so revocation was not checked")
+		fmt.Fprintln(os.Stderr, "skillctl: no revocation catalog, so revocation was not checked")
 	} else {
 		trusted, err := attest.LoadTrustedKeys(*trustedPath)
 		if err != nil {
 			return fail(err)
 		}
-		envelope, err := attest.LoadEnvelope(*catalogPath)
+		envelope, err := attest.LoadEnvelope(catalogFile)
 		if err != nil {
 			return fail(err)
 		}
-		statePath := catalog.DefaultStatePath(*catalogPath)
+		statePath := catalog.DefaultStatePath(catalogFile)
 		state, err := catalog.LoadState(statePath)
 		if err != nil {
 			return fail(err)

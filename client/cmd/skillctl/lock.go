@@ -114,18 +114,7 @@ func runVerify(args []string) int {
 }
 
 func resolveRoot(flags *flag.FlagSet) (string, error) {
-	root := "."
-	if flags.NArg() > 0 {
-		root = flags.Arg(0)
-	}
-	resolved, note, err := resolvePath(root)
-	if err != nil {
-		return "", err
-	}
-	if note != "" {
-		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
-	}
-	return resolved, nil
+	return resolveSkillRoot(flags.Arg(0))
 }
 
 func renderVerify(out io.Writer, report *lockfile.Report, format string) error {

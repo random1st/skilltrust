@@ -49,7 +49,8 @@ func runAttestKeygen(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	out := flags.String("out", "skilltrust", "base path: writes <out>.key and <out>.pub")
+	out := flags.String("out", filepath.Join(Home(), "signer"),
+		"base path: writes <out>.key and <out>.pub")
 	label := flags.String("label", "", "label recorded in the trusted-key file (default the key id)")
 	trustOut := flags.String("trusted-keys", "",
 		"also write a trusted-key file pinning this key, ready for `attest verify`")
@@ -108,8 +109,8 @@ func runAttestSign(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	keyPath := flags.String("key", "skilltrust.key", "signing key")
-	approvedBy := flags.String("as", "", "who approved these bytes (required)")
+	keyPath := flags.String("key", defaultSigningKey(), "signing key")
+	approvedBy := flags.String("as", "", "who approved these bytes (default your git email)")
 	notes := flags.String("notes", "", "free-text note recorded in the statement")
 	repository := flags.String("repository", "", "source repository, recorded for audit")
 	commit := flags.String("commit", "", "source commit, recorded for audit")
@@ -122,9 +123,13 @@ func runAttestSign(args []string) int {
 		flags.Usage()
 		return exitUsage
 	}
-	if *approvedBy == "" {
-		fmt.Fprintln(os.Stderr, "skillctl: --as is required; an approval nobody signed for "+
-			"cannot answer the question an audit asks")
+	identity := *approvedBy
+	if identity == "" {
+		identity = gitIdentity()
+	}
+	if identity == "" {
+		fmt.Fprintln(os.Stderr, "skillctl: pass --as; no git email is configured, and an "+
+			"approval nobody signed for cannot answer the question an audit asks")
 		return exitUsage
 	}
 
@@ -152,7 +157,7 @@ func runAttestSign(args []string) int {
 
 	statement := attest.Statement{
 		Subject:    attest.Subject{Name: name, Digest: result.Digest},
-		ApprovedBy: *approvedBy,
+		ApprovedBy: identity,
 		ApprovedAt: time.Now(),
 		Notes:      *notes,
 	}
@@ -194,7 +199,7 @@ func runAttestVerify(args []string) int {
 	}
 
 	attestation := flags.String("attestation", "", "attestation path (default <skill-directory>.att.json)")
-	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned key set")
+	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(), "pinned key set")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
