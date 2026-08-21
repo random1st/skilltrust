@@ -58,9 +58,29 @@ speaks every session is one people stop reading.
 | `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
 | `catalog` | Revoke digests in a signed, expiring snapshot. |
 | `sync` | Reconcile installed skills against the catalog; `--prune` removes revoked ones. |
+| `bundle` | Write a skill's canonical archive for distribution. |
+| `install` | Verify a bundle against an attestation and install it, writing a receipt. |
+| `receipts` | List what was installed, from where, and on whose approval. |
 
 Exit codes are part of the contract: `0` clean, `1` findings or drift, `3` error. "We checked
 and it is bad" and "we could not check" are different facts and never share a code.
+
+## Installing
+
+```bash
+skillctl bundle skills/pdf-tools --out pdf-tools.tar
+skillctl attest sign skills/pdf-tools --key signer.key --as reviewer@corp
+skillctl install pdf-tools.tar --into ~/.agents/skills --attestation pdf-tools.att.json
+```
+
+`install` refuses without `--attestation` unless you pass `--unverified`, which the receipt
+then records permanently — the safe path should not be the quiet one. The bundle is extracted
+beside the destination and re-packaged to the digest that was verified before anything lands
+under a name a client will read, so a failed install leaves the tree untouched.
+
+Extraction is where a signature stops covering anything, so every guard applied when packing
+is applied again when unpacking: path traversal, absolute paths, symlinks, duplicate members,
+case and Unicode collisions, headers that lie about their length, and size limits.
 
 ## Revocation
 

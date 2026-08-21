@@ -41,6 +41,9 @@ Usage:
   skillctl attest <subcommand>   sign and verify approvals over a skill's digest
   skillctl catalog <subcommand>  manage the signed revocation catalog
   skillctl sync [flags] [path]   reconcile installed skills against revocations
+  skillctl bundle [flags] <dir>  write a skill's canonical archive for distribution
+  skillctl install [flags] <b>   verify a bundle and install it, writing a receipt
+  skillctl receipts [path]       list what was installed and on whose approval
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -67,6 +70,12 @@ func main() {
 		os.Exit(runCatalog(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
+	case "bundle":
+		os.Exit(runBundle(os.Args[2:]))
+	case "install":
+		os.Exit(runInstall(os.Args[2:]))
+	case "receipts":
+		os.Exit(runReceipts(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":
