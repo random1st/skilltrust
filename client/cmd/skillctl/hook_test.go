@@ -14,6 +14,14 @@ import (
 	"github.com/random1st/skilltrust/client/internal/receipt"
 )
 
+// isolateHome keeps a test off the machine's real skilltrust home. Without it the tests
+// read whatever approvals the developer happens to have signed, which is both flaky and a
+// good way to never notice that a tree and the approval store are different scopes.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("SKILLTRUST_HOME", t.TempDir())
+}
+
 func writeSkill(t *testing.T, root, name string) {
 	t.Helper()
 	directory := filepath.Join(root, name)
@@ -41,6 +49,7 @@ func pin(t *testing.T, root string) {
 // reported the same way. Conflating them hands an attacker a silent off switch: corrupt the
 // file and the session-start check disappears without a trace.
 func TestVerifyRootsSeparatesMissingFromUnreadable(t *testing.T) {
+	isolateHome(t)
 	unpinned := t.TempDir()
 	writeSkill(t, unpinned, "alpha")
 
@@ -69,6 +78,7 @@ func TestVerifyRootsSeparatesMissingFromUnreadable(t *testing.T) {
 }
 
 func TestHookReportNamesTheChangedFile(t *testing.T) {
+	isolateHome(t)
 	root := t.TempDir()
 	writeSkill(t, root, "alpha")
 	pin(t, root)
@@ -181,6 +191,7 @@ func TestParseArgsStopsAtDoubleDash(t *testing.T) {
 // of them. Skipping it because nobody typed `lock` meant the hook stayed silent about exactly
 // the trees this tool had itself populated.
 func TestVerifyRootsChecksAReceiptOnlyTree(t *testing.T) {
+	isolateHome(t)
 	root := t.TempDir()
 	writeSkill(t, root, "alpha")
 

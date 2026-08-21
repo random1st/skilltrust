@@ -90,26 +90,34 @@ func runVerify(args []string) int {
 		path = filepath.Join(root, lockfile.FileName)
 	}
 
-	// A missing lock is only fatal when nothing else recorded these skills. A tree whose
-	// skills arrived through `skillctl install` has a digest recorded for every one of them,
-	// and refusing to look at it because nobody typed `lock` was how verify came to report
-	// a correctly installed tree as unpinned while sync reported it as drifted.
-	lock := &lockfile.Lock{Version: lockfile.Version}
-	loaded, err := lockfile.Load(path)
-	switch {
-	case err == nil:
-		lock = loaded
-	case !os.IsNotExist(err):
-		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
-		return exitUsage
-	case !hasReceipts(root):
-		fmt.Fprintf(os.Stderr, "skillctl: nothing under %s has been recorded: no lock at %s "+
-			"and nothing was installed by skillctl. Run `skillctl lock` to pin the current "+
-			"tree\n", root, path)
+	// A missing lock is only fatal when nothing else recorded these skills. A signed
+	// attestation or an install receipt records a digest just as a lock entry does, and
+	// refusing to look because nobody typed `lock` was how verify came to report a fully
+	// notarized tree as unpinned.
+	if !hasRecords(root) {
+		fmt.Fprintf(os.Stderr, "skillctl: nothing under %s has been recorded: no lock at %s, "+
+			"no signed approvals and nothing installed by skillctl. Run `skillctl setup` to "+
+			"approve the current tree\n", root, path)
 		return exitUsage
 	}
 
-	report := lockfile.Verify(root, path, lock, lint.Options{MaxDepth: *maxDepth})
+	records, notes, err := loadRecords(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitUsage
+	}
+	if *lockPath != "" {
+		records.LockPath = path
+		if loaded, err := lockfile.Load(path); err == nil {
+			records.Lock = loaded
+		} else {
+			fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+			return exitUsage
+		}
+	}
+
+	report := lockfile.Verify(root, records, lint.Options{MaxDepth: *maxDepth})
+	report.Unchecked = append(notes, report.Unchecked...)
 
 	if err := renderVerify(os.Stdout, report, *format); err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
@@ -190,10 +198,16 @@ func renderVerify(out io.Writer, report *lockfile.Report, format string) error {
 }
 
 // expectedLabel says which record the expected digest came from, because the remedy differs:
-// a broken lock pin is re-approved with `lock`, a broken install record is reinstalled.
+// a broken signature is re-signed, a broken lock pin is re-pinned, a broken install record is
+// reinstalled. Printing "pinned" for all three sent people to the command that would not fix
+// it — and for a notarized skill, `lock` cannot fix it by design.
 func expectedLabel(source lockfile.PinnedBy) string {
-	if source == lockfile.PinnedByReceipt {
+	switch source {
+	case lockfile.PinnedByNotarization:
+		return "approved "
+	case lockfile.PinnedByReceipt:
 		return "installed"
+	default:
+		return "pinned   "
 	}
-	return "pinned   "
 }

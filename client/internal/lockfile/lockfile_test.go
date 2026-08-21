@@ -32,7 +32,7 @@ func lockAndVerify(t *testing.T, root string) *Report {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Verify(root, lockPath, lock, lint.Options{})
+	return Verify(root, Records{Lock: lock, LockPath: lockPath}, lint.Options{})
 }
 
 func pin(t *testing.T, root string) {

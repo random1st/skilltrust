@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/random1st/skilltrust/client/internal/archive"
@@ -66,6 +65,7 @@ func runStatus(args []string) int {
 		total, high, medium, low      int
 		approved, unapproved, held    int
 		revoked, pinned, driftedCount int
+		notarized                     int
 		anyPinned                     bool
 	)
 
@@ -77,39 +77,41 @@ func runStatus(args []string) int {
 		medium += counts[lint.SeverityMedium]
 		low += counts[lint.SeverityLow]
 
-		// The lock is optional here. A tree whose skills arrived through `skillctl install`
-		// has a recorded digest for every one of them even with no lock, and verify reads
-		// both, so status asks it once rather than keeping a second opinion of its own.
-		lockPath := filepath.Join(root, lockfile.FileName)
-		lock := &lockfile.Lock{Version: lockfile.Version}
-		if loaded, err := lockfile.Load(lockPath); err == nil {
-			lock = loaded
-		} else if !os.IsNotExist(err) {
+		// Every record is optional here — signed approvals, a lock, install receipts — and
+		// verify reads all three, so status asks it once rather than keeping a second
+		// opinion of its own about what "recorded" means.
+		records, notes, err := loadRecords(root)
+		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"skillctl: a lock could not be read, so drift is unknown: %v\n", err)
+				"skillctl: a record could not be read, so drift is unknown: %v\n", err)
 			return exitUsage
 		}
 
-		drift := lockfile.Verify(root, lockPath, lock, lint.Options{})
-		if len(drift.Unchecked) > 0 {
-			for _, note := range drift.Unchecked {
+		drift := lockfile.Verify(root, records, lint.Options{})
+		if unchecked := append(notes, drift.Unchecked...); len(unchecked) > 0 {
+			for _, note := range unchecked {
 				fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 			}
 			return exitUsage
 		}
 		driftedCount += drift.Drifted()
+		for _, result := range drift.Results {
+			if result.PinnedBy == lockfile.PinnedByNotarization {
+				notarized++
+			}
+		}
 		// Count what was recorded, not everything verify looked at: a skill present but
 		// never recorded appears in the results and is precisely the opposite of pinned.
 		recorded := len(drift.Results) - drift.Unpinned()
 		pinned += recorded
 		anyPinned = anyPinned || recorded > 0
 
-		records, err := receipt.LoadAll(root)
+		receipts, err := receipt.LoadAll(root)
 		if err != nil {
 			return fail(err)
 		}
-		held += len(records)
-		for _, record := range records {
+		held += len(receipts)
+		for _, record := range receipts {
 			if record.Approval == nil {
 				unapproved++
 			} else {
@@ -149,7 +151,15 @@ func runStatus(args []string) int {
 		fmt.Printf("  drift        %d changed since they were recorded\n", driftedCount)
 	}
 
-	fmt.Printf("  approvals    %d approved · %d unapproved · %d unmanaged\n",
+	// Notarization is reported apart from install approvals because it answers a different
+	// question: not "did this arrive with an approval" but "is there a signature over the
+	// bytes that are here now".
+	if notarized == 0 {
+		fmt.Printf("  notarized    none — run `skillctl setup` to sign these\n")
+	} else {
+		fmt.Printf("  notarized    %d of %d signed\n", notarized, total)
+	}
+	fmt.Printf("  installs     %d approved · %d unapproved · %d unmanaged\n",
 		approved, unapproved, unmanaged)
 
 	if snapshot == nil {

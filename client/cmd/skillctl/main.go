@@ -33,7 +33,8 @@ const (
 const usage = `skillctl - know what your agents are running
 
 Getting started:
-  skillctl init                  set up once: a signing key and your pinned keys
+  skillctl setup                 do everything once: a key, a signature per skill,
+                                 and the client hooks that check them
   skillctl status                what is installed, what changed, what is approved
 
 Everything else:
@@ -48,6 +49,7 @@ Everything else:
   skillctl bundle [flags] <dir>  write a skill's canonical archive for distribution
   skillctl install [flags] <b>   verify a bundle and install it, writing a receipt
   skillctl receipts [path]       list what was installed and on whose approval
+  skillctl init                  create only the signing key, without the rest
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -60,6 +62,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "setup":
+		os.Exit(runSetup(os.Args[2:]))
 	case "init":
 		os.Exit(runInit(os.Args[2:]))
 	case "status":
