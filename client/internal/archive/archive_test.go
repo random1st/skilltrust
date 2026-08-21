@@ -261,3 +261,26 @@ func TestExecutableBitIsAbsentOnWindows(t *testing.T) {
 			"this test plus the skips that reference it should go with it")
 	}
 }
+
+// Skills are commonly installed as a symlink into a plugin marketplace, so a symlinked
+// root must package to the same digest as the directory it points at. Links inside the
+// tree remain refused; the two cases decide different things.
+func TestSymlinkedRootIsPackaged(t *testing.T) {
+	real := buildFixture(t)
+	link := filepath.Join(t.TempDir(), "installed")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+
+	direct, err := Build(real, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	through, err := Build(link, Limits{})
+	if err != nil {
+		t.Fatalf("a symlinked root must be packaged: %v", err)
+	}
+	if direct.Digest != through.Digest {
+		t.Fatalf("digest through a link = %s, direct = %s", through.Digest, direct.Digest)
+	}
+}

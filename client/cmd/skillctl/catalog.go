@@ -12,6 +12,7 @@ import (
 	"github.com/random1st/skilltrust/client/internal/attest"
 	"github.com/random1st/skilltrust/client/internal/catalog"
 	"github.com/random1st/skilltrust/client/internal/lint"
+	"github.com/random1st/skilltrust/client/internal/receipt"
 	"github.com/random1st/skilltrust/client/internal/skillmd"
 )
 
@@ -166,20 +167,35 @@ func runCatalogShow(args []string) int {
 	return exitClean
 }
 
+// syncStatus is what sync learned about one installed skill. The four questions are
+// deliberately separate: a skill can be revoked, or unmanaged, or drifted from what was
+// installed, and collapsing them into "ok/not ok" throws away the part that says what to do.
+type syncStatus struct {
+	name      string
+	directory string
+	digest    string
+	revoked   *catalog.Entry
+	record    *receipt.Receipt
+	drifted   bool
+}
+
 func runSync(args []string) int {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: skillctl sync [flags] [path]\n\n"+
-			"Reconciles installed skills against the signed revocation catalog. Reports by\n"+
-			"default; --prune removes revoked skills from disk.\n\n"+
-			"Exit codes: %d clean, %d revoked skills present, %d error.\n\nFlags:\n",
+			"Reconciles installed skills against the revocation catalog and their receipts:\n"+
+			"what is revoked, what nobody installed through skillctl, and what has drifted\n"+
+			"from the bytes its receipt recorded.\n\n"+
+			"Exit codes: %d clean, %d something needs attention, %d error.\n\nFlags:\n",
 			exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 
-	catalogPath := flags.String("catalog", "catalog.json", "signed revocation catalog")
+	catalogPath := flags.String("catalog", "", "signed revocation catalog; without one, revocation is not checked")
 	trustedPath := flags.String("trusted-keys", "trusted-keys.json", "pinned key set")
 	prune := flags.Bool("prune", false, "delete revoked skills instead of only reporting them")
+	managed := flags.Bool("managed", false,
+		"require every skill to have an approved receipt; use this on a fleet you control")
 	maxDepth := flags.Int("max-depth", lint.DefaultMaxDepth, "maximum directory depth to scan")
 
 	if err := parseArgs(flags, args); err != nil {
@@ -191,41 +207,49 @@ func runSync(args []string) int {
 		return fail(err)
 	}
 
-	trusted, err := attest.LoadTrustedKeys(*trustedPath)
-	if err != nil {
-		return fail(err)
-	}
-	envelope, err := attest.LoadEnvelope(*catalogPath)
-	if err != nil {
-		return fail(err)
-	}
-
-	statePath := catalog.DefaultStatePath(*catalogPath)
-	state, err := catalog.LoadState(statePath)
-	if err != nil {
-		return fail(err)
-	}
-
 	now := time.Now().UTC()
-	snapshot, _, err := catalog.Verify(envelope, trusted, state, now)
-	if err != nil {
-		// An unusable catalog is not "nothing is revoked". Reporting a clean tree here
-		// would be the same defect as treating an unreadable lock as an absent one.
-		fmt.Fprintf(os.Stderr, "skillctl: cannot use the catalog, so nothing was checked: %v\n", err)
-		return exitUsage
+	var snapshot *catalog.Snapshot
+
+	if *catalogPath == "" {
+		// Saying nothing here would let "no catalog configured" read as "nothing is
+		// revoked", which is the failure this tool refuses everywhere else.
+		fmt.Fprintln(os.Stderr, "skillctl: no --catalog given, so revocation was not checked")
+	} else {
+		trusted, err := attest.LoadTrustedKeys(*trustedPath)
+		if err != nil {
+			return fail(err)
+		}
+		envelope, err := attest.LoadEnvelope(*catalogPath)
+		if err != nil {
+			return fail(err)
+		}
+		statePath := catalog.DefaultStatePath(*catalogPath)
+		state, err := catalog.LoadState(statePath)
+		if err != nil {
+			return fail(err)
+		}
+		snapshot, _, err = catalog.Verify(envelope, trusted, state, now)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"skillctl: cannot use the catalog, so nothing was checked: %v\n", err)
+			return exitUsage
+		}
+		if err := state.Save(statePath, snapshot.Sequence, now); err != nil {
+			return fail(err)
+		}
 	}
-	if err := state.Save(statePath, snapshot.Sequence, now); err != nil {
+
+	receipts, err := receipt.LoadAll(root)
+	if err != nil {
 		return fail(err)
+	}
+	byName := make(map[string]*receipt.Receipt, len(receipts))
+	for _, record := range receipts {
+		byName[record.Name] = record
 	}
 
 	directories, _ := lint.Discover(root, lint.Options{MaxDepth: *maxDepth})
-	type hit struct {
-		name      string
-		directory string
-		entry     catalog.Entry
-	}
-	var hits []hit
-	checked := 0
+	statuses := make([]syncStatus, 0, len(directories))
 
 	for _, directory := range directories {
 		result, err := archive.Build(directory, archive.Limits{})
@@ -233,48 +257,105 @@ func runSync(args []string) int {
 			fmt.Fprintf(os.Stderr, "skillctl: cannot digest %s: %v\n", directory, err)
 			return exitUsage
 		}
-		checked++
-		entry, revoked := snapshot.IsRevoked(result.Digest)
-		if !revoked {
-			continue
-		}
 		name, _ := skillmd.Parse(filepath.Join(directory, skillmd.FileName)).Name()
 		if name == "" {
 			name = filepath.Base(directory)
 		}
-		hits = append(hits, hit{name: name, directory: directory, entry: entry})
-	}
 
-	sort.Slice(hits, func(i, j int) bool { return hits[i].directory < hits[j].directory })
-
-	fmt.Printf("skillctl sync  %s\n", root)
-	fmt.Printf("catalog sequence %d, valid until %s\n\n",
-		snapshot.Sequence, snapshot.ValidUntil.Format(time.RFC3339))
-
-	for _, item := range hits {
-		fmt.Printf("  revoked    %s\n", item.name)
-		fmt.Printf("             %s\n", relativeOr(item.directory, root))
-		fmt.Printf("             %s\n", item.entry.Digest)
-		if item.entry.Reason != "" {
-			fmt.Printf("             %s\n", item.entry.Reason)
-		}
-		if *prune {
-			if err := os.RemoveAll(item.directory); err != nil {
-				fmt.Fprintf(os.Stderr, "skillctl: cannot remove %s: %v\n", item.directory, err)
-				return exitUsage
+		status := syncStatus{name: name, directory: directory, digest: result.Digest}
+		if snapshot != nil {
+			if entry, revoked := snapshot.IsRevoked(result.Digest); revoked {
+				status.revoked = &entry
 			}
-			fmt.Printf("             removed\n")
 		}
-		fmt.Println()
+		if record, ok := byName[name]; ok {
+			status.record = record
+			status.drifted = record.Digest != result.Digest
+		}
+		statuses = append(statuses, status)
 	}
 
-	fmt.Printf("%d checked · %d revoked\n", checked, len(hits))
-	if len(hits) == 0 {
-		fmt.Println("no installed skill appears in the revocation catalog.")
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].name < statuses[j].name })
+	return reportSync(statuses, snapshot, root, *prune, *managed)
+}
+
+func reportSync(
+	statuses []syncStatus, snapshot *catalog.Snapshot, root string, prune, managed bool,
+) int {
+	fmt.Printf("skillctl sync  %s\n", root)
+	if snapshot != nil {
+		fmt.Printf("catalog sequence %d, valid until %s\n",
+			snapshot.Sequence, snapshot.ValidUntil.Format(time.RFC3339))
+	}
+	fmt.Println()
+
+	revoked, unmanaged, unapproved, drifted := 0, 0, 0, 0
+
+	for _, status := range statuses {
+		switch {
+		case status.revoked != nil:
+			revoked++
+			fmt.Printf("  revoked    %s\n", status.name)
+			fmt.Printf("             %s\n", relativeOr(status.directory, root))
+			if status.revoked.Reason != "" {
+				fmt.Printf("             %s\n", status.revoked.Reason)
+			}
+			if prune {
+				if err := os.RemoveAll(status.directory); err != nil {
+					fmt.Fprintf(os.Stderr, "skillctl: cannot remove %s: %v\n", status.directory, err)
+					return exitUsage
+				}
+				_ = receipt.Remove(root, status.name)
+				fmt.Printf("             removed\n")
+			}
+			fmt.Println()
+
+		case status.drifted:
+			drifted++
+			fmt.Printf("  drifted    %s\n", status.name)
+			fmt.Printf("             installed %s\n", status.record.Digest)
+			fmt.Printf("             on disk   %s\n", status.digest)
+			fmt.Println()
+
+		case status.record == nil:
+			unmanaged++
+
+		case status.record.Approval == nil:
+			unapproved++
+		}
+	}
+
+	if managed {
+		for _, status := range statuses {
+			if status.revoked != nil || status.drifted {
+				continue
+			}
+			if status.record == nil {
+				fmt.Printf("  unmanaged  %s\n             %s\n\n",
+					status.name, relativeOr(status.directory, root))
+			} else if status.record.Approval == nil {
+				fmt.Printf("  unapproved %s\n             installed from %s\n\n",
+					status.name, status.record.Source)
+			}
+		}
+	}
+
+	fmt.Printf("%d checked · %d revoked · %d drifted · %d unmanaged · %d unapproved\n",
+		len(statuses), revoked, drifted, unmanaged, unapproved)
+
+	problems := revoked + drifted
+	if managed {
+		problems += unmanaged + unapproved
+	}
+	if problems == 0 {
+		if !managed && (unmanaged > 0 || unapproved > 0) {
+			fmt.Printf("%d skills were not installed by skillctl; --managed makes that a failure.\n",
+				unmanaged+unapproved)
+		}
 		return exitClean
 	}
-	if !*prune {
-		fmt.Println("re-run with --prune to remove them.")
+	if revoked > 0 && !prune {
+		fmt.Println("re-run with --prune to remove the revoked ones.")
 	}
 	return exitFindings
 }

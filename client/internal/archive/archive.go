@@ -106,7 +106,11 @@ type collected struct {
 func Build(sourceDir string, limits Limits) (*Archive, error) {
 	limits = limits.withDefaults()
 
-	info, err := os.Lstat(sourceDir)
+	// Stat, not Lstat: the root is a path the caller handed us, and resolving it decides
+	// only where to start. Links *inside* the tree stay refused, because there they would
+	// decide which bytes the identity covers. Skills are routinely installed as symlinks
+	// into a plugin marketplace, so refusing a symlinked root meant refusing the common case.
+	info, err := os.Stat(sourceDir)
 	if err != nil {
 		return nil, failf(KindSource, "cannot read source directory %s: %v", sourceDir, err)
 	}

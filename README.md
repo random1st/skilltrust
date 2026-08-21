@@ -57,7 +57,7 @@ speaks every session is one people stop reading.
 | `hook` | Run or install the session-start drift check. |
 | `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
 | `catalog` | Revoke digests in a signed, expiring snapshot. |
-| `sync` | Reconcile installed skills against the catalog; `--prune` removes revoked ones. |
+| `sync` | Reconcile installed skills against the catalog and their receipts; `--prune` removes revoked ones. |
 | `bundle` | Write a skill's canonical archive for distribution. |
 | `install` | Verify a bundle against an attestation and install it, writing a receipt. |
 | `receipts` | List what was installed, from where, and on whose approval. |
@@ -96,6 +96,24 @@ The catalog carries a monotonic sequence and an expiry. Replaying an older catal
 un-revoke something is refused even though its signature is genuine, and a stale catalog is a
 refusal rather than an answer of "nothing revoked". Revocation is keyed by digest, so it
 follows the bytes through a rename, a move, or a copy.
+
+## The whole picture
+
+`sync` answers four separate questions about every skill on disk, because collapsing them
+into pass/fail throws away the part that says what to do:
+
+```
+  revoked    alpha        # in the revocation catalog
+  drifted    beta         # changed since it was installed
+  unmanaged  delta        # nobody installed it through skillctl
+  unapproved gamma        # installed with --unverified
+
+4 checked · 1 revoked · 1 drifted · 1 unmanaged · 1 unapproved
+```
+
+`--managed` makes unmanaged and unapproved failures too, which is the mode for a fleet you
+control. Without `--catalog`, revocation is not checked and `sync` says so rather than
+letting "no catalog configured" read as "nothing revoked".
 
 ## What this does not claim
 
