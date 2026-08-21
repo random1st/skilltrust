@@ -22,7 +22,7 @@ skillctl status    # what is installed, what changed, what is approved
 
   skills       97
   findings     0 high · 125 medium · 41 low
-  drift        not pinned — run `skillctl lock`
+  drift        nothing recorded — run `skillctl lock`
   approvals    0 approved · 0 unapproved · 97 unmanaged
   revocation   no catalog — not checked
 
@@ -52,6 +52,12 @@ permissions and reads as ordinary work. A pinned digest notices, and names the f
 It also catches the change that leaves content untouched — a file that became executable,
 moving a skill out of the instruction-only tier without a single character changing.
 
+Two records can say what a skill's bytes should be: a lock entry you made, and the receipt
+`install` wrote. `verify`, `sync`, `status` and the hook read both and resolve them the same
+way — the lock decides where it speaks, the receipt where it is silent — and every report
+names which one it used, because re-approving and reinstalling are different remedies. So a
+tree installed through `skillctl` is already covered before anyone runs `lock`.
+
 Wire it into your client so the check runs when it matters:
 
 ```bash
@@ -69,13 +75,13 @@ speaks every session is one people stop reading.
 | `lint` | Specification conformance plus risk indicators. Text, JSON or SARIF. |
 | `digest` | The canonical digest of a directory. No source-control arguments, so a second party can re-derive it. |
 | `lock` | Pin every skill under a path into `skills.lock`. |
-| `verify` | Recompute and report drift. `--frozen` also fails on unpinned skills; use it in CI. |
+| `verify` | Recompute and report drift against everything recorded — the lock and install receipts. `--frozen` also fails on skills nothing recorded; use it in CI. |
 | `init` | Set up `~/.skilltrust`: a signing key and your pinned keys. Run once. |
 | `status` | One screen: installed, changed, approved, revoked. |
 | `hook` | Run or install the session-start drift check. |
 | `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
 | `catalog` | Revoke digests in a signed, expiring snapshot. |
-| `sync` | Reconcile installed skills against the catalog and their receipts; `--prune` removes revoked ones. |
+| `sync` | Reconcile installed skills against the catalog and what was recorded about them; `--prune` removes revoked ones. |
 | `bundle` | Write a skill's canonical archive for distribution. |
 | `install` | Verify a bundle against an attestation and install it, writing a receipt. |
 | `receipts` | List what was installed, from where, and on whose approval. |
@@ -122,7 +128,7 @@ into pass/fail throws away the part that says what to do:
 
 ```
   revoked    alpha        # in the revocation catalog
-  drifted    beta         # changed since it was installed
+  drifted    beta         # changed since it was recorded
   unmanaged  delta        # nobody installed it through skillctl
   unapproved gamma        # installed with --unverified
 

@@ -89,14 +89,22 @@ func runVerify(args []string) int {
 		path = filepath.Join(root, lockfile.FileName)
 	}
 
-	lock, err := lockfile.Load(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr,
-				"skillctl: no lock at %s; run `skillctl lock` first to pin the current tree\n", path)
-		} else {
-			fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
-		}
+	// A missing lock is only fatal when nothing else recorded these skills. A tree whose
+	// skills arrived through `skillctl install` has a digest recorded for every one of them,
+	// and refusing to look at it because nobody typed `lock` was how verify came to report
+	// a correctly installed tree as unpinned while sync reported it as drifted.
+	lock := &lockfile.Lock{Version: lockfile.Version}
+	loaded, err := lockfile.Load(path)
+	switch {
+	case err == nil:
+		lock = loaded
+	case !os.IsNotExist(err):
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitUsage
+	case !hasReceipts(root):
+		fmt.Fprintf(os.Stderr, "skillctl: nothing under %s has been recorded: no lock at %s "+
+			"and nothing was installed by skillctl. Run `skillctl lock` to pin the current "+
+			"tree\n", root, path)
 		return exitUsage
 	}
 
@@ -104,6 +112,15 @@ func runVerify(args []string) int {
 
 	if err := renderVerify(os.Stdout, report, *format); err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitUsage
+	}
+
+	// Something that could not be examined is never reported through the code that means
+	// "examined and fine", however much of the rest of the tree verified cleanly.
+	for _, note := range report.Unchecked {
+		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
+	}
+	if len(report.Unchecked) > 0 {
 		return exitUsage
 	}
 
@@ -141,17 +158,22 @@ func renderVerify(out io.Writer, report *lockfile.Report, format string) error {
 			label = result.Path
 		}
 		fmt.Fprintf(out, "  %-10s %s\n", result.Status, label)
-		fmt.Fprintf(out, "             %s\n", result.Path)
+		if result.Path != "" && result.Path != label {
+			fmt.Fprintf(out, "             %s\n", result.Path)
+		}
 
 		switch result.Status {
 		case lockfile.StatusModified:
-			fmt.Fprintf(out, "             pinned   %s\n", result.Expected)
-			fmt.Fprintf(out, "             on disk  %s\n", result.Actual)
+			fmt.Fprintf(out, "             %s %s\n", expectedLabel(result.PinnedBy), result.Expected)
+			fmt.Fprintf(out, "             on disk   %s\n", result.Actual)
 			for _, change := range result.Changes {
 				fmt.Fprintf(out, "               %-12s %s\n", change.Change, change.Path)
 			}
+			if result.Message != "" {
+				fmt.Fprintf(out, "             %s\n", result.Message)
+			}
 		case lockfile.StatusRemoved:
-			fmt.Fprintf(out, "             pinned   %s\n", result.Expected)
+			fmt.Fprintf(out, "             %s %s\n", expectedLabel(result.PinnedBy), result.Expected)
 		case lockfile.StatusUnreadable:
 			fmt.Fprintf(out, "             %s\n", result.Message)
 		}
@@ -161,7 +183,16 @@ func renderVerify(out io.Writer, report *lockfile.Report, format string) error {
 	fmt.Fprintf(out, "%d matched · %d drifted · %d unpinned\n",
 		matched, report.Drifted(), report.Unpinned())
 	if report.Drifted() == 0 && report.Unpinned() == 0 {
-		fmt.Fprintln(out, "every pinned skill is byte-identical to what was recorded.")
+		fmt.Fprintln(out, "every recorded skill is byte-identical to what was recorded.")
 	}
 	return nil
+}
+
+// expectedLabel says which record the expected digest came from, because the remedy differs:
+// a broken lock pin is re-approved with `lock`, a broken install record is reinstalled.
+func expectedLabel(source lockfile.PinnedBy) string {
+	if source == lockfile.PinnedByReceipt {
+		return "installed"
+	}
+	return "pinned   "
 }

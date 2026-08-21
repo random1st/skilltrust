@@ -12,6 +12,7 @@ import (
 
 	"github.com/random1st/skilltrust/client/internal/lint"
 	"github.com/random1st/skilltrust/client/internal/lockfile"
+	"github.com/random1st/skilltrust/client/internal/receipt"
 )
 
 // defaultHookRoots are the conventional skill locations. `.agents/skills` is the
@@ -79,9 +80,11 @@ func runHookSessionStart(args []string) int {
 		if *verbose {
 			total := 0
 			for _, report := range reports {
-				total += len(report.Results)
+				// Skills nobody recorded are not what this checked, so counting them here
+				// would inflate the one number the verbose line exists to report.
+				total += len(report.Results) - report.Unpinned()
 			}
-			fmt.Printf("skillctl: %d pinned skills unchanged\n", total)
+			fmt.Printf("skillctl: %d recorded skills unchanged\n", total)
 		}
 		return exitClean
 	}
@@ -120,34 +123,53 @@ func candidateRoots(explicit []string) []string {
 
 // verifyRoots distinguishes three states that must never be conflated.
 //
-// No lock present means the tree is not pinned, which is not this tool's business and is
-// passed over in silence. A lock that exists but cannot be read is the opposite: it is a
-// broken promise, and it has to be loud. Treating an unreadable lock like a missing one
-// hands an attacker a silent off switch — corrupt the file and the check disappears with
-// no trace, which is precisely the failure mode this project exists to refuse.
+// Nothing recorded — no lock and no install receipts — means the tree is not this tool's
+// business and is passed over in silence. A record that exists but cannot be read is the
+// opposite: it is a broken promise, and it has to be loud. Treating an unreadable lock like
+// a missing one hands an attacker a silent off switch: corrupt the file and the check
+// disappears with no trace, which is precisely the failure mode this project exists to
+// refuse.
+//
+// Receipts count as records here for the same reason verify reads them. A tree whose skills
+// arrived through `skillctl install` has a recorded digest for every one of them, and a hook
+// that stays quiet about drift there because nobody typed `lock` is checking the wrong thing.
 func verifyRoots(roots []string) ([]*lockfile.Report, []string) {
 	var reports []*lockfile.Report
 	var broken []string
 
 	for _, root := range roots {
 		lockPath := filepath.Join(root, lockfile.FileName)
-		if _, err := os.Stat(lockPath); err != nil {
+		lock := &lockfile.Lock{Version: lockfile.Version}
+
+		if _, err := os.Stat(lockPath); err == nil {
+			loaded, err := lockfile.Load(lockPath)
+			if err != nil {
+				broken = append(broken, fmt.Sprintf(
+					"%s exists but could not be read, so nothing there was verified: %v",
+					lockPath, err))
+				continue
+			}
+			lock = loaded
+		} else if !hasReceipts(root) {
 			continue
 		}
-		lock, err := lockfile.Load(lockPath)
-		if err != nil {
-			broken = append(broken, fmt.Sprintf("%s: %v", lockPath, err))
-			continue
-		}
-		reports = append(reports, lockfile.Verify(root, lockPath, lock, lint.Options{}))
+
+		report := lockfile.Verify(root, lockPath, lock, lint.Options{})
+		reports = append(reports, report)
+		broken = append(broken, report.Unchecked...)
 	}
 	return reports, broken
 }
 
+// hasReceipts reports whether anything under root was installed through skillctl.
+func hasReceipts(root string) bool {
+	info, err := os.Stat(filepath.Join(root, receipt.Directory))
+	return err == nil && info.IsDir()
+}
+
 func writeHookReport(out io.Writer, reports []*lockfile.Report, broken []string) {
 	for _, failure := range broken {
-		fmt.Fprintf(out, "skillctl: a lock exists but could not be read, so nothing was "+
-			"verified\n  %s\n\n", failure)
+		fmt.Fprintf(out, "skillctl: %s\n\n", failure)
 	}
 
 	type row struct{ root, skill, detail string }
@@ -170,7 +192,7 @@ func writeHookReport(out io.Writer, reports []*lockfile.Report, broken []string)
 	if len(rows) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "skillctl: %d pinned skill(s) changed since they were approved\n\n", len(rows))
+	fmt.Fprintf(out, "skillctl: %d recorded skill(s) changed since they were approved\n\n", len(rows))
 	for _, item := range rows {
 		fmt.Fprintf(out, "  %-32s %s\n", item.skill, item.detail)
 	}

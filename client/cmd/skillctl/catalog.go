@@ -12,6 +12,7 @@ import (
 	"github.com/random1st/skilltrust/client/internal/attest"
 	"github.com/random1st/skilltrust/client/internal/catalog"
 	"github.com/random1st/skilltrust/client/internal/lint"
+	"github.com/random1st/skilltrust/client/internal/lockfile"
 	"github.com/random1st/skilltrust/client/internal/receipt"
 	"github.com/random1st/skilltrust/client/internal/skillmd"
 )
@@ -169,7 +170,7 @@ func runCatalogShow(args []string) int {
 
 // syncStatus is what sync learned about one installed skill. The four questions are
 // deliberately separate: a skill can be revoked, or unmanaged, or drifted from what was
-// installed, and collapsing them into "ok/not ok" throws away the part that says what to do.
+// recorded, and collapsing them into "ok/not ok" throws away the part that says what to do.
 type syncStatus struct {
 	name      string
 	directory string
@@ -177,15 +178,21 @@ type syncStatus struct {
 	revoked   *catalog.Entry
 	record    *receipt.Receipt
 	drifted   bool
+	// expected and pinnedBy are the digest drift was measured against and where it came
+	// from. sync resolves them by the same rule as verify — the lock first, the receipt
+	// where the lock is silent — because two commands answering "did this change" from
+	// different baselines is how one of them ends up trusted and the other ignored.
+	expected string
+	pinnedBy lockfile.PinnedBy
 }
 
 func runSync(args []string) int {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: skillctl sync [flags] [path]\n\n"+
-			"Reconciles installed skills against the revocation catalog and their receipts:\n"+
-			"what is revoked, what nobody installed through skillctl, and what has drifted\n"+
-			"from the bytes its receipt recorded.\n\n"+
+			"Reconciles installed skills against the revocation catalog and what was recorded\n"+
+			"about them: what is revoked, what nobody installed through skillctl, and what has\n"+
+			"drifted from the digest its lock entry or receipt recorded.\n\n"+
 			"Exit codes: %d clean, %d something needs attention, %d error.\n\nFlags:\n",
 			exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
@@ -256,6 +263,18 @@ func runSync(args []string) int {
 		byName[record.Name] = record
 	}
 
+	// A missing lock is ordinary — not every tree is pinned. An unreadable one is not, and
+	// must not pass for the same thing: that is the silent off switch verify already refuses.
+	byPath := map[string]lockfile.Entry{}
+	lockPath := filepath.Join(root, lockfile.FileName)
+	if lock, err := lockfile.Load(lockPath); err == nil {
+		for _, entry := range lock.Skills {
+			byPath[entry.Path] = entry
+		}
+	} else if !os.IsNotExist(err) {
+		return fail(err)
+	}
+
 	directories, _ := lint.Discover(root, lint.Options{MaxDepth: *maxDepth})
 	statuses := make([]syncStatus, 0, len(directories))
 
@@ -278,8 +297,14 @@ func runSync(args []string) int {
 		}
 		if record, ok := byName[name]; ok {
 			status.record = record
-			status.drifted = record.Digest != result.Digest
 		}
+		switch entry, isPinned := byPath[filepath.ToSlash(relativeOr(directory, root))]; {
+		case isPinned:
+			status.expected, status.pinnedBy = entry.Digest, lockfile.PinnedByLock
+		case status.record != nil:
+			status.expected, status.pinnedBy = status.record.Digest, lockfile.PinnedByReceipt
+		}
+		status.drifted = status.expected != "" && status.expected != result.Digest
 		statuses = append(statuses, status)
 	}
 
@@ -321,7 +346,7 @@ func reportSync(
 		case status.drifted:
 			drifted++
 			fmt.Printf("  drifted    %s\n", status.name)
-			fmt.Printf("             installed %s\n", status.record.Digest)
+			fmt.Printf("             %s %s\n", expectedLabel(status.pinnedBy), status.expected)
 			fmt.Printf("             on disk   %s\n", status.digest)
 			fmt.Println()
 

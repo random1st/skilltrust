@@ -1,10 +1,28 @@
 package lockfile
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 
 	"github.com/random1st/skilltrust/client/internal/lint"
+	"github.com/random1st/skilltrust/client/internal/receipt"
+)
+
+// PinnedBy names the record an expected digest came from.
+//
+// There are two, and they are not interchangeable. A lock entry is a pin someone made
+// deliberately over a whole tree; an install receipt is the digest skillctl installed a
+// single skill under. Both are a recorded promise about bytes, so both are compared, but a
+// report that does not say which one it used cannot be acted on: "re-approve it" and
+// "reinstall it" are different instructions.
+type PinnedBy string
+
+const (
+	// PinnedByLock is an entry in skills.lock.
+	PinnedByLock PinnedBy = "lock"
+	// PinnedByReceipt is an install record under .skilltrust.
+	PinnedByReceipt PinnedBy = "receipt"
 )
 
 // Status is the verdict for one pinned skill.
@@ -36,6 +54,7 @@ type Result struct {
 	Name     string   `json:"name,omitempty"`
 	Path     string   `json:"path"`
 	Status   Status   `json:"status"`
+	PinnedBy PinnedBy `json:"pinned_by,omitempty"`
 	Expected string   `json:"expected,omitempty"`
 	Actual   string   `json:"actual,omitempty"`
 	Changes  []Change `json:"changes,omitempty"`
@@ -47,6 +66,10 @@ type Report struct {
 	Root     string   `json:"root"`
 	LockPath string   `json:"lock"`
 	Results  []Result `json:"results"`
+	// Unchecked lists what could not be examined at all. It is kept apart from the results
+	// because "we checked and it is bad" and "we could not check" are different facts, and
+	// the second must never be reported through the silence that means the first is absent.
+	Unchecked []string `json:"unchecked,omitempty"`
 }
 
 // Drifted counts the skills that broke their pin. Added skills are excluded: adding a
@@ -73,20 +96,51 @@ func (r *Report) Unpinned() int {
 	return count
 }
 
-// Verify compares the tree under root against the lock.
+// Verify compares the tree under root against every recorded digest: the lock, and the
+// install receipts under it.
+//
+// Reading both is not an extra feature, it is the removal of a contradiction. Verifying
+// against the lock alone called a skill that skillctl had installed under a recorded digest
+// "added", while sync called that same skill drifted — one question, two answers, and the
+// answer --frozen acted on was the wrong one.
+//
+// The lock wins where both exist. A lock entry is a deliberate statement about the whole
+// tree made after the fact; a receipt only records how one skill arrived. When they
+// disagree, the pin someone chose is the one to hold the tree to.
 func Verify(root, lockPath string, lock *Lock, options lint.Options) *Report {
+	report := &Report{Root: root, LockPath: filepath.ToSlash(lockPath)}
+
 	pinned := make(map[string]Entry, len(lock.Skills))
+	pinnedNames := make(map[string]struct{}, len(lock.Skills))
 	for _, entry := range lock.Skills {
 		pinned[entry.Path] = entry
+		if entry.Name != "" {
+			pinnedNames[entry.Name] = struct{}{}
+		}
+	}
+
+	// A receipt that cannot be read is not an absent one. Skipping it would report a
+	// recorded skill as never recorded, which is the wrong direction to be wrong in, so the
+	// failure is carried out to the caller instead of being swallowed here.
+	records, err := receipt.LoadAll(root)
+	if err != nil {
+		report.Unchecked = append(report.Unchecked,
+			fmt.Sprintf("install receipts under %s could not be read, so what they recorded "+
+				"was not compared: %v", root, err))
+	}
+	installed := make(map[string]*receipt.Receipt, len(records))
+	for _, record := range records {
+		installed[record.Name] = record
 	}
 
 	directories, _ := lint.Discover(root, options)
-	seen := make(map[string]struct{}, len(directories))
+	seenPaths := make(map[string]struct{}, len(directories))
+	seenNames := make(map[string]struct{}, len(directories))
 	results := make([]Result, 0, len(directories)+len(lock.Skills))
 
 	for _, directory := range directories {
 		path := relative(directory, root)
-		seen[path] = struct{}{}
+		seenPaths[path] = struct{}{}
 
 		entry, isPinned := pinned[path]
 		current, err := entryFor(directory, root)
@@ -97,36 +151,74 @@ func Verify(root, lockPath string, lock *Lock, options lint.Options) *Report {
 			})
 			continue
 		}
-		if !isPinned {
-			results = append(results, Result{
-				Name: current.Name, Path: path, Status: StatusAdded, Actual: current.Digest,
-			})
+		if current.Name != "" {
+			seenNames[current.Name] = struct{}{}
+		}
+
+		result := Result{Name: current.Name, Path: path, Actual: current.Digest}
+		record, isInstalled := installed[current.Name]
+
+		switch {
+		case isPinned:
+			result.PinnedBy, result.Expected = PinnedByLock, entry.Digest
+		case isInstalled && current.Name != "":
+			result.PinnedBy, result.Expected = PinnedByReceipt, record.Digest
+		default:
+			result.Status = StatusAdded
+			results = append(results, result)
 			continue
 		}
-		if entry.Digest == current.Digest {
-			results = append(results, Result{
-				Name: current.Name, Path: path, Status: StatusMatched, Actual: current.Digest,
-			})
+
+		if result.Expected == current.Digest {
+			result.Status = StatusMatched
+			results = append(results, result)
 			continue
 		}
-		results = append(results, Result{
-			Name: current.Name, Path: path, Status: StatusModified,
-			Expected: entry.Digest, Actual: current.Digest,
-			Changes: diffFiles(entry.Files, current.Files),
-		})
+
+		result.Status = StatusModified
+		if result.PinnedBy == PinnedByLock {
+			result.Changes = diffFiles(entry.Files, current.Files)
+		} else {
+			// A receipt carries one digest for the whole skill, so the file that moved
+			// cannot be named from it. Say so rather than leaving an empty change list to
+			// be read as "nothing in particular changed".
+			result.Message = "a receipt records the skill's digest but not its files; " +
+				"run `skillctl lock` for file-level detail"
+		}
+		results = append(results, result)
 	}
 
 	for _, entry := range lock.Skills {
-		if _, present := seen[entry.Path]; present {
+		if _, present := seenPaths[entry.Path]; present {
 			continue
 		}
 		results = append(results, Result{
-			Name: entry.Name, Path: entry.Path, Status: StatusRemoved, Expected: entry.Digest,
+			Name: entry.Name, Path: entry.Path, Status: StatusRemoved,
+			PinnedBy: PinnedByLock, Expected: entry.Digest,
+		})
+	}
+	for _, record := range records {
+		if _, present := seenNames[record.Name]; present {
+			continue
+		}
+		if _, alsoPinned := pinnedNames[record.Name]; alsoPinned {
+			continue // already reported as removed against the lock
+		}
+		// A receipt has no path: it records what was installed, not where it ended up.
+		results = append(results, Result{
+			Name: record.Name, Status: StatusRemoved,
+			PinnedBy: PinnedByReceipt, Expected: record.Digest,
 		})
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path })
-	return &Report{Root: root, LockPath: filepath.ToSlash(lockPath), Results: results}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Path != results[j].Path {
+			return results[i].Path < results[j].Path
+		}
+		return results[i].Name < results[j].Name
+	})
+	report.Results = results
+	return report
 }
 
 // diffFiles names the files that moved, so the report gives a lead rather than an alarm.

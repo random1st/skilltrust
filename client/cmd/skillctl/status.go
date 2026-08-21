@@ -77,19 +77,32 @@ func runStatus(args []string) int {
 		medium += counts[lint.SeverityMedium]
 		low += counts[lint.SeverityLow]
 
+		// The lock is optional here. A tree whose skills arrived through `skillctl install`
+		// has a recorded digest for every one of them even with no lock, and verify reads
+		// both, so status asks it once rather than keeping a second opinion of its own.
 		lockPath := filepath.Join(root, lockfile.FileName)
-		if lock, err := lockfile.Load(lockPath); err == nil {
-			anyPinned = true
-			drift := lockfile.Verify(root, lockPath, lock, lint.Options{})
-			driftedCount += drift.Drifted()
-			// Count what the lock records, not what verify reported on: a skill present
-			// but unpinned appears in the results and is precisely not pinned.
-			pinned += len(lock.Skills)
+		lock := &lockfile.Lock{Version: lockfile.Version}
+		if loaded, err := lockfile.Load(lockPath); err == nil {
+			lock = loaded
 		} else if !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr,
 				"skillctl: a lock could not be read, so drift is unknown: %v\n", err)
 			return exitUsage
 		}
+
+		drift := lockfile.Verify(root, lockPath, lock, lint.Options{})
+		if len(drift.Unchecked) > 0 {
+			for _, note := range drift.Unchecked {
+				fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
+			}
+			return exitUsage
+		}
+		driftedCount += drift.Drifted()
+		// Count what was recorded, not everything verify looked at: a skill present but
+		// never recorded appears in the results and is precisely the opposite of pinned.
+		recorded := len(drift.Results) - drift.Unpinned()
+		pinned += recorded
+		anyPinned = anyPinned || recorded > 0
 
 		records, err := receipt.LoadAll(root)
 		if err != nil {
@@ -129,11 +142,11 @@ func runStatus(args []string) int {
 
 	switch {
 	case !anyPinned:
-		fmt.Printf("  drift        not pinned — run `skillctl lock`\n")
+		fmt.Printf("  drift        nothing recorded — run `skillctl lock`\n")
 	case driftedCount == 0:
-		fmt.Printf("  drift        none · %d pinned\n", pinned)
+		fmt.Printf("  drift        none · %d recorded\n", pinned)
 	default:
-		fmt.Printf("  drift        %d changed since they were pinned\n", driftedCount)
+		fmt.Printf("  drift        %d changed since they were recorded\n", driftedCount)
 	}
 
 	fmt.Printf("  approvals    %d approved · %d unapproved · %d unmanaged\n",

@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/random1st/skilltrust/client/internal/archive"
 	"github.com/random1st/skilltrust/client/internal/lint"
 	"github.com/random1st/skilltrust/client/internal/lockfile"
+	"github.com/random1st/skilltrust/client/internal/receipt"
 )
 
 func writeSkill(t *testing.T, root, name string) {
@@ -172,5 +174,40 @@ func TestParseArgsStopsAtDoubleDash(t *testing.T) {
 	}
 	if flags.NArg() != 1 || flags.Arg(0) != "--not-a-flag" {
 		t.Fatalf("positional = %v", flags.Args())
+	}
+}
+
+// A tree whose skills arrived through `skillctl install` has a recorded digest for every one
+// of them. Skipping it because nobody typed `lock` meant the hook stayed silent about exactly
+// the trees this tool had itself populated.
+func TestVerifyRootsChecksAReceiptOnlyTree(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "alpha")
+
+	built, err := archive.Build(filepath.Join(root, "alpha"), archive.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &receipt.Receipt{Name: "alpha", Digest: built.Digest, Source: "alpha.tar"}
+	if err := record.Save(receipt.Path(root, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+
+	reports, broken := verifyRoots([]string{root})
+	if len(reports) != 1 || len(broken) != 0 {
+		t.Fatalf("reports = %d, broken = %v", len(reports), broken)
+	}
+	if reports[0].Drifted() != 0 || reports[0].Unpinned() != 0 {
+		t.Fatalf("a freshly installed tree must verify clean: %+v", reports[0].Results)
+	}
+
+	edited := filepath.Join(root, "alpha", "SKILL.md")
+	if err := os.WriteFile(edited, []byte("---\nname: alpha\ndescription: Edited.\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reports, _ = verifyRoots([]string{root})
+	if reports[0].Drifted() != 1 {
+		t.Fatalf("drifted = %d; the hook must see drift against an install receipt",
+			reports[0].Drifted())
 	}
 }
