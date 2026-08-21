@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-skillctl = "skilltrust.cli:app"
+skilltrust-admin = "skilltrust.cli:app"
 skilltrustd = "skilltrust.api:run"
 skilltrust-worker = "skilltrust.worker:main"
 
