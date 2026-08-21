@@ -71,11 +71,23 @@ var (
 	}
 
 	// negationCue marks a line that forbids rather than instructs. A skill whose text says
-	// "never read .env" is the opposite of the threat, and reporting it at high severity is
-	// how a linter loses the reader. The finding is kept but demoted, never dropped.
+	// "never read .env" is the opposite of the threat.
 	negationCue = regexp.MustCompile(
 		`(?i)\b(never|do not|don't|must not|should not|shouldn't|cannot|can't|avoid|` +
 			`refuse|prohibit(ed)?|forbidden|without|no need to)\b`)
+
+	// exfiltrationCue marks a line that tells the agent to *use* the credential rather than
+	// merely name it. Mentioning a secret path is unremarkable — a security-audit skill
+	// scans for .env, a deploy skill warns about committing one — while reading it and
+	// putting it somewhere is the threat.
+	//
+	// Calibrating the other way round was wrong, and running against a real tree of 97
+	// skills proved it: every high-severity credential finding was a security tool doing
+	// its job. A linter that flags the audit skill for auditing is one people uninstall,
+	// and it takes the true positives with it.
+	exfiltrationCue = regexp.MustCompile(
+		`(?i)\b(read|cat|open|print|echo|display|show|include|attach|send|post|upload|` +
+			`exfiltrat\w*|copy|paste|forward|transmit|report back)\b`)
 )
 
 var executableSuffixes = map[string]struct{}{
@@ -244,13 +256,7 @@ func lineProbeFindings(part segment, path string) []Finding {
 			if !pattern.MatchString(line) {
 				continue
 			}
-			severity, message := SeverityHigh,
-				"mentions a credential file or secret environment variable"
-			if negationCue.MatchString(line) {
-				severity, message = SeverityLow,
-					"mentions a credential file, but the line reads as a prohibition; "+
-						"confirm it forbids rather than instructs"
-			}
+			severity, message := credentialSeverity(line)
 			findings = append(findings, Finding{
 				Rule:     "risk/credential-path",
 				Severity: severity,
@@ -277,6 +283,20 @@ func lineProbeFindings(part segment, path string) []Finding {
 		}
 	}
 	return findings
+}
+
+// credentialSeverity grades a line that names a credential path by what it asks for.
+func credentialSeverity(line string) (Severity, string) {
+	switch {
+	case negationCue.MatchString(line):
+		return SeverityLow, "names a credential file, but the line reads as a prohibition; " +
+			"confirm it forbids rather than instructs"
+	case exfiltrationCue.MatchString(line):
+		return SeverityHigh, "instructs the agent to read or send a credential file or secret"
+	default:
+		return SeverityLow, "names a credential file or secret environment variable; " +
+			"check whether it is being scanned for or reached into"
+	}
 }
 
 func budgetFindings(parsed *skillmd.SkillMD, path string) []Finding {

@@ -147,6 +147,17 @@ var skippedDirectories = map[string]struct{}{
 }
 
 // Discover returns directories holding a SKILL.md, plus notes about anything not scanned.
+//
+// Symlinked directories are followed. Refusing them looked prudent until the tool met a
+// real installation: skills arrive from plugin marketplaces as symlinks, and skipping them
+// meant seeing 12 skills in a tree of 98 while reporting as though that were all of it. A
+// scanner that silently covers an eighth of the target is worse than one that refuses to
+// run, because its clean report is believed.
+//
+// Following a link during discovery is safe in a way that following one during packaging
+// is not: here it only decides where to look, while there it would decide which bytes an
+// identity covers. archive.Build still refuses every symlink inside a skill.
+//
 // A skill directory is never descended into: a nested SKILL.md belongs to the bundled
 // resources of the outer skill, not to a separate skill.
 func Discover(root string, options Options) ([]string, []string) {
@@ -159,6 +170,9 @@ func Discover(root string, options Options) ([]string, []string) {
 
 	var found, notes []string
 	visited := 0
+	// Keyed by resolved path: a link cycle, or two links onto the same target, must not
+	// turn a bounded walk into an unbounded one or report the same skill twice.
+	seen := map[string]struct{}{}
 
 	type entry struct {
 		path  string
@@ -169,6 +183,16 @@ func Discover(root string, options Options) ([]string, []string) {
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+
+		resolved, err := filepath.EvalSymlinks(current.path)
+		if err != nil {
+			notes = append(notes, "cannot resolve "+current.path+": "+err.Error())
+			continue
+		}
+		if _, repeat := seen[resolved]; repeat {
+			continue
+		}
+		seen[resolved] = struct{}{}
 
 		visited++
 		if visited > options.MaxDirectories {
@@ -192,13 +216,17 @@ func Discover(root string, options Options) ([]string, []string) {
 		}
 		for index := len(children) - 1; index >= 0; index-- {
 			child := children[index]
-			if !child.IsDir() || child.Type()&fs.ModeSymlink != 0 {
-				continue
-			}
+			path := filepath.Join(current.path, child.Name())
 			if _, skip := skippedDirectories[child.Name()]; skip {
 				continue
 			}
-			stack = append(stack, entry{path: filepath.Join(current.path, child.Name()), depth: current.depth + 1})
+			// Stat rather than trusting the entry type, so a symlink pointing at a
+			// directory is followed and one pointing at a file is not.
+			target, err := os.Stat(path)
+			if err != nil || !target.IsDir() {
+				continue
+			}
+			stack = append(stack, entry{path: path, depth: current.depth + 1})
 		}
 	}
 
