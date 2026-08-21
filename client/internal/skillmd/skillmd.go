@@ -62,13 +62,19 @@ type Field struct {
 }
 
 // SkillMD is a parsed SKILL.md, however malformed the original was.
+//
+// FrontmatterStartLine and BodyStartLine are 1-based line numbers *in the file*, so a
+// finding in either segment can be reported at a line a reader can actually open. Without
+// them a rule scanning the body reports offsets that point nowhere.
 type SkillMD struct {
-	Path            string
-	Fields          []Field
-	Body            string
-	FrontmatterText string
-	Defects         []Defect
-	Parsed          bool
+	Path                 string
+	Fields               []Field
+	Body                 string
+	FrontmatterText      string
+	FrontmatterStartLine int
+	BodyStartLine        int
+	Defects              []Defect
+	Parsed               bool
 }
 
 // Parse reads and parses the file at path.
@@ -103,24 +109,26 @@ func ParseText(path, text string) *SkillMD {
 		text = strings.TrimPrefix(text, "\uFEFF")
 	}
 
-	frontmatter, body, ok := splitFrontmatter(text)
+	frontmatter, body, bodyStart, ok := splitFrontmatter(text)
 	if !ok {
 		defects = append(defects, Defect{
 			Code:    "spec/frontmatter-missing",
 			Message: "no YAML frontmatter delimited by '---' at the start of the file",
 			Line:    1,
 		})
-		return &SkillMD{Path: path, Body: text, Defects: defects}
+		return &SkillMD{Path: path, Body: text, BodyStartLine: 1, Defects: defects}
 	}
 
 	fields, loadDefects, loaded := loadFrontmatter(frontmatter)
 	defects = append(defects, loadDefects...)
 	skill := &SkillMD{
-		Path:            path,
-		Fields:          fields,
-		Body:            body,
-		FrontmatterText: frontmatter,
-		Parsed:          loaded,
+		Path:                 path,
+		Fields:               fields,
+		Body:                 body,
+		FrontmatterText:      frontmatter,
+		FrontmatterStartLine: frontmatterLineOffset + 1,
+		BodyStartLine:        bodyStart,
+		Parsed:               loaded,
 	}
 	if !loaded {
 		skill.Defects = defects
@@ -167,22 +175,30 @@ func (s *SkillMD) UnknownFields() []string {
 	return unknown
 }
 
-// splitFrontmatter returns the frontmatter block, the trimmed body, and whether a complete
-// delimited block was found.
-func splitFrontmatter(text string) (string, string, bool) {
+// splitFrontmatter returns the frontmatter block, the trimmed body, the 1-based file line
+// the body starts on, and whether a complete delimited block was found.
+func splitFrontmatter(text string) (string, string, int, bool) {
 	lines := strings.Split(text, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != delimiter {
-		return "", "", false
+		return "", "", 0, false
 	}
 	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) != delimiter {
 			continue
 		}
 		frontmatter := strings.Join(lines[1:index], "\n")
-		body := strings.TrimSpace(strings.Join(lines[index+1:], "\n"))
-		return frontmatter, body, true
+
+		// Trimming the body drops leading blank lines, so the offset has to skip them too
+		// or every body finding is reported that many lines too early.
+		rest := lines[index+1:]
+		lead := 0
+		for lead < len(rest) && strings.TrimSpace(rest[lead]) == "" {
+			lead++
+		}
+		body := strings.TrimSpace(strings.Join(rest, "\n"))
+		return frontmatter, body, index + 2 + lead, true
 	}
-	return "", "", false
+	return "", "", 0, false
 }
 
 // frontmatterLineOffset converts a line number inside the frontmatter block to a line

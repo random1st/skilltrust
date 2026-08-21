@@ -33,8 +33,10 @@ const (
 const usage = `skillctl - inventory and verify Agent Skills
 
 Usage:
-  skillctl digest [flags] [path] compute the canonical digest of a skill directory
   skillctl lint [flags] [path]   inventory a tree of skills and report risk indicators
+  skillctl digest [flags] [path] compute the canonical digest of a skill directory
+  skillctl lock [flags] [path]   pin every skill by digest into skills.lock
+  skillctl verify [flags] [path] report drift against skills.lock
   skillctl version               print version information
 
 Run "skillctl <command> -h" for per-command flags.
@@ -49,6 +51,10 @@ func main() {
 	switch os.Args[1] {
 	case "digest":
 		os.Exit(runDigest(os.Args[2:]))
+	case "lock":
+		os.Exit(runLock(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":

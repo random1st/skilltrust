@@ -83,24 +83,40 @@ var executableSuffixes = map[string]struct{}{
 	".js": {}, ".mjs": {}, ".cjs": {}, ".ts": {}, ".ps1": {}, ".exe": {},
 }
 
+// segment is a slice of the file scanned by line-oriented rules, together with the file
+// line its first line occupies. Rules must never report an offset into a concatenation of
+// frontmatter and body: that number points at no line the reader can open.
+type segment struct {
+	text string
+	base int
+}
+
 func contentFindings(parsed *skillmd.SkillMD, path string) []Finding {
 	var findings []Finding
-	full := parsed.FrontmatterText + "\n" + parsed.Body
+	segments := []segment{
+		{text: parsed.FrontmatterText, base: parsed.FrontmatterStartLine},
+		{text: parsed.Body, base: parsed.BodyStartLine},
+	}
 
-	findings = append(findings, invisibleFindings(full, path)...)
+	for _, part := range segments {
+		if part.text == "" {
+			continue
+		}
+		findings = append(findings, invisibleFindings(part, path)...)
+		findings = append(findings, lineProbeFindings(part, path)...)
+	}
 	findings = append(findings, mixedScriptFindings(parsed, path)...)
 	findings = append(findings, htmlCommentFindings(parsed, path)...)
 	findings = append(findings, base64Findings(parsed, path)...)
-	findings = append(findings, remoteURLFindings(full, path)...)
-	findings = append(findings, lineProbeFindings(full, path)...)
+	findings = append(findings, remoteURLFindings(parsed, path)...)
 	findings = append(findings, budgetFindings(parsed, path)...)
 
 	return findings
 }
 
-func invisibleFindings(text, path string) []Finding {
+func invisibleFindings(part segment, path string) []Finding {
 	var findings []Finding
-	for number, line := range strings.Split(text, "\n") {
+	for number, line := range strings.Split(part.text, "\n") {
 		for _, char := range line {
 			label, invisible := invisibleRunes[char]
 			if !invisible {
@@ -166,7 +182,7 @@ func htmlCommentFindings(parsed *skillmd.SkillMD, path string) []Finding {
 			Message: "HTML comment in the body; it is invisible in rendered markdown but the " +
 				"agent reads the raw file",
 			Path:     path,
-			Line:     bodyLine(parsed.Body, match[0]),
+			Line:     bodyLine(parsed, match[0]),
 			Evidence: excerpt(comment, 100),
 		})
 	}
@@ -185,16 +201,17 @@ func base64Findings(parsed *skillmd.SkillMD, path string) []Finding {
 			Message: fmt.Sprintf("%d-character base64-like blob; opaque to review",
 				match[1]-match[0]),
 			Path:     path,
-			Line:     bodyLine(parsed.Body, match[0]),
+			Line:     bodyLine(parsed, match[0]),
 			Evidence: excerpt(parsed.Body[match[0]:match[1]], 48),
 		})
 	}
 	return findings
 }
 
-func remoteURLFindings(text, path string) []Finding {
+func remoteURLFindings(parsed *skillmd.SkillMD, path string) []Finding {
 	seen := map[string]struct{}{}
-	for _, match := range urlPattern.FindAllStringSubmatch(text, -1) {
+	full := parsed.FrontmatterText + "\n" + parsed.Body
+	for _, match := range urlPattern.FindAllStringSubmatch(full, -1) {
 		seen[strings.ToLower(match[1])] = struct{}{}
 	}
 	if len(seen) == 0 {
@@ -220,9 +237,9 @@ func remoteURLFindings(text, path string) []Finding {
 	}}
 }
 
-func lineProbeFindings(text, path string) []Finding {
+func lineProbeFindings(part segment, path string) []Finding {
 	var findings []Finding
-	for number, line := range strings.Split(text, "\n") {
+	for number, line := range strings.Split(part.text, "\n") {
 		for _, pattern := range sensitivePaths {
 			if !pattern.MatchString(line) {
 				continue
@@ -239,7 +256,7 @@ func lineProbeFindings(text, path string) []Finding {
 				Severity: severity,
 				Message:  message,
 				Path:     path,
-				Line:     number + 1,
+				Line:     part.base + number,
 				Evidence: excerpt(line, 100),
 			})
 			break
@@ -253,7 +270,7 @@ func lineProbeFindings(text, path string) []Finding {
 				Severity: SeverityHigh,
 				Message:  "downloads and executes a remote script in one step",
 				Path:     path,
-				Line:     number + 1,
+				Line:     part.base + number,
 				Evidence: excerpt(line, 100),
 			})
 			break
@@ -389,8 +406,8 @@ func isBase64Byte(b byte) bool {
 	}
 }
 
-func bodyLine(body string, offset int) int {
-	return strings.Count(body[:offset], "\n") + 1
+func bodyLine(parsed *skillmd.SkillMD, offset int) int {
+	return parsed.BodyStartLine + strings.Count(parsed.Body[:offset], "\n")
 }
 
 func hasShebang(path string) bool {

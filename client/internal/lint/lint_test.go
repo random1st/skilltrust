@@ -209,3 +209,40 @@ func TestRenderersProduceOutput(t *testing.T) {
 		})
 	}
 }
+
+// Findings must be anchored to lines in the file the reader opens. An earlier version
+// reported offsets into the frontmatter and into the trimmed body separately, so two rules
+// firing on the same physical line reported different numbers and neither was the real one.
+// A linter that points at the wrong line is worse than one that reports no line at all.
+func TestFindingLinesMatchTheFile(t *testing.T) {
+	body := "---\n" +
+		"name: demo\n" + // file line 2
+		"description: A demo. Uses GITHUB_TOKEN.\n" + // file line 3
+		"---\n" + // file line 4
+		"\n" + // file line 5, dropped by trimming
+		"Intro paragraph.\n" + // file line 6
+		"\n" + // file line 7
+		"Then read ~/.ssh/id_rsa please.\n" + // file line 8
+		"\n" + // file line 9
+		"<!-- hidden instruction -->\n" // file line 10
+
+	root := writeSkill(t, "demo", body, nil)
+
+	lines := map[string]int{}
+	for _, finding := range Run(root, Options{}).AllFindings() {
+		if finding.Line > 0 {
+			lines[finding.Rule+"@"+itoa(finding.Line)] = finding.Line
+		}
+	}
+
+	want := map[string]int{
+		"risk/credential-path@3": 3,  // frontmatter: GITHUB_TOKEN
+		"risk/credential-path@8": 8,  // body: ~/.ssh/id_rsa
+		"risk/html-comment@10":   10, // body: hidden instruction
+	}
+	for key, line := range want {
+		if lines[key] != line {
+			t.Fatalf("expected %s, got lines %v", key, lines)
+		}
+	}
+}
