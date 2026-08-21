@@ -211,3 +211,23 @@ func TestVerifyRootsChecksAReceiptOnlyTree(t *testing.T) {
 			reports[0].Drifted())
 	}
 }
+
+// The bug this pins was found the first time the tool was pointed at a real machine:
+// ~/.claude/skills is a symlink to ~/.agents/skills, so the conventional locations named
+// one tree four times. The hook verified it four times and reported 388 skills where there
+// are 97 — and had anything drifted, it would have printed each drifted skill four times in
+// the one report a person reads at the start of a session.
+func TestCandidateRootsCollapsesOneTreeNamedTwice(t *testing.T) {
+	real := t.TempDir()
+	writeSkill(t, real, "alpha")
+
+	link := filepath.Join(t.TempDir(), "skills")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	roots := candidateRoots([]string{real, link, real})
+	if len(roots) != 1 {
+		t.Fatalf("roots = %v; one directory under several names is one tree", roots)
+	}
+}

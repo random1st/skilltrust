@@ -53,7 +53,8 @@ func runLock(args []string) int {
 
 	fmt.Printf("pinned %d skills to %s\n", len(lock.Skills), lockPath)
 	for _, entry := range lock.Skills {
-		fmt.Printf("  %s  %-32s %d files\n", shortDigest(entry.Digest), entry.Path, len(entry.Files))
+		fmt.Printf("  %s  %-32s %d file%s\n", shortDigest(entry.Digest), entry.Path,
+			len(entry.Files), plural(len(entry.Files), "", "s"))
 	}
 	return exitClean
 }

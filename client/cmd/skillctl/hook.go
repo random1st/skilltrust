@@ -99,9 +99,13 @@ func runHookSessionStart(args []string) int {
 // candidateRoots resolves the directories to check. A directory without a lock is skipped
 // in silence: not pinned means not this tool's business, and warning about it every session
 // would train the reader to ignore the hook.
+// Duplicates are collapsed by resolved path, including ones the caller passed explicitly:
+// the conventional locations are usually several names for one tree, and verifying it four
+// times means printing every drifted skill four times in the one report a person reads at
+// the start of a session.
 func candidateRoots(explicit []string) []string {
 	if len(explicit) > 0 {
-		return explicit
+		return dedupeByResolvedPath(explicit)
 	}
 
 	var bases []string
@@ -118,7 +122,7 @@ func candidateRoots(explicit []string) []string {
 			roots = append(roots, filepath.Join(base, suffix))
 		}
 	}
-	return roots
+	return dedupeByResolvedPath(roots)
 }
 
 // verifyRoots distinguishes three states that must never be conflated.

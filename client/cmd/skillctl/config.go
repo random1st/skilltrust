@@ -77,25 +77,37 @@ func resolveSkillRoots(explicit string) ([]string, error) {
 		return []string{resolved}, nil
 	}
 
-	roots := skillRoots()
+	roots := dedupeByResolvedPath(skillRoots())
 	if len(roots) == 0 {
 		return nil, noSkillsError()
 	}
+	return roots, nil
+}
 
-	seen := map[string]struct{}{}
-	var resolved []string
-	for _, root := range roots {
-		real, _, err := resolvePath(root)
+// dedupeByResolvedPath collapses paths that name the same directory, and returns them
+// resolved.
+//
+// The conventional locations overlap constantly: ~/.claude/skills is usually a symlink to
+// ~/.agents/skills, and running from your home directory makes the project and user
+// candidates the same paths again. Without this the hook verified one tree four times and
+// reported 388 skills where there are 97, while lint warned about "3 other skills
+// directories" that do not exist. Both are the alert-fatigue failure this tool avoids
+// elsewhere: a number nobody can reconcile is a number nobody reads.
+func dedupeByResolvedPath(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	var unique []string
+	for _, path := range paths {
+		resolved, _, err := resolvePath(path)
 		if err != nil {
 			continue
 		}
-		if _, repeat := seen[real]; repeat {
+		if _, repeat := seen[resolved]; repeat {
 			continue
 		}
-		seen[real] = struct{}{}
-		resolved = append(resolved, real)
+		seen[resolved] = struct{}{}
+		unique = append(unique, resolved)
 	}
-	return resolved, nil
+	return unique
 }
 
 func noSkillsError() error {
@@ -120,21 +132,26 @@ func resolveSkillRoot(explicit string) (string, error) {
 		return resolved, nil
 	}
 
-	roots := skillRoots()
+	// Deduplicate before counting: the alternatives are only worth mentioning when they are
+	// genuinely different trees, and most machines have several names for one.
+	roots := dedupeByResolvedPath(skillRoots())
 	if len(roots) == 0 {
 		return "", noSkillsError()
 	}
 
-	resolved, _, err := resolvePath(roots[0])
-	if err != nil {
-		return "", err
-	}
 	fmt.Fprintf(os.Stderr, "skillctl: scanning %s\n", roots[0])
 	if len(roots) > 1 {
-		fmt.Fprintf(os.Stderr, "skillctl: %d other skills directories exist; pass a path "+
-			"to scan one of them\n", len(roots)-1)
+		fmt.Fprintf(os.Stderr, "skillctl: %d other skills director%s exist; pass a path "+
+			"to scan one of them\n", len(roots)-1, plural(len(roots)-1, "y", "ies"))
 	}
-	return resolved, nil
+	return roots[0], nil
+}
+
+func plural(count int, one, many string) string {
+	if count == 1 {
+		return one
+	}
+	return many
 }
 
 // gitIdentity is a sensible default for who approved something. Requiring --as on every
