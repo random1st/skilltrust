@@ -110,6 +110,8 @@ homebrew_casks:
       owner: random1st
       name: homebrew-tap
       branch: main
+      # GITHUB_TOKEN is scoped to this repository; the tap lives in another one.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
     homepage: https://github.com/random1st/skilltrust
     description: Inventory, verify and revoke Agent Skills

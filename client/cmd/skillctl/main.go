@@ -172,10 +172,18 @@ func resolvePath(raw string) (string, string, error) {
 	if err != nil {
 		return absolute, "", nil
 	}
-	if resolved == absolute {
-		return absolute, "", nil
+	if resolved == absolute || isPlatformPrefixRewrite(absolute, resolved) {
+		return resolved, "", nil
 	}
 	return resolved, fmt.Sprintf("%s is a symlink to %s", absolute, resolved), nil
+}
+
+// isPlatformPrefixRewrite reports the macOS case where /var, /tmp and /etc are symlinks
+// into /private. Those hops are true but say nothing about the user's layout, and a
+// warning that fires on every temp directory is one people stop reading — the same alert
+// fatigue this tool avoids elsewhere by demoting prohibitions instead of shouting.
+func isPlatformPrefixRewrite(absolute, resolved string) bool {
+	return runtime.GOOS == "darwin" && resolved == "/private"+absolute
 }
 
 func versionString() string {

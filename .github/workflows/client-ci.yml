@@ -1,0 +1,77 @@
+# Build and test the client on every platform it ships for.
+#
+# Actions are pinned by commit SHA, not by tag. A tag is mutable and a security tool that
+# asks people to pin skills by digest while pulling its own CI by a moving reference is
+# not one worth trusting.
+name: client-ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["client/**", ".github/workflows/client-ci.yml"]
+  pull_request:
+    paths: ["client/**", ".github/workflows/client-ci.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: client
+
+jobs:
+  test:
+    # The canonical archive must produce identical digests on every platform. Running the
+    # golden-digest test on all three is what turns that from a claim into a check.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+
+      - name: Verify formatting
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -cover ./...
+
+  reproducible:
+    # The product's central claim is that anyone can rebuild a released binary and compare
+    # digests. If that ever stops holding, it has to fail here rather than in someone's
+    # incident review.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+
+      - name: Two independent builds must be byte-identical
+        run: make reproducible
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+
+      - name: Every release target still compiles
+        run: |
+          for pair in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS="${pair%/*}" GOARCH="${pair#*/}" go build ./... || exit 1
+            echo "  ${pair} ok"
+          done

@@ -1,0 +1,89 @@
+# Check the skills in this repository on every pull request.
+#
+# This is the workflow SkillTrust exists to make possible, and the only place where the
+# check is genuinely enforced: an ephemeral runner with a controlled image is the one
+# environment where the developer whose change is under review has no privileges. On a
+# laptop the same commands are advisory, because anything able to edit a skill can also
+# edit the hook that checks it.
+name: skills-check
+
+on:
+  pull_request:
+    paths:
+      - ".agents/skills/**"
+      - ".claude/skills/**"
+      - "skills.lock"
+      - ".github/workflows/skills-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".agents/skills/**"
+      - ".claude/skills/**"
+      - "skills.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Only this job may write findings, and only findings.
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+
+      # Built from the commit under review rather than downloaded, so the check cannot be
+      # subverted by pointing at a different release.
+      - name: Build skillctl
+        run: go build -trimpath -o "${RUNNER_TEMP}/skillctl" ./cmd/skillctl
+        working-directory: client
+
+      - name: Locate the skills tree
+        id: tree
+        run: |
+          for candidate in .agents/skills .claude/skills; do
+            if [ -d "${candidate}" ]; then
+              echo "path=${candidate}" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+          done
+          echo "path=" >> "${GITHUB_OUTPUT}"
+          echo "no skills directory in this repository; nothing to check"
+
+      # Drift fails the build. --frozen additionally fails when a skill was added without
+      # being pinned, which is the whole point of running this on a pull request: a new
+      # skill must be approved, not merely present.
+      - name: Verify pinned skills
+        if: steps.tree.outputs.path != ''
+        run: |
+          if [ -f "${{ steps.tree.outputs.path }}/skills.lock" ]; then
+            "${RUNNER_TEMP}/skillctl" verify --frozen "${{ steps.tree.outputs.path }}"
+          else
+            echo "::warning::no skills.lock; run 'skillctl lock ${{ steps.tree.outputs.path }}' and commit it"
+          fi
+
+      # Risk indicators are reported as findings, never as a gate on their own: they are
+      # material for a human reviewer, and a scanner that blocks merges on heuristics is a
+      # scanner people learn to bypass. Drift, above, is the gate.
+      - name: Scan skills for risk indicators
+        if: steps.tree.outputs.path != ''
+        run: |
+          "${RUNNER_TEMP}/skillctl" lint \
+            --format sarif \
+            --output skillctl.sarif \
+            --fail-on never \
+            "${{ steps.tree.outputs.path }}"
+
+      - name: Upload findings
+        if: steps.tree.outputs.path != ''
+        uses: github/codeql-action/upload-sarif@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
+        with:
+          sarif_file: skillctl.sarif
+          category: skillctl
