@@ -236,9 +236,8 @@ func LoadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%s is readable beyond its owner (%04o); "+
-			"chmod 600 it before signing anything", path, info.Mode().Perm())
+	if err := assertOwnerOnly(path, info); err != nil {
+		return nil, err
 	}
 
 	raw, err := os.ReadFile(path)

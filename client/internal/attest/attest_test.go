@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -183,6 +184,9 @@ func TestKeyIDIsStable(t *testing.T) {
 }
 
 func TestPrivateKeyPermissionsAreEnforced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("see TestPrivateKeyPermissionsAreNotCheckedOnWindows")
+	}
 	_, private, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -290,5 +294,29 @@ func TestEnvelopeFileRoundTrip(t *testing.T) {
 	}
 	if _, _, err := Verify(loaded, NewTrustedKeys(public)); err != nil {
 		t.Fatalf("an envelope must verify after a file round trip: %v", err)
+	}
+}
+
+// Pins the platform gap so it is a tested property rather than a surprise: Windows file
+// modes are synthesized from the read-only attribute and say nothing about the ACL, so the
+// owner-only check cannot run there.
+func TestPrivateKeyPermissionsAreNotCheckedOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("describes Windows behaviour")
+	}
+
+	_, private, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "signer.key")
+	if err := WritePrivateKey(path, private); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPrivateKey(path); err != nil {
+		t.Fatalf("Windows carries no usable mode, so the key must still load: %v", err)
 	}
 }

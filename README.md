@@ -124,10 +124,12 @@ catalog other than putting the file where the client can read it. The Python tre
 profiles, a fail-closed admission decision, SLSA provenance, Git review adapters bound to an
 exact repository and head SHA — but none of it is wired to the client yet.
 
-One known limitation, pinned by a test rather than a footnote: Windows has no executable bit,
-so a skill containing executables does not produce the same digest there as on POSIX. The bit
-is part of the identity on purpose, and a platform that cannot store it cannot reproduce the
-digest.
+Two known limitations, both pinned by tests rather than footnotes. Windows has no executable
+bit, so a skill containing executables does not produce the same digest there as on POSIX —
+the bit is part of the identity on purpose, and a platform that cannot store it cannot
+reproduce the digest. And Windows file modes are synthesized from the read-only attribute
+rather than reflecting the ACL, so the owner-only check on a signing key does not run there;
+protecting the key is the ACL's job and this tool does not inspect ACLs.
 
 ## Layout
 
