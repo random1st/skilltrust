@@ -3,6 +3,7 @@ package fleet
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,5 +294,45 @@ func TestAWithdrawalIsAlsoReportedOnce(t *testing.T) {
 	}
 	if changes := mustReconcile(t, snapshot, h); len(changes) != 0 {
 		t.Fatalf("a forgotten withdrawal produces no line at all, got %+v", changes)
+	}
+}
+
+// The quarantine stamp is second-granular, so two rollbacks of one skill inside a second
+// collide. Overwriting would destroy the earlier evidence while still looking like it kept
+// something, which is worse than not quarantining at all.
+func TestTwoRollbacksInOneSecondBothKeepTheirEvidence(t *testing.T) {
+	h := newHarness(t)
+	snapshot := h.publish(t, "alpha", "Original body.\n")
+	if _, err := Reconcile(snapshot, h.state, h.options()); err != nil {
+		t.Fatal(err)
+	}
+
+	installed := filepath.Join(h.install, "alpha", "SKILL.md")
+	var kept []string
+	for _, injection := range []string{"first tamper\n", "second tamper\n"} {
+		body := "---\nname: alpha\ndescription: A managed skill.\n---\n\n" + injection
+		if err := os.WriteFile(installed, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// The same fixed clock for both, which is what makes the names collide.
+		change := only(t, mustReconcile(t, snapshot, h))
+		if change.Action != ActionRolledBack {
+			t.Fatalf("action = %q", change.Action)
+		}
+		kept = append(kept, change.Quarantine)
+	}
+
+	if kept[0] == kept[1] {
+		t.Fatalf("both rollbacks used %s; the second overwrote the first", kept[0])
+	}
+	for index, directory := range kept {
+		body, err := os.ReadFile(filepath.Join(directory, "SKILL.md"))
+		if err != nil {
+			t.Fatalf("quarantine %d is missing: %v", index, err)
+		}
+		want := []string{"first tamper", "second tamper"}[index]
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("quarantine %d does not hold %q", index, want)
+		}
 	}
 }

@@ -1,111 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/random1st/skilltrust/client/internal/archive"
-	"github.com/random1st/skilltrust/client/internal/lint"
-	"github.com/random1st/skilltrust/client/internal/lockfile"
-	"github.com/random1st/skilltrust/client/internal/receipt"
 )
 
-// isolateHome keeps a test off the machine's real skilltrust home. Without it the tests
-// read whatever approvals the developer happens to have signed, which is both flaky and a
-// good way to never notice that a tree and the approval store are different scopes.
-func isolateHome(t *testing.T) {
-	t.Helper()
-	t.Setenv("SKILLTRUST_HOME", t.TempDir())
-}
-
-func writeSkill(t *testing.T, root, name string) {
-	t.Helper()
-	directory := filepath.Join(root, name)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := "---\nname: " + name + "\ndescription: A demo skill.\n---\n\nBody.\n"
-	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func pin(t *testing.T, root string) {
-	t.Helper()
-	lock, err := lockfile.Build(root, lint.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := lock.Save(filepath.Join(root, lockfile.FileName)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A lock that is absent and a lock that cannot be read are different facts and must not be
-// reported the same way. Conflating them hands an attacker a silent off switch: corrupt the
-// file and the session-start check disappears without a trace.
-func TestVerifyRootsSeparatesMissingFromUnreadable(t *testing.T) {
-	isolateHome(t)
-	unpinned := t.TempDir()
-	writeSkill(t, unpinned, "alpha")
-
-	pinned := t.TempDir()
-	writeSkill(t, pinned, "alpha")
-	pin(t, pinned)
-
-	corrupt := t.TempDir()
-	writeSkill(t, corrupt, "alpha")
-	if err := os.WriteFile(filepath.Join(corrupt, lockfile.FileName),
-		[]byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	reports, broken := verifyRoots([]string{unpinned, pinned, corrupt})
-
-	if len(reports) != 1 {
-		t.Fatalf("only the pinned tree should produce a report, got %d", len(reports))
-	}
-	if len(broken) != 1 {
-		t.Fatalf("the corrupt lock must be reported, got %v", broken)
-	}
-	if !strings.Contains(broken[0], corrupt) {
-		t.Fatalf("broken = %v", broken)
-	}
-}
-
-func TestHookReportNamesTheChangedFile(t *testing.T) {
-	isolateHome(t)
-	root := t.TempDir()
-	writeSkill(t, root, "alpha")
-	pin(t, root)
-
-	skillFile := filepath.Join(root, "alpha", "SKILL.md")
-	existing, err := os.ReadFile(skillFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(skillFile, append(existing, []byte("\nextra\n")...), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	reports, broken := verifyRoots([]string{root})
-	buffer := &strings.Builder{}
-	writeHookReport(buffer, reports, broken)
-
-	output := buffer.String()
-	for _, want := range []string{"alpha", "modified SKILL.md", "detection, not enforcement"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("report is missing %q:\n%s", want, output)
-		}
-	}
-}
-
-// Following a symlink is normal, hiding it is not: `cp -R` of a symlinked directory
-// produces another symlink, so writes meant for a sandbox land on the original.
 func TestResolvePathReportsSymlinkHops(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "looks-like-a-copy")
@@ -187,58 +91,44 @@ func TestParseArgsStopsAtDoubleDash(t *testing.T) {
 	}
 }
 
-// A tree whose skills arrived through `skillctl install` has a recorded digest for every one
-// of them. Skipping it because nobody typed `lock` meant the hook stayed silent about exactly
-// the trees this tool had itself populated.
-func TestVerifyRootsChecksAReceiptOnlyTree(t *testing.T) {
-	isolateHome(t)
-	root := t.TempDir()
-	writeSkill(t, root, "alpha")
+// Installing the hook must be safe to repeat, and must be removable. A check that can only
+// be added is one people are right to refuse to add.
+func TestHookInstallIsIdempotentAndReversible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"model":"opus","hooks":{"SessionStart":[]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specs := clientHooks("/usr/local/bin/skillctl")
 
-	built, err := archive.Build(filepath.Join(root, "alpha"), archive.Limits{})
+	added, err := applyClaudeHooks(path, specs)
+	if err != nil || len(added) != 1 {
+		t.Fatalf("added = %d, err = %v", len(added), err)
+	}
+	again, err := applyClaudeHooks(path, specs)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("a second install must add nothing, got %d (%v)", len(again), err)
+	}
+
+	// Unrelated settings must survive: rewriting a client's file with a narrower schema is
+	// how a tool breaks the client it was only supposed to observe.
+	var document map[string]any
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &receipt.Receipt{Name: "alpha", Digest: built.Digest, Source: receipt.Origin{Bundle: "alpha.tar"}}
-	if err := record.Save(receipt.Path(root, "alpha")); err != nil {
+	if err := json.Unmarshal(raw, &document); err != nil {
 		t.Fatal(err)
 	}
-
-	reports, broken := verifyRoots([]string{root})
-	if len(reports) != 1 || len(broken) != 0 {
-		t.Fatalf("reports = %d, broken = %v", len(reports), broken)
-	}
-	if reports[0].Drifted() != 0 || reports[0].Unpinned() != 0 {
-		t.Fatalf("a freshly installed tree must verify clean: %+v", reports[0].Results)
+	if document["model"] != "opus" {
+		t.Fatalf("unrelated settings were lost: %v", document)
 	}
 
-	edited := filepath.Join(root, "alpha", "SKILL.md")
-	if err := os.WriteFile(edited, []byte("---\nname: alpha\ndescription: Edited.\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
+	removed, err := removeClaudeHooks(path, "skillctl")
+	if err != nil || removed != 1 {
+		t.Fatalf("removed = %d, err = %v", removed, err)
 	}
-	reports, _ = verifyRoots([]string{root})
-	if reports[0].Drifted() != 1 {
-		t.Fatalf("drifted = %d; the hook must see drift against an install receipt",
-			reports[0].Drifted())
-	}
-}
-
-// The bug this pins was found the first time the tool was pointed at a real machine:
-// ~/.claude/skills is a symlink to ~/.agents/skills, so the conventional locations named
-// one tree four times. The hook verified it four times and reported 388 skills where there
-// are 97 — and had anything drifted, it would have printed each drifted skill four times in
-// the one report a person reads at the start of a session.
-func TestCandidateRootsCollapsesOneTreeNamedTwice(t *testing.T) {
-	real := t.TempDir()
-	writeSkill(t, real, "alpha")
-
-	link := filepath.Join(t.TempDir(), "skills")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-
-	roots := candidateRoots([]string{real, link, real})
-	if len(roots) != 1 {
-		t.Fatalf("roots = %v; one directory under several names is one tree", roots)
+	raw, _ = os.ReadFile(path)
+	if strings.Contains(string(raw), "skillctl") {
+		t.Fatalf("uninstall must leave nothing behind:\n%s", raw)
 	}
 }

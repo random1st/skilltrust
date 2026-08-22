@@ -233,8 +233,10 @@ func runCatalogPublish(args []string) int {
 	// Republishing must not drop revocations or reuse a sequence: either would let a
 	// consumer that already saw a newer index quietly accept an older set of claims.
 	if existing, err := attest.LoadEnvelope(indexPath); err == nil {
-		previous, _, err := catalog.Verify(existing,
-			attest.NewTrustedKeys(key.Public().(ed25519.PublicKey)), nil, now)
+		// Open, not Verify: expiry is the promise this catalog makes to consumers, and
+		// holding the author to it would make a stale catalog impossible to refresh.
+		previous, _, err := catalog.Open(existing,
+			attest.NewTrustedKeys(key.Public().(ed25519.PublicKey)))
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"skillctl: refusing to replace an index this key cannot verify: %v\n", err)

@@ -30,32 +30,28 @@ const (
 	exitUsage    = 3
 )
 
-const usage = `skillctl - know what your agents are running
+const usage = `skillctl - keep your organisation's skills the ones it published
 
-Getting started:
+Following a catalog (on a machine):
   skillctl subscribe <git-url> --key <pub>
                                  follow an organisation's signed skill catalog
-  skillctl sync                  reconcile managed skills; restore any that changed
-  skillctl add <git-url>         install skills from a repository, signing each one
-  skillctl setup                 do everything once: a key, a signature per skill,
-                                 and the client hooks that check them
-  skillctl status                what is installed, what changed, what is approved
+  skillctl sync                  fetch, verify, and reconcile managed skills
+  skillctl status                what is managed here, and whether it matches
+  skillctl hook <subcommand>     run or install the session-start reconciler
 
-Everything else:
-  skillctl lint [flags] [path]   inventory a tree of skills and report risk indicators
-  skillctl digest [flags] [path] compute the canonical digest of a skill directory
-  skillctl lock [flags] [path]   pin every skill by digest into skills.lock
-  skillctl verify [flags] [path] report drift against skills.lock
-  skillctl hook <subcommand>     run or install the session-start drift check
-  skillctl attest <subcommand>   sign and verify approvals over a skill's digest
-  skillctl catalog <subcommand>  manage the signed revocation catalog
-  skillctl sync [flags] [path]   reconcile installed skills against revocations
-  skillctl bundle [flags] <dir>  write a skill's canonical archive for distribution
-  skillctl install [flags] <b>   verify a bundle and install it, writing a receipt
-  skillctl receipts [path]       list what was installed and on whose approval
-  skillctl init                  create only the signing key, without the rest
+Publishing a catalog (in a repository of skills):
+  skillctl init                  create the signing key this machine publishes with
+  skillctl catalog publish       sign the index of skills the repository publishes
+  skillctl catalog revoke        revoke digests in that index
+  skillctl catalog show          verify an index and print it
+
+Looking at skills:
+  skillctl lint [path]           inventory a tree and report risk indicators
+  skillctl digest <dir>          the canonical digest of a skill directory
+  skillctl attest <subcommand>   sign and verify a statement about a digest
   skillctl version               print version information
 
+Skills no catalog claims are never touched or reported on.
 Run "skillctl <command> -h" for per-command flags.
 `
 
@@ -68,20 +64,12 @@ func main() {
 	switch os.Args[1] {
 	case "subscribe":
 		os.Exit(runSubscribe(os.Args[2:]))
-	case "add", "update":
-		os.Exit(runAdd(os.Args[2:]))
-	case "setup":
-		os.Exit(runSetup(os.Args[2:]))
 	case "init":
 		os.Exit(runInit(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
 	case "digest":
 		os.Exit(runDigest(os.Args[2:]))
-	case "lock":
-		os.Exit(runLock(os.Args[2:]))
-	case "verify":
-		os.Exit(runVerify(os.Args[2:]))
 	case "hook":
 		os.Exit(runHook(os.Args[2:]))
 	case "attest":
@@ -90,12 +78,6 @@ func main() {
 		os.Exit(runCatalog(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
-	case "bundle":
-		os.Exit(runBundle(os.Args[2:]))
-	case "install":
-		os.Exit(runInstall(os.Args[2:]))
-	case "receipts":
-		os.Exit(runReceipts(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
 	case "version", "--version", "-v":

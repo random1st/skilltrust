@@ -1,219 +1,165 @@
 # SkillTrust
 
-**Prove that the bytes your agent loads are the bytes someone approved — and notice when
-they stop being.**
+**Keep the skills your organisation publishes the ones your people actually run — and put
+them back when they change.**
 
 An [Agent Skill](https://agentskills.io/specification) is a folder whose `SKILL.md` an agent
-reads and follows, with your credentials. Skills spread by `git clone` and copy-paste, so
-three questions have no answer today: what is actually in them, has anything changed, and did
-anyone approve it.
+reads and follows, with your credentials. In a company that means prose nobody reviews,
+spreading by `git clone` and copy-paste, executing with production access.
 
-`skillctl` answers all three, offline, in under a minute.
+SkillTrust makes a set of those skills *centrally managed*: published from a signed catalog,
+verified offline on every machine, restored when a copy is edited, and revocable one skill at
+a time.
 
-## Quickstart
+Everything a catalog does not claim is left alone. Not scanned, not restored, not counted.
 
-```bash
-skillctl init      # once: a signing key, kept on this machine
-skillctl status    # what is installed, what changed, what is approved
-```
+## For the organisation
 
-```
-/Users/you/.agents/skills
-
-  skills       97
-  findings     0 high · 125 medium · 41 low
-  drift        nothing recorded — run `skillctl lock`
-  approvals    0 approved · 0 unapproved · 97 unmanaged
-  revocation   no catalog — not checked
-
-Next: skillctl lock     — pin these, so a later change is detectable
-```
-
-No paths to type. `status` covers every standard skills location — `.agents/skills` and
-`.claude/skills`, in the project and under your home — and deduplicates the ones that turn
-out to be the same directory. Keys, pinned keys and the catalog live in `~/.skilltrust`
-(override with `SKILLTRUST_HOME`), so no command needs to be told where they are.
-
-No account, no network. Everything below runs offline.
-
-## Why the lock matters for your own skills
-
-An agent that can write files can edit its own `SKILL.md` so an injected instruction survives
-the session. Nothing else notices: the edit is made by a legitimate process with legitimate
-permissions and reads as ordinary work. A pinned digest notices, and names the file:
-
-```
-  modified   bug-fix-protocol
-             pinned   sha256:3727dd404ca5…
-             on disk  sha256:bc2ffd3afa74…
-               modified     SKILL.md
-```
-
-It also catches the change that leaves content untouched — a file that became executable,
-moving a skill out of the instruction-only tier without a single character changing.
-
-Two records can say what a skill's bytes should be: a lock entry you made, and the receipt
-`install` wrote. `verify`, `sync`, `status` and the hook read both and resolve them the same
-way — the lock decides where it speaks, the receipt where it is silent — and every report
-names which one it used, because re-approving and reinstalling are different remedies. So a
-tree installed through `skillctl` is already covered before anyone runs `lock`.
-
-Wire it into your client so the check runs when it matters:
+A catalog is a git repository of skills plus a signed index of what it publishes.
 
 ```bash
-skillctl hook install            # prints the configuration
-skillctl hook install --apply    # writes it, keeping a backup
+skillctl init --as ops@acme            # once: the key this catalog signs with
+skillctl catalog publish ./acme-skills --name acme
+git commit -am "publish catalog" && git push
 ```
 
-The hook prints nothing when everything matches. Silence when clean is deliberate: a hook that
-speaks every session is one people stop reading.
+```
+catalog     acme
+sequence    5
+publishes   2 skills
+revoked     1
+valid until 2026-08-29T08:11:09Z
+```
 
-## Commands
+The index names each skill and the exact bytes it is supposed to have. Republishing carries
+revocations forward and advances the sequence, so nobody can be walked backwards onto an
+older set of claims.
 
-| Command | What it does |
-| --- | --- |
-| `lint` | Specification conformance plus risk indicators. Text, JSON or SARIF. |
-| `digest` | The canonical digest of a directory. No source-control arguments, so a second party can re-derive it. |
-| `lock` | Pin every skill under a path into `skills.lock`. |
-| `verify` | Recompute and report drift against everything recorded — the lock and install receipts. `--frozen` also fails on skills nothing recorded; use it in CI. |
-| `init` | Set up `~/.skilltrust`: a signing key and your pinned keys. Run once. |
-| `status` | One screen: installed, changed, approved, revoked. |
-| `hook` | Run or install the session-start drift check. |
-| `attest` | Sign an approval over a skill's digest, and verify one against pinned keys. |
-| `catalog` | Revoke digests in a signed, expiring snapshot. |
-| `sync` | Reconcile installed skills against the catalog and what was recorded about them; `--prune` removes revoked ones. |
-| `bundle` | Write a skill's canonical archive for distribution. |
-| `install` | Verify a bundle against an attestation and install it, writing a receipt. |
-| `receipts` | List what was installed, from where, and on whose approval. |
-
-Exit codes are part of the contract: `0` clean, `1` findings or drift, `3` error. "We checked
-and it is bad" and "we could not check" are different facts and never share a code.
-
-## Installing
+Revoking is one skill, by digest, so it follows the bytes through a rename, a move or a copy:
 
 ```bash
-skillctl bundle skills/pdf-tools     # writes pdf-tools.tar
-skillctl attest sign skills/pdf-tools # signs it as your git email
-skillctl install pdf-tools.tar        # finds pdf-tools.att.json beside it
+skillctl catalog revoke sha256:… --reason "leaks the on-call rota"
+skillctl catalog publish ./acme-skills
 ```
 
-`install` refuses without `--attestation` unless you pass `--unverified`, which the receipt
-then records permanently — the safe path should not be the quiet one. The bundle is extracted
-beside the destination and re-packaged to the digest that was verified before anything lands
-under a name a client will read, so a failed install leaves the tree untouched.
-
-Extraction is where a signature stops covering anything, so every guard applied when packing
-is applied again when unpacking: path traversal, absolute paths, symlinks, duplicate members,
-case and Unicode collisions, headers that lie about their length, and size limits.
-
-## Revocation
-
-A signature says these bytes were approved. Revocation says this digest is no longer allowed
-*now*, and a claim about the present cannot be proved once and cached forever:
+## For the machine
 
 ```bash
-skillctl catalog revoke sha256:… --key signer.key --reason "credential exfiltration"
-skillctl sync ~/.claude/skills --prune
+skillctl subscribe git@github.com:acme/skills.git --key acme.pub
+skillctl sync
+skillctl hook install --apply          # reconcile at the start of every session
 ```
 
-The catalog carries a monotonic sequence and an expiry. Replaying an older catalog to
-un-revoke something is refused even though its signature is genuine, and a stale catalog is a
-refusal rather than an answer of "nothing revoked". Revocation is keyed by digest, so it
-follows the bytes through a rename, a move, or a copy.
+The publisher's key is pinned from a file you already trust and is never learned from the
+catalog itself — a catalog that could introduce its own signing key could replace itself.
 
-## The whole picture
-
-`sync` answers four separate questions about every skill on disk, because collapsing them
-into pass/fail throws away the part that says what to do:
+When a managed skill is edited, the next session says so and puts it back:
 
 ```
-  revoked    alpha        # in the revocation catalog
-  drifted    beta         # changed since it was recorded
-  unmanaged  delta        # nobody installed it through skillctl
-  unapproved gamma        # installed with --unverified
+skillctl: your organisation's skills were reconciled
 
-4 checked · 1 revoked · 1 drifted · 1 unmanaged · 1 unapproved
+  rolled back deploy-runbook   (acme)
+              this copy had been changed here and was put back
+              what was there: ~/.skilltrust/quarantine/acme/deploy-runbook-20260822T081147Z
+
+These skills are managed centrally; local changes to them do not survive.
 ```
 
-`--managed` makes unmanaged and unapproved failures too, which is the mode for a fleet you
-control. Without `--catalog`, revocation is not checked and `sync` says so rather than
-letting "no catalog configured" read as "nothing revoked".
+The replaced copy is kept. Restoring without it would destroy the evidence in the one case
+that is an incident.
+
+`skillctl status` answers the same question without changing anything.
+
+## What is deliberate
+
+**Only managed skills.** The catalog decides the set, under a signature; a machine never
+decides for itself. Both directions of getting this wrong end the product — silence about a
+managed skill hides the compromise this exists to catch, and noise about someone's personal
+skill gets the tool uninstalled by lunchtime.
+
+**Inside that boundary it restores.** That is a stronger claim than the detection this
+project otherwise limits itself to, and it is warranted only there: the organisation owns
+those bytes, published them and signed them, so putting them back returns the machine to the
+state its owner declared.
+
+**The session hook does not touch the network.** A session must not wait on a fetch to a
+server behind a VPN that is not up yet. It reconciles against the catalog already on disk,
+which still catches the case that matters most and still enforces every revocation the
+machine already knows. Refreshing is `skillctl sync`.
+
+**Silence when nothing changed.** A hook that speaks every session is one people stop
+reading, and this one has to be read on the day it matters.
+
+**"Could not check" is never "nothing changed".** An expired or unverifiable catalog is
+reported loudly, and exit `3` never shares a code with exit `0`.
+
+**Bytes the index does not name are refused.** The catalog is signed; the repository is not.
+Installing whatever is in the checkout because the URL was right is the substitution the
+signature exists to prevent.
 
 ## What this does not claim
 
-**A clean report is not a safety verdict.** `lint` reports indicators for a human to read. No
-static check can certify prose that an agent will follow.
+**It is not enforcement on a laptop.** Anything able to edit a skill can edit the hook that
+checks it, and the client documents that a hook which times out does not block. Real
+enforcement needs a boundary the developer does not own — CI, or OS/MDM-managed
+configuration. This tells you what happened and undoes it; it does not prevent it.
 
-**The hook is detection, not enforcement.** Anything able to edit a skill can edit the hook
-that checks it. Real enforcement needs a boundary the developer does not own — CI, or
-OS/MDM-managed configuration. On a laptop this tells you what happened; it does not prevent it.
+**`lint` is not a safety verdict.** It reports indicators for a human. No static check can
+certify prose an agent will follow.
 
-**CI is where the check binds.** An ephemeral runner is the one environment where the author of
-the change under review has no privileges. See `.github/workflows/skills-check.yml`.
+## Commands
+
+| Command | Side | What it does |
+| --- | --- | --- |
+| `subscribe` | machine | Follow a catalog, pinning the publisher's key. |
+| `sync` | machine | Fetch, verify, reconcile. Restores and removes. |
+| `status` | machine | What is managed here and whether it matches. |
+| `hook` | machine | Run or install the session-start reconciler. |
+| `init` | publisher | Create the signing key. |
+| `catalog publish` | publisher | Sign the index of what a repository publishes. |
+| `catalog revoke` | publisher | Revoke digests in that index. |
+| `catalog show` | either | Verify an index and print it. |
+| `lint` | either | Inventory a tree and report risk indicators. |
+| `digest` | either | The canonical digest of a skill directory. |
+| `attest` | either | Sign and verify a statement about a digest. |
+
+## How identity is computed
+
+A skill's identity is the SHA-256 of a canonical PAX tar of its folder: paths sorted, times
+and ownership zeroed, modes normalized, NFC paths, symlinks refused, case-fold collisions
+refused. One implementation, in Go — a second one in another language is where
+reproducibility dies silently.
+
+One path inside a skill is excluded: `ATTESTATION.dsse.json` at the root, so a signature can
+travel inside the folder without being part of what it signs. Only that exact name, only at
+the root, only as a regular file; anything else there is refused.
+
+Windows has no executable bit, and the bit is part of the identity on purpose, so a skill
+containing executables does not produce the same digest there. That is pinned by a test
+rather than a footnote.
 
 ## Verifying the tool itself
-
-Builds are reproducible: `-trimpath`, a pinned toolchain, a commit-derived timestamp.
 
 ```bash
 cd client && make reproducible    # two independent builds, compared
 ```
 
 Rebuild a release from its tag and compare digests rather than taking our word for it. A
-verifier you cannot rebuild is a verifier you have to trust, which is the thing this exists to
-avoid. Releases are checksummed, SBOM'd and cosign-signed; the verification command ships in
-each release's notes.
-
-macOS builds are signed and notarized from the maintainer's machine, not from CI. Putting the
-Developer ID key into a CI secret would place the key that signs every release wherever the
-runner lives — for this product in particular, that is the weakest link available.
-
-## Licence
-
-Proprietary; see [LICENSE.txt](LICENSE.txt). The model is deliberately undecided: a licence
-can be widened later, but source released under an open one cannot be withdrawn from anyone
-who already has it.
+verifier you cannot rebuild is a verifier you have to trust, which is the thing this exists
+to avoid. macOS builds are signed and notarized from the maintainer's machine, not from CI:
+putting the Developer ID key into a CI secret would place the key that signs every release
+wherever the runner lives.
 
 ## Status
 
-Working today, tested on Linux, macOS and Windows: `lint`, `digest`, `lock`, `verify`, `hook`, `attest`, `catalog`, `sync`.
-Signing is ed25519 with a locally held key; keyless Sigstore belongs behind the same interface
-later, as the low-friction path for public skills.
+Working: catalog publishing and signing, revocation by digest, subscription with a pinned
+key, offline verification, reconciliation with rollback and quarantine, the session hook,
+`lint`, `digest`.
 
-Not built yet: distribution. There is no registry, no hosted notary and no way to fetch a
-catalog other than putting the file where the client can read it. The Python tree under
-`src/skilltrust/` is the control plane those will be built from — EKU-separated certificate
-profiles, a fail-closed admission decision, SLSA provenance, Git review adapters bound to an
-exact repository and head SHA — but none of it is wired to the client yet.
+Not built: any distribution of catalogs other than a git repository the machine can reach; a
+managed-fleet view of which machines are on which sequence; multiple signatures per catalog
+(author plus reviewer).
 
-Two known limitations, both pinned by tests rather than footnotes. Windows has no executable
-bit, so a skill containing executables does not produce the same digest there as on POSIX —
-the bit is part of the identity on purpose, and a platform that cannot store it cannot
-reproduce the digest. And Windows file modes are synthesized from the read-only attribute
-rather than reflecting the ACL, so the owner-only check on a signing key does not run there;
-protecting the key is the ACL's job and this tool does not inspect ACLs.
+## Licence
 
-## Layout
-
-```
-client/          skillctl — the Go client. Single static binary, two dependencies.
-src/skilltrust/  control plane: certificates, admission, provenance, storage (Python)
-schemas/         JSON Schemas for the wire contracts
-docs/            threat model, security specification, trust-model ADR
-profiles/        example trust policies
-```
-
-The canonical archive format has exactly one implementation, in Go. The Python one is retired
-and refuses to run without an explicit opt-in: the two disagree in ways that stay invisible
-until a signature fails to verify in production.
-
-## Development
-
-```bash
-cd client && make check                    # gofmt, vet, race tests, coverage
-make setup && make check                   # the Python control plane
-uv run skilltrust-admin --help             # control-plane CLI
-```
-
-See [the trust model](docs/architecture/0001-trust-model.md) and
-[the security specification](docs/security-specification.md) before deploying anything.
+Proprietary; see [LICENSE.txt](LICENSE.txt).

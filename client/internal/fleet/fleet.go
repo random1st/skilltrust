@@ -277,10 +277,26 @@ func quarantine(directory string, options Options, name, catalogName string) (st
 			"without keeping what was there", directory)
 	}
 	stamp := options.Now.Format("20060102T150405Z")
-	target := filepath.Join(options.QuarantineRoot, catalogName, name+"-"+stamp)
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+	base := filepath.Join(options.QuarantineRoot, catalogName, name+"-"+stamp)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		return "", err
 	}
+
+	// The stamp is only second-granular, so two rollbacks of the same skill within one
+	// second collide. Never overwrite: the earlier directory is the earlier evidence, and a
+	// quarantine that can clobber itself is worth less than no quarantine, because it looks
+	// like it kept something. Suffix instead, and give up rather than guess after a while.
+	target := base
+	for attempt := 1; ; attempt++ {
+		if _, err := os.Lstat(target); os.IsNotExist(err) {
+			break
+		}
+		if attempt > 100 {
+			return "", fmt.Errorf("cannot find an unused quarantine name beside %s", base)
+		}
+		target = fmt.Sprintf("%s-%d", base, attempt)
+	}
+
 	if err := os.Rename(directory, target); err != nil {
 		return "", err
 	}

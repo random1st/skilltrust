@@ -4,183 +4,147 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/archive"
 	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/catalog"
-	"github.com/random1st/skilltrust/client/internal/lint"
-	"github.com/random1st/skilltrust/client/internal/lockfile"
-	"github.com/random1st/skilltrust/client/internal/receipt"
+	"github.com/random1st/skilltrust/client/internal/fleet"
+	"github.com/random1st/skilltrust/client/internal/source"
 )
 
-// runStatus answers "what is my situation" in one screen.
+// runStatus answers "what is managed on this machine, by whom, and is it as published".
 //
-// Everything here can be had from lint, verify, sync and receipts, but only by knowing
-// which four commands to run and how to hold their answers together. The complexity of
-// having four separate checks belongs under the hood; a person opening a terminal wants
-// one number per question.
+// It deliberately says nothing about skills no catalog claims. Reporting them would put a
+// number on the screen that the tool has no business acting on, and every session would
+// invite the reader to do something about skills that are theirs to write however they like.
 func runStatus(args []string) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl status [flags] [path]\n\n"+
-			"One screen: what is installed, what changed, what is approved, what is revoked.\n\n"+
-			"Exit codes: %d clean, %d something needs attention, %d error.\n\nFlags:\n",
+		fmt.Fprintf(flags.Output(), "Usage: skillctl status [flags]\n\n"+
+			"What your organisation manages on this machine, and whether it matches.\n"+
+			"Offline: it reads the catalogs already fetched.\n\n"+
+			"Exit codes: %d as published, %d something differs, %d error.\n\nFlags:\n",
 			exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
+
+	into := flags.String("into", "", "skills directory to inspect (default ~/.agents/skills)")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
-	roots, err := resolveSkillRoots(flags.Arg(0))
+	subscriptions, err := loadSubscriptions()
+	if err != nil {
+		return fail(err)
+	}
+	installRoot, err := installRoot(*into)
 	if err != nil {
 		return fail(err)
 	}
 
-	var snapshot *catalog.Snapshot
-	if info, err := os.Stat(defaultCatalog()); err == nil && info.Mode().IsRegular() {
-		trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
+	fmt.Printf("%s\n\n", installRoot)
+	if len(subscriptions) == 0 {
+		fmt.Printf("  catalogs     none — this machine is not centrally managed\n\n")
+		fmt.Printf("Follow one with: skillctl subscribe <git-url> --key <publisher.pub>\n")
+		return exitClean
+	}
+
+	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
+	if err != nil {
+		return fail(err)
+	}
+
+	now := time.Now().UTC()
+	differing, unusable := 0, 0
+
+	for _, subscription := range subscriptions {
+		snapshot, err := verifiedSnapshot(subscription, trusted, now)
+		if err != nil {
+			unusable++
+			fmt.Printf("  %-12s unusable — %v\n", subscription.Name, err)
+			fmt.Printf("  %-12s refresh with `skillctl sync`\n\n", "")
+			continue
+		}
+
+		state, err := fleet.LoadState(statePath(subscription.Name))
 		if err != nil {
 			return fail(err)
 		}
-		envelope, err := attest.LoadEnvelope(defaultCatalog())
+		// A dry run is how status stays a question rather than an action: it reports what
+		// sync would do without doing it, so reading the state never changes it.
+		changes, err := fleet.Reconcile(snapshot, state, fleet.Options{
+			SourceRoot:     source.Path(catalogRoot(), subscription.Name),
+			InstallRoot:    installRoot,
+			QuarantineRoot: quarantineRoot(),
+			DryRun:         true,
+			Now:            now,
+		})
 		if err != nil {
 			return fail(err)
 		}
-		state, err := catalog.LoadState(catalog.DefaultStatePath(defaultCatalog()))
-		if err != nil {
-			return fail(err)
-		}
-		snapshot, _, err = catalog.Verify(envelope, trusted, state, time.Now().UTC())
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"skillctl: the catalog is unusable, so revocation is unknown: %v\n", err)
-			return exitUsage
-		}
-	}
 
-	var (
-		total, high, medium, low      int
-		approved, unapproved, held    int
-		revoked, pinned, driftedCount int
-		notarized                     int
-		anyPinned                     bool
-	)
-
-	for _, root := range roots {
-		report := lint.Run(root, lint.Options{})
-		counts := report.Counts()
-		total += len(report.Skills)
-		high += counts[lint.SeverityHigh]
-		medium += counts[lint.SeverityMedium]
-		low += counts[lint.SeverityLow]
-
-		// Every record is optional here — signed approvals, a lock, install receipts — and
-		// verify reads all three, so status asks it once rather than keeping a second
-		// opinion of its own about what "recorded" means.
-		records, notes, err := loadRecords(root)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"skillctl: a record could not be read, so drift is unknown: %v\n", err)
-			return exitUsage
-		}
-
-		drift := lockfile.Verify(root, records, lint.Options{})
-		if unchecked := append(notes, drift.Unchecked...); len(unchecked) > 0 {
-			for _, note := range unchecked {
-				fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
-			}
-			return exitUsage
-		}
-		driftedCount += drift.Drifted()
-		for _, result := range drift.Results {
-			if result.PinnedBy == lockfile.PinnedByNotarization {
-				notarized++
+		pending := 0
+		for _, change := range changes {
+			if change.Needed() {
+				pending++
 			}
 		}
-		// Count what was recorded, not everything verify looked at: a skill present but
-		// never recorded appears in the results and is precisely the opposite of pinned.
-		recorded := len(drift.Results) - drift.Unpinned()
-		pinned += recorded
-		anyPinned = anyPinned || recorded > 0
+		differing += pending
 
-		receipts, err := receipt.LoadAll(root)
-		if err != nil {
-			return fail(err)
+		fmt.Printf("  %-12s %d skill%s · catalog %d · valid until %s\n",
+			subscription.Name, len(snapshot.Skills), plural(len(snapshot.Skills), "", "s"),
+			snapshot.Sequence, snapshot.ValidUntil.Format("2006-01-02"))
+		fmt.Printf("  %-12s %s\n", "", subscription.Repository)
+		fmt.Printf("  %-12s signed by %s\n", "", attest.Fingerprint(subscription.KeyID))
+		if len(snapshot.Revoked) > 0 {
+			fmt.Printf("  %-12s %d revoked digest%s\n", "",
+				len(snapshot.Revoked), plural(len(snapshot.Revoked), "", "s"))
 		}
-		held += len(receipts)
-		for _, record := range receipts {
-			if record.Approval == nil {
-				unapproved++
-			} else {
-				approved++
+
+		if pending == 0 {
+			fmt.Printf("  %-12s as published\n\n", "")
+			continue
+		}
+		fmt.Println()
+		for _, change := range changes {
+			if !change.Needed() {
+				continue
 			}
+			fmt.Printf("    %-11s %s\n", change.Action, change.Name)
 		}
-
-		if snapshot != nil {
-			directories, _ := lint.Discover(root, lint.Options{})
-			for _, directory := range directories {
-				built, err := archive.Build(directory, archive.Limits{})
-				if err != nil {
-					continue
-				}
-				if _, hit := snapshot.IsRevoked(built.Digest); hit {
-					revoked++
-				}
-			}
-		}
+		fmt.Println()
 	}
 
-	unmanaged := total - held
-
-	for _, root := range roots {
-		fmt.Printf("%s\n", root)
+	if unusable > 0 {
+		fmt.Printf("Next: skillctl sync   — %d catalog%s could not be read\n",
+			unusable, plural(unusable, "", "s"))
+		return exitUsage
 	}
-	fmt.Println()
-	fmt.Printf("  skills       %d\n", total)
-	fmt.Printf("  findings     %d high · %d medium · %d low\n", high, medium, low)
-
-	switch {
-	case !anyPinned:
-		fmt.Printf("  drift        nothing recorded — run `skillctl lock`\n")
-	case driftedCount == 0:
-		fmt.Printf("  drift        none · %d recorded\n", pinned)
-	default:
-		fmt.Printf("  drift        %d changed since they were recorded\n", driftedCount)
-	}
-
-	// Notarization is reported apart from install approvals because it answers a different
-	// question: not "did this arrive with an approval" but "is there a signature over the
-	// bytes that are here now".
-	if notarized == 0 {
-		fmt.Printf("  notarized    none — run `skillctl setup` to sign these\n")
-	} else {
-		fmt.Printf("  notarized    %d of %d signed\n", notarized, total)
-	}
-	fmt.Printf("  installs     %d approved · %d unapproved · %d unmanaged\n",
-		approved, unapproved, unmanaged)
-
-	if snapshot == nil {
-		fmt.Printf("  revocation   no catalog — not checked\n")
-	} else {
-		fmt.Printf("  revocation   %d revoked · catalog %d valid until %s\n",
-			revoked, snapshot.Sequence, snapshot.ValidUntil.Format("2006-01-02"))
-	}
-
-	fmt.Println()
-	problems := high + revoked + driftedCount
-
-	switch {
-	case problems > 0:
-		fmt.Println("Next: skillctl verify   (what changed)   ·   skillctl lint   (what is in them)")
+	if differing > 0 {
+		fmt.Printf("Next: skillctl sync   — %d managed skill%s differ from what is published\n",
+			differing, plural(differing, "", "s"))
 		return exitFindings
-	case !anyPinned:
-		fmt.Println("Next: skillctl lock     — pin these, so a later change is detectable")
-		return exitClean
-	default:
-		fmt.Println("Nothing needs attention.")
-		return exitClean
 	}
+	fmt.Printf("Everything your organisation manages is as published.\n")
+	return exitClean
+}
+
+// installRoot is the directory the agent reads and the only one this tool writes into.
+func installRoot(explicit string) (string, error) {
+	if explicit != "" {
+		return filepath.Abs(explicit)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".agents", "skills"), nil
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
 }

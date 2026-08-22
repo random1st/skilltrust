@@ -199,3 +199,58 @@ func TestUnreadableStateIsAnErrorNotAFreshStart(t *testing.T) {
 		t.Fatal("a corrupt state file must be an error")
 	}
 }
+
+// A catalog must stay republishable after it expires. Enforcing freshness against its own
+// author closes the publishing path at the moment it is most needed, and the only way out
+// would be deleting the index — which would take every revocation in it along too.
+func TestAnExpiredCatalogCanStillBeRepublished(t *testing.T) {
+	public, private, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := attest.NewTrustedKeys(public)
+
+	issued := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	envelope, err := Sign(Snapshot{
+		Version: SnapshotVersion, Name: "acme", Sequence: 7,
+		IssuedAt: issued, ValidUntil: issued.Add(24 * time.Hour),
+		Revoked: []Entry{{Digest: "sha256:deadbeef", Reason: "leaked"}},
+	}, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := Verify(envelope, trusted, nil, time.Now().UTC()); !errors.Is(err, ErrExpired) {
+		t.Fatalf("a consumer must still refuse it: %v", err)
+	}
+
+	snapshot, _, err := Open(envelope, trusted)
+	if err != nil {
+		t.Fatalf("the author must be able to read it: %v", err)
+	}
+	if snapshot.Sequence != 7 {
+		t.Fatalf("sequence = %d; republishing must advance from what was there", snapshot.Sequence)
+	}
+	if len(snapshot.Revoked) != 1 {
+		t.Fatal("republishing must carry revocations forward, not silently drop them")
+	}
+}
+
+// Open drops the freshness check, never the signature check.
+func TestOpenStillRefusesAnUntrustedSigner(t *testing.T) {
+	_, private, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, _, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := Sign(Snapshot{Version: SnapshotVersion, Sequence: 1}, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(envelope, attest.NewTrustedKeys(stranger)); err == nil {
+		t.Fatal("Open must still require a trusted signature")
+	}
+}

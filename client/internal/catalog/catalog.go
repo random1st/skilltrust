@@ -240,3 +240,29 @@ func writeFile(path string, body []byte) error {
 	}
 	return os.Rename(name, path)
 }
+
+// Open verifies a snapshot's signature and schema without checking freshness or sequence.
+//
+// It exists for the publisher, and only for the publisher. Expiry is a promise made to
+// consumers — after this moment, stop believing me — and enforcing it against the author
+// reading their own previous index makes a catalog unrepublishable exactly once it has gone
+// stale, which is the moment republishing is most needed. A week of inattention would
+// otherwise close the publishing path until somebody deleted the file, and deleting it would
+// take every revocation in it along too.
+//
+// Consumers must keep using Verify. The difference between the two is the entire freshness
+// guarantee, so a caller reaching for Open is asserting it is the signer.
+func Open(envelope *attest.Envelope, trusted *attest.TrustedKeys) (*Snapshot, string, error) {
+	payload, keyID, err := attest.VerifyPayload(envelope, PayloadType, trusted)
+	if err != nil {
+		return nil, "", err
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrBadSnapshot, err)
+	}
+	if snapshot.Version != SnapshotVersion {
+		return nil, "", fmt.Errorf("%w: version %d", ErrUnknownVersion, snapshot.Version)
+	}
+	return &snapshot, keyID, nil
+}
