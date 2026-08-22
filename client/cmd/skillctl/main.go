@@ -33,6 +33,9 @@ const (
 const usage = `skillctl - know what your agents are running
 
 Getting started:
+  skillctl subscribe <git-url> --key <pub>
+                                 follow an organisation's signed skill catalog
+  skillctl sync                  reconcile managed skills; restore any that changed
   skillctl add <git-url>         install skills from a repository, signing each one
   skillctl setup                 do everything once: a key, a signature per skill,
                                  and the client hooks that check them
@@ -63,6 +66,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "subscribe":
+		os.Exit(runSubscribe(os.Args[2:]))
 	case "add", "update":
 		os.Exit(runAdd(os.Args[2:]))
 	case "setup":

@@ -222,12 +222,20 @@ func WritePrivateKey(path string, key ed25519.PrivateKey) error {
 
 // WritePublicKey stores the verifying half, which is safe to publish.
 func WritePublicKey(path string, key ed25519.PublicKey) error {
-	encoded, err := x509.MarshalPKIXPublicKey(key)
+	block, err := encodePublicKey(key)
 	if err != nil {
 		return err
 	}
-	block := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: encoded})
 	return writeFile(path, block, 0o644)
+}
+
+// encodePublicKey renders a key as PEM, the one form this project stores keys in.
+func encodePublicKey(key ed25519.PublicKey) ([]byte, error) {
+	encoded, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: encoded}), nil
 }
 
 // LoadPrivateKey reads a signing key and refuses one the whole machine can read.
@@ -426,4 +434,46 @@ func Fingerprint(keyID string) string {
 		return trimmed[:16]
 	}
 	return trimmed
+}
+
+// PinKey adds one key to the pinned set under a label, preserving every key already there.
+//
+// It merges at the file level rather than through TrustedKeys because loading re-keys the
+// set by key ID and discards the labels. Round-tripping through that would silently rename
+// every previously pinned publisher to a hex string the first time a second one was added —
+// the kind of loss that is invisible until somebody has to work out whose key is whose.
+func PinKey(path, label string, public ed25519.PublicKey) error {
+	document := trustedKeysFile{Version: 1, Keys: map[string]string{}}
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return fmt.Errorf("%s is not a readable trusted-key file: %w", path, err)
+		}
+		if document.Version != 1 {
+			return fmt.Errorf("%s uses trusted-key format version %d, this build understands 1",
+				path, document.Version)
+		}
+		if document.Keys == nil {
+			document.Keys = map[string]string{}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	encoded, err := encodePublicKey(public)
+	if err != nil {
+		return err
+	}
+	// A label already in use must not be repointed silently: that is how a publisher key is
+	// replaced by an attacker's under a name everyone still trusts.
+	if existing, taken := document.Keys[label]; taken && existing != string(encoded) {
+		return fmt.Errorf("%q already pins a different key in %s; remove it deliberately "+
+			"before pinning another", label, path)
+	}
+	document.Keys[label] = string(encoded)
+
+	body, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFile(path, append(body, '\n'), 0o644)
 }

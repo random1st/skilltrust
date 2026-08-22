@@ -1,5 +1,5 @@
-// Package catalog carries signed revocation state: which digests may no longer be used,
-// and until when that answer is fresh.
+// Package catalog carries an organisation's signed statement about the skills it manages:
+// which ones it publishes, at which exact bytes, and which digests may no longer be used.
 //
 // A signature is a statement about the past — these bytes were approved. Revocation is a
 // statement about the present — this digest is no longer allowed *now* — and a claim about
@@ -34,6 +34,22 @@ const PayloadType = "application/vnd.skilltrust.catalog.v1+json"
 // SnapshotVersion is the payload schema version.
 const SnapshotVersion = 1
 
+// Managed is one skill the catalog publishes: a name and the exact bytes that name is
+// supposed to have right now.
+//
+// This is what makes central management possible without the client guessing. A machine does
+// not decide which skills are managed — the catalog says so, under a signature — and every
+// skill outside this list is the user's own business and is never touched or reported on.
+// Getting that boundary wrong in either direction is the failure that matters: silence about
+// a managed skill hides a compromise, and noise about an unmanaged one gets the tool removed.
+type Managed struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	// Path is where the skill lives inside the catalog repository, when it is not the
+	// conventional skills/<name>.
+	Path string `json:"path,omitempty"`
+}
+
 // Entry records one revoked artifact. Revocation is keyed by digest so it survives the
 // skill being renamed, moved, or copied somewhere else.
 type Entry struct {
@@ -50,7 +66,23 @@ type Snapshot struct {
 	Sequence   int64     `json:"sequence"`
 	IssuedAt   time.Time `json:"issued_at"`
 	ValidUntil time.Time `json:"valid_until"`
-	Revoked    []Entry   `json:"revoked"`
+	// Name identifies the catalog, so a machine subscribed to several can say which one a
+	// skill belongs to and which key is allowed to speak for it.
+	Name string `json:"name,omitempty"`
+	// Skills is what this catalog publishes. Absent means the catalog only revokes, which
+	// is the shape every catalog written before central management had.
+	Skills  []Managed `json:"skills,omitempty"`
+	Revoked []Entry   `json:"revoked"`
+}
+
+// Publishes returns the managed entry for a skill name.
+func (s *Snapshot) Publishes(name string) (Managed, bool) {
+	for _, entry := range s.Skills {
+		if entry.Name == name {
+			return entry, true
+		}
+	}
+	return Managed{}, false
 }
 
 var (

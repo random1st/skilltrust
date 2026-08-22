@@ -165,3 +165,13 @@ func gitIdentity() string {
 	}
 	return strings.TrimSpace(string(output))
 }
+
+// relativeOr renders a path against a root when it is inside it, so reports name the skill
+// rather than repeating a long absolute prefix on every line.
+func relativeOr(path, root string) string {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return path
+	}
+	return relative
+}
