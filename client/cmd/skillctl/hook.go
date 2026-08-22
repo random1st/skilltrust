@@ -50,55 +50,6 @@ func runHook(args []string) int {
 	}
 }
 
-func runHookSessionStart(args []string) int {
-	flags := flag.NewFlagSet("hook session-start", flag.ContinueOnError)
-	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(),
-			"Usage: skillctl hook session-start [flags]\n\n"+
-				"Verifies every skills directory that has a %s next to it and prints a\n"+
-				"report only when something drifted. Silence when clean is deliberate: a\n"+
-				"hook that prints on every session spends context it did not earn.\n\n"+
-				"Exit codes: %d always, unless --strict is set and drift was found.\n\nFlags:\n",
-			lockfile.FileName, exitClean)
-		flags.PrintDefaults()
-	}
-
-	var roots repeatedFlag
-	flags.Var(&roots, "path", "skills directory to check (repeatable; defaults to the standard locations)")
-	strict := flags.Bool("strict", false,
-		"exit non-zero on drift; most clients treat that as a blocked session")
-	verbose := flags.Bool("verbose", false, "also report when everything matches")
-
-	if err := parseArgs(flags, args); err != nil {
-		return exitUsage
-	}
-
-	reports, broken := verifyRoots(candidateRoots(roots))
-	drifted := 0
-	for _, report := range reports {
-		drifted += report.Drifted()
-	}
-
-	if drifted == 0 && len(broken) == 0 {
-		if *verbose {
-			total := 0
-			for _, report := range reports {
-				// Skills nobody recorded are not what this checked, so counting them here
-				// would inflate the one number the verbose line exists to report.
-				total += len(report.Results) - report.Unpinned()
-			}
-			fmt.Printf("skillctl: %d recorded skills unchanged\n", total)
-		}
-		return exitClean
-	}
-
-	writeHookReport(os.Stdout, reports, broken)
-	if *strict {
-		return exitFindings
-	}
-	return exitClean
-}
-
 // candidateRoots resolves the directories to check. A directory with nothing recorded is
 // skipped in silence: not approved means not this tool's business, and warning about it
 // every session would train the reader to ignore the hook.
@@ -274,12 +225,12 @@ func clientHooks(executable string, strict bool) []hookSpec {
 	}
 	return []hookSpec{
 		{
-			Event: "PreToolUse", Matcher: "Skill", Command: guard,
-			Why: "checks a skill's bytes against its signed approval before its instructions load",
+			Event: "SessionStart", Matcher: "", Command: executable + " hook session-start",
+			Why: "restores any centrally managed skill changed here, and says so",
 		},
 		{
-			Event: "SessionStart", Matcher: "", Command: executable + " hook session-start",
-			Why: "reports anything that changed since it was approved, once per session",
+			Event: "PreToolUse", Matcher: "Skill", Command: guard,
+			Why: "checks a managed skill against its catalog before its instructions load",
 		},
 	}
 }

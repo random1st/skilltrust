@@ -190,46 +190,67 @@ func runSync(args []string) int {
 	return reportSync(all, installRoot, *dryRun)
 }
 
+// fetchCatalog refreshes one catalog checkout from its repository.
+func fetchCatalog(subscription Subscription) (source.Source, error) {
+	return source.Fetch(catalogRoot(), subscription.Name,
+		subscription.Repository, subscription.Ref)
+}
+
+// verifiedSnapshot loads the index from a catalog checkout and returns it only if every
+// check passes: signature, payload type, schema version, freshness, rollback resistance, and
+// that the signer is the key pinned for this catalog specifically.
+//
+// The last one is easy to leave out and expensive to leave out. Verifying against the whole
+// trusted set would let any publisher this machine trusts sign an index claiming another
+// organisation's skill names, and the machine would install their bytes under those names.
+func verifiedSnapshot(
+	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
+) (*catalog.Snapshot, error) {
+	checkout := source.Path(catalogRoot(), subscription.Name)
+	envelope, err := attest.LoadEnvelope(filepath.Join(checkout, CatalogFileName))
+	if err != nil {
+		return nil, fmt.Errorf("no usable %s: %w", CatalogFileName, err)
+	}
+
+	sequenceState, err := catalog.LoadState(statePath(subscription.Name + ".sequence"))
+	if err != nil {
+		return nil, err
+	}
+	snapshot, keyID, err := catalog.Verify(envelope, trusted, sequenceState, now)
+	if err != nil {
+		return nil, err
+	}
+	if keyID != subscription.KeyID {
+		return nil, fmt.Errorf("signed by %s but subscribed with %s",
+			attest.Fingerprint(keyID), attest.Fingerprint(subscription.KeyID))
+	}
+	if err := sequenceState.Save(
+		statePath(subscription.Name+".sequence"), snapshot.Sequence, now); err != nil {
+		return nil, err
+	}
+	if snapshot.Name == "" {
+		snapshot.Name = subscription.Name
+	}
+	return snapshot, nil
+}
+
 func syncOne(
 	subscription Subscription, trusted *attest.TrustedKeys, installRoot string,
 	now time.Time, dryRun, offline bool,
 ) ([]fleet.Change, int) {
 	if !offline {
-		if _, err := source.Fetch(catalogRoot(), subscription.Name,
-			subscription.Repository, subscription.Ref); err != nil {
-			fmt.Fprintf(os.Stderr, "skillctl: cannot reach catalog %s: %v\n", subscription.Name, err)
+		if _, err := fetchCatalog(subscription); err != nil {
+			fmt.Fprintf(os.Stderr, "skillctl: cannot reach catalog %s: %v\n",
+				subscription.Name, err)
 			return nil, exitUsage
 		}
 	}
 
-	checkout := source.Path(catalogRoot(), subscription.Name)
-	envelope, err := attest.LoadEnvelope(filepath.Join(checkout, CatalogFileName))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "skillctl: catalog %s has no usable %s: %v\n",
-			subscription.Name, CatalogFileName, err)
-		return nil, exitUsage
-	}
-
-	sequenceState, err := catalog.LoadState(statePath(subscription.Name + ".sequence"))
-	if err != nil {
-		return nil, fail(err)
-	}
-	snapshot, keyID, err := catalog.Verify(envelope, trusted, sequenceState, now)
+	snapshot, err := verifiedSnapshot(subscription, trusted, now)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: catalog %s did not verify, so nothing was "+
 			"changed: %v\n", subscription.Name, err)
 		return nil, exitUsage
-	}
-	// The catalog must be signed by the key pinned for *this* catalog. Any trusted key
-	// would otherwise let one publisher speak for another's skills.
-	if keyID != subscription.KeyID {
-		fmt.Fprintf(os.Stderr, "skillctl: catalog %s is signed by %s but was subscribed "+
-			"with %s; refusing\n", subscription.Name,
-			attest.Fingerprint(keyID), attest.Fingerprint(subscription.KeyID))
-		return nil, exitUsage
-	}
-	if snapshot.Name == "" {
-		snapshot.Name = subscription.Name
 	}
 
 	state, err := fleet.LoadState(statePath(subscription.Name))
@@ -238,7 +259,7 @@ func syncOne(
 	}
 
 	changes, err := fleet.Reconcile(snapshot, state, fleet.Options{
-		SourceRoot:     checkout,
+		SourceRoot:     source.Path(catalogRoot(), subscription.Name),
 		InstallRoot:    installRoot,
 		QuarantineRoot: quarantineRoot(),
 		DryRun:         dryRun,
@@ -251,10 +272,6 @@ func syncOne(
 	if !dryRun {
 		state.Catalog, state.Sequence = subscription.Name, snapshot.Sequence
 		if err := state.Save(statePath(subscription.Name)); err != nil {
-			return nil, fail(err)
-		}
-		if err := sequenceState.Save(
-			statePath(subscription.Name+".sequence"), snapshot.Sequence, now); err != nil {
 			return nil, fail(err)
 		}
 	}

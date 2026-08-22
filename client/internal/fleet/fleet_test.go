@@ -255,3 +255,43 @@ func mustReconcile(t *testing.T, snapshot *catalog.Snapshot, h *harness) []Chang
 	}
 	return changes
 }
+
+// A revocation stands indefinitely, so a reconciler that reports the removal every time it
+// runs would announce the same fact at every session for as long as the revocation lasts.
+// That is how the one message which has to be read becomes the one people scroll past.
+func TestARemovalIsReportedOnceNotEverySession(t *testing.T) {
+	h := newHarness(t)
+	snapshot := h.publish(t, "alpha", "Original body.\n")
+	if _, err := Reconcile(snapshot, h.state, h.options()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Revoked = []catalog.Entry{{Digest: snapshot.Skills[0].Digest, Reason: "leaks"}}
+
+	if first := only(t, mustReconcile(t, snapshot, h)); first.Action != ActionRemoved {
+		t.Fatalf("the first run must report the removal, got %q", first.Action)
+	}
+	second := only(t, mustReconcile(t, snapshot, h))
+	if second.Action != ActionUnchanged {
+		t.Fatalf("action = %q; a removal already carried out is not news", second.Action)
+	}
+	if second.Needed() {
+		t.Fatal("the hook must stay silent about a skill that is already gone")
+	}
+}
+
+// The same for a withdrawal: once it is gone and forgotten, there is nothing to say.
+func TestAWithdrawalIsAlsoReportedOnce(t *testing.T) {
+	h := newHarness(t)
+	snapshot := h.publish(t, "alpha", "Original body.\n")
+	if _, err := Reconcile(snapshot, h.state, h.options()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot.Skills = nil
+	if first := only(t, mustReconcile(t, snapshot, h)); first.Action != ActionRemoved {
+		t.Fatalf("first = %q", first.Action)
+	}
+	if changes := mustReconcile(t, snapshot, h); len(changes) != 0 {
+		t.Fatalf("a forgotten withdrawal produces no line at all, got %+v", changes)
+	}
+}

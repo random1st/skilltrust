@@ -247,7 +247,12 @@ func remove(change Change, destination string, state *State, options Options) Ch
 		change.Was = digestOf(destination)
 	}
 	if _, err := os.Stat(destination); os.IsNotExist(err) {
+		// Already gone. Reporting a removal that happened on some previous run would make
+		// a revoked skill announce itself at every session for as long as the revocation
+		// stands, which is how the one message that has to be read becomes the one people
+		// have learned to scroll past.
 		delete(state.Applied, change.Name)
+		change.Action, change.Was = ActionUnchanged, ""
 		return change
 	}
 	if options.DryRun {
