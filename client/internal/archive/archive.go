@@ -22,6 +22,33 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// AttestationFileName is the one path inside a skill that the identity does not cover.
+//
+// A signature has to travel with the skill, because the folder is what actually moves: a
+// plugin marketplace symlinks ~/.agents/skills/<name> straight at <marketplace>/skills/<name>,
+// so a sibling file one level up does not exist from the path the agent reads; `cp -r foo/`
+// and a zip of the folder drop it for the same reason. Putting the envelope inside the folder
+// is therefore the only placement that survives how skills are really distributed — and a
+// file inside the folder cannot be part of the digest it certifies.
+//
+// The rule is deliberately the narrowest one that works. Exactly this name, exactly at the
+// skill root, and only when it is a regular file:
+//
+//   - absent: the tree is packaged exactly as before, to the same digest
+//   - present as a regular file: that single path is omitted from the archive
+//   - present as anything else — directory, symlink, FIFO: packaging is refused
+//   - present under a name that case-folds to this one but is not it: refused as a collision
+//   - the same name deeper in the tree, e.g. references/ATTESTATION.dsse.json: ordinary
+//     signed content, because only the root file is reserved
+//
+// Excluding a *directory* was rejected: that would create an unsigned subtree an attacker
+// could fill with scripts. One reserved regular file is unsigned space an attacker can only
+// overwrite, never extend, and everything they can put there is read solely as a DSSE
+// envelope whose every failure mode is a refusal. The residual risk is honest and stated:
+// an agent that executes every file it finds would reach this one, and nothing short of
+// changing the agent prevents that.
+const AttestationFileName = "ATTESTATION.dsse.json"
+
 // Limits bound an untrusted source tree. They exist so that packaging a hostile directory
 // fails loudly instead of exhausting the machine.
 type Limits struct {
@@ -173,6 +200,25 @@ func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
 			}
 			mode := info.Mode()
 
+			// The reserved attestation is resolved before anything else, and only at the
+			// root, so that a directory or a symlink wearing that name is refused rather
+			// than descended into or reported as an ordinary symlink.
+			if directory == sourceDir {
+				switch reserved, exact := matchesAttestationName(entry.Name()); {
+				case reserved && !exact:
+					return failf(KindCollision,
+						"source entry %q differs from %s only by case; the attestation name "+
+							"is reserved and a near-miss would be packaged as signed content",
+						relative, AttestationFileName)
+				case reserved && !mode.IsRegular():
+					return failf(KindEntryType,
+						"source entry %q is reserved for the attestation and must be a "+
+							"regular file, not %s", relative, describeMode(mode))
+				case reserved:
+					continue // omitted: the signature cannot be part of what it signs
+				}
+			}
+
 			switch {
 			case mode&os.ModeSymlink != 0:
 				return failf(KindEntryType,
@@ -253,6 +299,37 @@ func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
 
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	return files, nil
+}
+
+// matchesAttestationName reports whether a root-level entry name is the reserved
+// attestation, and whether it is spelled exactly.
+//
+// The case-folded near-miss is kept separate from the exact match on purpose. Omitting the
+// reserved file removes it from the member list, so a variant like Attestation.DSSE.json
+// would no longer collide with anything and would be packaged as ordinary signed content —
+// a name that reads to a human as the signature but is covered by it. Refusing is the only
+// answer that keeps "this file is the attestation" and "this file is content" from
+// depending on the filesystem's case sensitivity.
+func matchesAttestationName(name string) (reserved bool, exact bool) {
+	normalized := norm.NFC.String(name)
+	if normalized == AttestationFileName {
+		return true, true
+	}
+	if foldCase(normalized) == foldCase(AttestationFileName) {
+		return true, false
+	}
+	return false, false
+}
+
+func describeMode(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "a symlink"
+	case mode.IsDir():
+		return "a directory"
+	default:
+		return "an irregular file"
+	}
 }
 
 // sortEntries walks in a stable, locale-independent order. Output order is fixed by the

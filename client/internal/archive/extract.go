@@ -60,6 +60,16 @@ func Extract(payload []byte, destination string, limits Limits) ([]FileRecord, e
 		if err != nil {
 			return nil, err
 		}
+		// Build never emits the reserved attestation, so an archive carrying one is
+		// malformed by construction — and it is the specific malformation that would let a
+		// bundle plant its own signature slot during extraction. Refusing here keeps the
+		// envelope something a verifier reads from disk rather than something a payload
+		// can supply about itself.
+		if reserved, _ := matchesAttestationName(path); reserved {
+			return nil, failf(KindEntryType,
+				"archive member %q is the reserved attestation name; a canonical archive "+
+					"never contains it", path)
+		}
 		if err := registry.registerFile(path); err != nil {
 			return nil, err
 		}
