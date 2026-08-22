@@ -206,6 +206,24 @@ func fetchCatalog(subscription Subscription) (source.Source, error) {
 func verifiedSnapshot(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
 ) (*catalog.Snapshot, error) {
+	return readSnapshot(subscription, trusted, now, true)
+}
+
+// readSnapshotOnly verifies without recording the sequence it saw.
+//
+// The recording is what makes rollback resistance work, and it must happen exactly where a
+// catalog is being adopted. It must not happen on a path that runs before every single skill
+// invocation: that would write a file on the critical path hundreds of times a session, and
+// worse, a check that only reads would start deciding what later checks are allowed to see.
+func readSnapshotOnly(
+	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
+) (*catalog.Snapshot, error) {
+	return readSnapshot(subscription, trusted, now, false)
+}
+
+func readSnapshot(
+	subscription Subscription, trusted *attest.TrustedKeys, now time.Time, persist bool,
+) (*catalog.Snapshot, error) {
 	checkout := source.Path(catalogRoot(), subscription.Name)
 	envelope, err := attest.LoadEnvelope(filepath.Join(checkout, CatalogFileName))
 	if err != nil {
@@ -224,9 +242,11 @@ func verifiedSnapshot(
 		return nil, fmt.Errorf("signed by %s but subscribed with %s",
 			attest.Fingerprint(keyID), attest.Fingerprint(subscription.KeyID))
 	}
-	if err := sequenceState.Save(
-		statePath(subscription.Name+".sequence"), snapshot.Sequence, now); err != nil {
-		return nil, err
+	if persist {
+		if err := sequenceState.Save(
+			statePath(subscription.Name+".sequence"), snapshot.Sequence, now); err != nil {
+			return nil, err
+		}
 	}
 	if snapshot.Name == "" {
 		snapshot.Name = subscription.Name

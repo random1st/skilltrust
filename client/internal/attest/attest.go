@@ -385,6 +385,16 @@ func LoadEnvelope(path string) (*Envelope, error) {
 	return &envelope, nil
 }
 
+// DecodedPayload returns the payload bytes without checking any signature.
+//
+// It exists for the narrow case of reading a field out of an envelope in order to decide
+// whether that envelope is even relevant — never to reach a verdict. Anything that decides
+// whether bytes are trustworthy must go through Verify, which is why this is named for what
+// it does not do.
+func (e *Envelope) DecodedPayload() ([]byte, error) {
+	return base64.StdEncoding.DecodeString(e.Payload)
+}
+
 // Save writes the envelope atomically, so an interrupted write cannot leave a truncated
 // attestation that later reads as merely unparseable rather than as absent.
 func (e *Envelope) Save(path string) error {

@@ -12,6 +12,8 @@ import (
 const hookUsage = `Usage: skillctl hook <subcommand> [flags]
 
   session-start   reconcile centrally managed skills; for a SessionStart hook
+  pre-skill       restore or refuse one managed skill before it loads; for a
+                  PreToolUse hook matching the Skill tool
   install         print (or apply) the client configuration for the hook
 
 `
@@ -24,6 +26,8 @@ func runHook(args []string) int {
 	switch args[0] {
 	case "session-start":
 		return runHookSessionStart(args[1:])
+	case "pre-skill":
+		return runHookPreSkill(args[1:])
 	case "install":
 		return runHookInstall(args[1:])
 	default:

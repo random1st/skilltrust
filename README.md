@@ -74,6 +74,12 @@ These skills are managed centrally; local changes to them do not survive.
 The replaced copy is kept. Restoring without it would destroy the evidence in the one case
 that is an incident.
 
+A skill edited *after* that hook ran is caught in the moment before it loads: the PreToolUse
+hook restores it and lets the call through, so the agent reads the published bytes rather
+than the edited ones. A revoked skill, or one whose catalog this machine cannot currently
+verify, is refused instead — there are no correct bytes to hand over. Skills no catalog
+claims are allowed without a word.
+
 `skillctl status` answers the same question without changing anything.
 
 ## What is deliberate
@@ -120,7 +126,7 @@ certify prose an agent will follow.
 | `subscribe` | machine | Follow a catalog, pinning the publisher's key. |
 | `sync` | machine | Fetch, verify, reconcile. Restores and removes. |
 | `status` | machine | What is managed here and whether it matches. |
-| `hook` | machine | Run or install the session-start reconciler. |
+| `hook` | machine | Run or install the two reconciler hooks. |
 | `init` | publisher | Create the signing key. |
 | `catalog publish` | publisher | Sign the index of what a repository publishes. |
 | `catalog revoke` | publisher | Revoke digests in that index. |
@@ -159,9 +165,9 @@ wherever the runner lives.
 
 ## Status
 
-Working: catalog publishing and signing, revocation by digest, subscription with a pinned
-key, offline verification, reconciliation with rollback and quarantine, the session hook,
-`lint`, `digest`.
+Working: catalog publishing and signing, a CI gate that the index still matches the
+repository, revocation by digest, subscription with a pinned key, offline verification,
+reconciliation with rollback and quarantine, both hooks, `lint`, `digest`.
 
 Not built: any distribution of catalogs other than a git repository the machine can reach; a
 managed-fleet view of which machines are on which sequence; multiple signatures per catalog
