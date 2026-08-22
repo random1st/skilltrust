@@ -1,25 +1,28 @@
-# Check the skills in this repository on every pull request.
+# Check a catalog repository on every pull request.
 #
 # This is the workflow SkillTrust exists to make possible, and the only place where the
 # check is genuinely enforced: an ephemeral runner with a controlled image is the one
 # environment where the developer whose change is under review has no privileges. On a
 # laptop the same commands are advisory, because anything able to edit a skill can also
 # edit the hook that checks it.
+#
+# The gate is that the signed index still names the exact bytes in the repository. Without
+# it a catalog rots silently: a skill is edited and merged, nobody republishes, and every
+# consumer either refuses the skill or keeps running the old copy — with the catalog still
+# looking authoritative.
 name: skills-check
 
 on:
   pull_request:
     paths:
-      - ".agents/skills/**"
-      - ".claude/skills/**"
-      - "skills.lock"
+      - "skills/**"
+      - "catalog.dsse.json"
       - ".github/workflows/skills-check.yml"
   push:
     branches: [main]
     paths:
-      - ".agents/skills/**"
-      - ".claude/skills/**"
-      - "skills.lock"
+      - "skills/**"
+      - "catalog.dsse.json"
 
 permissions:
   contents: read
@@ -45,28 +48,33 @@ jobs:
         run: go build -trimpath -o "${RUNNER_TEMP}/skillctl" ./cmd/skillctl
         working-directory: client
 
+      # A catalog repository keeps its skills under skills/, beside the signed index.
       - name: Locate the skills tree
         id: tree
         run: |
-          for candidate in .agents/skills .claude/skills; do
-            if [ -d "${candidate}" ]; then
-              echo "path=${candidate}" >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-          done
-          echo "path=" >> "${GITHUB_OUTPUT}"
-          echo "no skills directory in this repository; nothing to check"
+          if [ -d skills ]; then
+            echo "path=skills" >> "${GITHUB_OUTPUT}"
+          else
+            echo "path=" >> "${GITHUB_OUTPUT}"
+            echo "no skills/ directory in this repository; nothing to check"
+          fi
 
-      # Drift fails the build. --frozen additionally fails when a skill was added without
-      # being pinned, which is the whole point of running this on a pull request: a new
-      # skill must be approved, not merely present.
-      - name: Verify pinned skills
+      # A stale index fails the build. This is the gate: a skill that changed without
+      # being republished is a skill the catalog no longer describes, and merging it makes
+      # every consumer's verification wrong rather than merely out of date.
+      - name: Verify the signed index covers the repository
         if: steps.tree.outputs.path != ''
         run: |
-          if [ -f "${{ steps.tree.outputs.path }}/skills.lock" ]; then
-            "${RUNNER_TEMP}/skillctl" verify --frozen "${{ steps.tree.outputs.path }}"
+          # Both the index and the key it must be signed by are committed. Missing either
+          # is a warning rather than a failure: a repository of skills that has not been
+          # made into a catalog yet is a legitimate state, and a red build for it would
+          # teach people that this job's failures are not worth reading.
+          if [ ! -f catalog.dsse.json ]; then
+            echo "::warning::no catalog.dsse.json; run 'skillctl catalog publish' and commit it"
+          elif [ ! -f catalog.pub ]; then
+            echo "::warning::catalog.dsse.json is present but catalog.pub is not, so the index cannot be checked against a known key"
           else
-            echo "::warning::no skills.lock; run 'skillctl lock ${{ steps.tree.outputs.path }}' and commit it"
+            "${RUNNER_TEMP}/skillctl" catalog verify --key catalog.pub .
           fi
 
       # Risk indicators are reported as findings, never as a gate on their own: they are

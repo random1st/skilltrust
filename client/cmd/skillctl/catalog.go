@@ -20,6 +20,7 @@ import (
 const catalogUsage = `Usage: skillctl catalog <subcommand> [flags]
 
   publish  build and sign the index of skills a repository publishes
+  verify   check that the signed index still covers what the repository holds
   revoke   add digests to the signed revocation catalog
   show     print a catalog after verifying it
 
@@ -33,6 +34,8 @@ func runCatalog(args []string) int {
 	switch args[0] {
 	case "publish":
 		return runCatalogPublish(args[1:])
+	case "verify":
+		return runCatalogVerify(args[1:])
 	case "revoke":
 		return runCatalogRevoke(args[1:])
 	case "show":
@@ -288,5 +291,103 @@ func runCatalogPublish(args []string) int {
 		fmt.Printf("  %s  %s\n", shortDigest(managed.Digest), managed.Name)
 	}
 	fmt.Printf("\nCommit %s so consumers can fetch it.\n", CatalogFileName)
+	return exitClean
+}
+
+// runCatalogVerify checks a catalog repository against its own signed index.
+//
+// This is the publisher's gate, and the place where the whole scheme is actually enforced
+// rather than merely observed: a pull request runs on an ephemeral runner where the author
+// of the change has no privileges. It catches the failure that makes a catalog quietly
+// worthless — a skill edited and merged without republishing, so the index keeps naming
+// bytes nobody ships and every consumer refuses the skill or, worse, keeps an old copy.
+//
+// Freshness is deliberately not checked. An expired index is a problem for consumers and is
+// reported to them; failing a pull request because a week passed would turn every unrelated
+// change into a red build for a reason the author cannot act on.
+func runCatalogVerify(args []string) int {
+	flags := flag.NewFlagSet("catalog verify", flag.ContinueOnError)
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(), "Usage: skillctl catalog verify [flags] [repository]\n\n"+
+			"Checks that %s is signed by the expected key and still names the exact bytes\n"+
+			"of every skill in the repository, with nothing published that is missing and\n"+
+			"nothing present that is unpublished.\n\n"+
+			"Exit codes: %d index matches, %d it does not, %d error.\n\nFlags:\n",
+			CatalogFileName, exitClean, exitFindings, exitUsage)
+		flags.PrintDefaults()
+	}
+
+	keyPath := flags.String("key", defaultPublicKey(), "public key the index must be signed by")
+
+	if err := parseArgs(flags, args); err != nil {
+		return exitUsage
+	}
+	repository := flags.Arg(0)
+	if repository == "" {
+		repository = "."
+	}
+	repository, err := filepath.Abs(repository)
+	if err != nil {
+		return fail(err)
+	}
+
+	public, err := attest.LoadPublicKey(*keyPath)
+	if err != nil {
+		return fail(err)
+	}
+	envelope, err := attest.LoadEnvelope(filepath.Join(repository, CatalogFileName))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitFindings
+	}
+	snapshot, _, err := catalog.Open(envelope, attest.NewTrustedKeys(public))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: the index does not verify: %v\n", err)
+		return exitFindings
+	}
+
+	onDisk := map[string]string{}
+	directories, _ := lint.Discover(filepath.Join(repository, source.SkillsSubdirectory),
+		lint.Options{})
+	for _, directory := range directories {
+		declared, _ := skillmd.Parse(filepath.Join(directory, skillmd.FileName)).Name()
+		if declared == "" {
+			continue
+		}
+		built, err := archive.Build(directory, archive.Limits{})
+		if err != nil {
+			return fail(err)
+		}
+		onDisk[declared] = built.Digest
+	}
+
+	problems := 0
+	for _, managed := range snapshot.Skills {
+		actual, present := onDisk[managed.Name]
+		switch {
+		case !present:
+			problems++
+			fmt.Printf("  missing     %s is published but not in the repository\n", managed.Name)
+		case actual != managed.Digest:
+			problems++
+			fmt.Printf("  stale       %s\n", managed.Name)
+			fmt.Printf("              published %s\n", managed.Digest)
+			fmt.Printf("              on disk   %s\n", actual)
+		}
+		delete(onDisk, managed.Name)
+	}
+	for name := range onDisk {
+		problems++
+		fmt.Printf("  unpublished %s is in the repository but not in the index\n", name)
+	}
+
+	if problems > 0 {
+		fmt.Printf("\n%d problem%s. Re-run `skillctl catalog publish` and commit %s.\n",
+			problems, plural(problems, "", "s"), CatalogFileName)
+		return exitFindings
+	}
+	fmt.Printf("catalog %s, sequence %d: the index names exactly what the repository holds "+
+		"(%d skill%s).\n", snapshot.Name, snapshot.Sequence, len(snapshot.Skills),
+		plural(len(snapshot.Skills), "", "s"))
 	return exitClean
 }

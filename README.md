@@ -35,6 +35,12 @@ The index names each skill and the exact bytes it is supposed to have. Republish
 revocations forward and advances the sequence, so nobody can be walked backwards onto an
 older set of claims.
 
+In CI, `skillctl catalog verify --key catalog.pub .` fails a pull request when a skill was
+changed without republishing. Without that gate a catalog rots silently: the index keeps
+naming bytes nobody ships, while still looking authoritative. An ephemeral runner is also the
+one place the check is genuinely enforced, since the author of the change has no privileges
+there.
+
 Revoking is one skill, by digest, so it follows the bytes through a rename, a move or a copy:
 
 ```bash
@@ -118,6 +124,7 @@ certify prose an agent will follow.
 | `init` | publisher | Create the signing key. |
 | `catalog publish` | publisher | Sign the index of what a repository publishes. |
 | `catalog revoke` | publisher | Revoke digests in that index. |
+| `catalog verify` | publisher | Check the index still names what the repository holds. Use in CI. |
 | `catalog show` | either | Verify an index and print it. |
 | `lint` | either | Inventory a tree and report risk indicators. |
 | `digest` | either | The canonical digest of a skill directory. |
