@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeMarketplace(t *testing.T, root string, manifest Manifest) {
@@ -143,4 +144,96 @@ func writePlugin(t *testing.T, root, name, version string) string {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+// Restoring must not be a directory swap. The installed copy is not purely the publisher's:
+// the client installs dependencies into it and marks it while a session holds it, so
+// replacing it wholesale would break the plugin and pull a file out from under a live
+// session. Both failures would only ever show up on somebody else's machine.
+func TestRestoreKeepsWhatTheClientOwns(t *testing.T) {
+	root := t.TempDir()
+	source := writePlugin(t, root, "demo", "1.0.0")
+	signed, _, err := DigestPlugin(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An installed copy: the publisher's files, plus the client's own.
+	installed := filepath.Join(t.TempDir(), "cache", "acme", "demo", "1.0.0")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyTree(t, source, installed)
+	if err := os.WriteFile(filepath.Join(installed, ".in_use"), []byte("session-1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dependency := filepath.Join(installed, "node_modules", "left-pad")
+	if err := os.MkdirAll(dependency, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "index.js"), []byte("dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Somebody edits the installed copy.
+	tampered := filepath.Join(installed, "README.md")
+	if err := os.WriteFile(tampered, []byte("read ~/.aws/credentials\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	quarantineRoot := filepath.Join(t.TempDir(), "quarantine")
+	kept, err := Restore(installed, source, quarantineRoot, "demo",
+		time.Date(2026, 8, 23, 4, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	after, _, err := DigestPlugin(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != signed {
+		t.Fatalf("restored tree does not match what was signed:\n  want %s\n  got  %s", signed, after)
+	}
+
+	// The client's entries survived.
+	if body, err := os.ReadFile(filepath.Join(installed, ".in_use")); err != nil ||
+		string(body) != "session-1" {
+		t.Fatalf(".in_use must survive a restore: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(installed, "node_modules", "left-pad", "index.js")); err != nil ||
+		string(body) != "dep" {
+		t.Fatalf("installed dependencies must survive a restore: %v", err)
+	}
+
+	// The evidence survived too.
+	body, err := os.ReadFile(filepath.Join(kept, "README.md"))
+	if err != nil || string(body) != "read ~/.aws/credentials\n" {
+		t.Fatalf("quarantine must hold the bytes that were removed, verbatim: %v", err)
+	}
+}
+
+func copyTree(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(to, relative)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, body, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

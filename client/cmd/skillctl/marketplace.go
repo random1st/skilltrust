@@ -11,6 +11,7 @@ import (
 	"github.com/random1st/skilltrust/client/internal/attest"
 	"github.com/random1st/skilltrust/client/internal/catalog"
 	"github.com/random1st/skilltrust/client/internal/marketplace"
+	"github.com/random1st/skilltrust/client/internal/source"
 )
 
 const marketplaceUsage = `Usage: skillctl marketplace <subcommand> [flags]
@@ -180,6 +181,8 @@ func runMarketplaceVerify(args []string) int {
 	repo := flags.String("repo", "", "marketplace checkout to read the signature from")
 	keyPath := flags.String("key", "", "public key the signature must carry (required with --repo)")
 	claudeHome := flags.String("claude-home", "", "Claude Code directory (default ~/.claude)")
+	restore := flags.Bool("restore", false,
+		"put changed plugins back to what was signed, keeping the replaced copy")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -194,26 +197,51 @@ func runMarketplaceVerify(args []string) int {
 		return code
 	}
 
-	problems := 0
+	sources := marketplaceSources(*repo)
+	now := time.Now().UTC()
+	problems, restored := 0, 0
+
 	for name, snapshot := range snapshots {
 		fmt.Printf("%s   sequence %d\n", name, snapshot.Sequence)
 		for _, managed := range snapshot.Skills {
 			status := checkInstalled(home, name, managed, snapshot)
-			if !status.ok {
-				problems++
-			}
-			switch {
-			case status.ok:
+			if status.ok {
 				fmt.Printf("  ok          %-28s %s\n", status.name, status.version)
-			default:
-				fmt.Printf("  %-11s %-28s %s\n", status.detail, status.name, status.version)
-				if status.expected != "" && status.actual != "" {
-					fmt.Printf("              signed   %s\n", status.expected)
-					fmt.Printf("              on disk  %s\n", status.actual)
+				continue
+			}
+
+			// Only a changed plugin can be put back. A revoked one has no correct bytes to
+			// restore, and a wrong version is a decision about which release to run rather
+			// than a difference to correct.
+			if *restore && status.detail == "changed" {
+				kept, err := restorePlugin(sources[name], home, name, managed, now)
+				if err == nil {
+					restored++
+					fmt.Printf("  restored    %-28s %s\n", status.name, status.version)
+					fmt.Printf("              was      %s\n", status.actual)
+					if kept != "" {
+						fmt.Printf("              kept at  %s\n", kept)
+					}
+					continue
 				}
+				fmt.Printf("  %-11s %-28s %v\n", "unrestored", status.name, err)
+				problems++
+				continue
+			}
+
+			problems++
+			fmt.Printf("  %-11s %-28s %s\n", status.detail, status.name, status.version)
+			if status.expected != "" && status.actual != "" {
+				fmt.Printf("              signed   %s\n", status.expected)
+				fmt.Printf("              on disk  %s\n", status.actual)
 			}
 		}
 		fmt.Println()
+	}
+
+	if restored > 0 {
+		fmt.Printf("%d plugin%s put back to what was signed.\n",
+			restored, plural(restored, "", "s"))
 	}
 
 	if problems > 0 {
@@ -221,8 +249,58 @@ func runMarketplaceVerify(args []string) int {
 			problems, plural(problems, "", "s"), plural(problems, "differs", "differ"))
 		return exitFindings
 	}
+	if restored > 0 {
+		return exitFindings
+	}
 	fmt.Printf("Every signed plugin is installed as signed.\n")
 	return exitClean
+}
+
+// restorePlugin puts one plugin back from the marketplace checkout that signed it.
+func restorePlugin(
+	source, claudeHome, marketplaceName string, managed catalog.Managed, now time.Time,
+) (string, error) {
+	if source == "" {
+		return "", fmt.Errorf("no local checkout of %s to restore from; run `skillctl sync`",
+			marketplaceName)
+	}
+	manifest, err := marketplace.Load(source)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range manifest.Plugins {
+		if entry.Name != managed.Name {
+			continue
+		}
+		directory, local := entry.LocalPath(source)
+		if !local {
+			return "", fmt.Errorf("%s is hosted elsewhere, so there are no signed bytes "+
+				"here to restore from", managed.Name)
+		}
+		installed := marketplace.InstalledPath(
+			claudeHome, marketplaceName, managed.Name, managed.Version)
+		return marketplace.Restore(installed, directory, quarantineRoot(), managed.Name, now)
+	}
+	return "", fmt.Errorf("%s is signed but no longer listed by the marketplace", managed.Name)
+}
+
+// marketplaceSources maps each followed marketplace to the checkout its signature came from.
+func marketplaceSources(explicit string) map[string]string {
+	if explicit != "" {
+		if manifest, err := marketplace.Load(explicit); err == nil {
+			return map[string]string{manifest.Name: explicit}
+		}
+		return nil
+	}
+	subscriptions, err := loadSubscriptions()
+	if err != nil {
+		return nil
+	}
+	sources := map[string]string{}
+	for _, subscription := range subscriptions {
+		sources[subscription.Name] = source.Path(catalogRoot(), subscription.Name)
+	}
+	return sources
 }
 
 // checkInstalled compares one installed plugin against its signature.

@@ -13,8 +13,11 @@ import (
 // ClientManagedRoots are entries Claude Code maintains inside an installed plugin directory,
 // which therefore cannot be part of what the publisher signs.
 //
-// `.in_use` is a marker the client writes into the cached copy while a session holds it. It
-// carries no behaviour, and excluding it costs nothing.
+// `.in_use` is a directory of session locks — one file per live session holding the plugin,
+// named by process id. It carries no behaviour, so excluding it from the identity costs
+// nothing; but it must survive a restore, because removing it would drop the locks of
+// sessions currently using the plugin. That it is a directory rather than a file is why
+// client-managed entries are treated as opaque and moved across whole.
 //
 // `node_modules` is different and the difference must not be glossed over: it is executable
 // code, installed on the machine after the plugin was fetched, and excluding it means the
