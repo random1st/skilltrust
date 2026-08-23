@@ -221,6 +221,7 @@ certify prose an agent will follow.
 | `marketplace verify` | either | Check installed plugins against a signature. |
 | `policy` | publisher | Print the managed settings that make the check binding. |
 | `fleet` | admin | Summarise the signed events your machines filed. |
+| `catalog verify` | publisher | Check the index still names what the repository holds. Used by the action. |
 | `catalog publish` | publisher | Sign an index of skills in a plain repository. |
 | `catalog revoke` | publisher | Revoke digests in that index. |
 | `catalog verify` | publisher | Check the index still names what the repository holds. Use in CI. |

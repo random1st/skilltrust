@@ -114,41 +114,95 @@ func SignPayload(payloadType string, payload []byte, key ed25519.PrivateKey) *En
 // VerifyPayload checks an envelope of the expected type against the pinned keys and
 // returns the exact bytes that were signed, plus the key that signed them.
 func VerifyPayload(envelope *Envelope, expectedType string, trusted *TrustedKeys) ([]byte, string, error) {
+	payload, signers, err := VerifyPayloadSigners(envelope, expectedType, trusted)
+	if err != nil {
+		return nil, "", err
+	}
+	return payload, signers[0], nil
+}
+
+// VerifyPayloadSigners returns every trusted key that signed the payload, in envelope order.
+//
+// One valid signature is enough to know the bytes were not tampered with. It is not enough to
+// know more than one person agreed to them, and that difference is the whole of what a
+// threshold buys: an attacker holding a single signing key, or a compromised CI job that can
+// reach one, produces a perfectly valid envelope. Counting distinct signers is what makes
+// stealing one key insufficient.
+//
+// A signature that is present but does not verify fails the whole envelope rather than being
+// skipped. Ignoring it would let an attacker append garbage to reach a count, and would turn
+// a forgery attempt into a silent non-event.
+func VerifyPayloadSigners(
+	envelope *Envelope, expectedType string, trusted *TrustedKeys,
+) ([]byte, []string, error) {
 	if envelope.PayloadType != expectedType {
-		return nil, "", fmt.Errorf("%w: %q", ErrWrongPayload, envelope.PayloadType)
+		return nil, nil, fmt.Errorf("%w: %q", ErrWrongPayload, envelope.PayloadType)
 	}
 	if len(envelope.Signatures) == 0 {
-		return nil, "", ErrNoSignatures
+		return nil, nil, ErrNoSignatures
 	}
 
 	payload, err := base64.StdEncoding.DecodeString(envelope.Payload)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: payload is not base64: %v", ErrMalformedEnvelope, err)
+		return nil, nil, fmt.Errorf("%w: payload is not base64: %v", ErrMalformedEnvelope, err)
 	}
 
 	signed := pae(envelope.PayloadType, payload)
-	sawTrustedKey := false
+	var signers []string
+	seen := map[string]struct{}{}
+
 	for _, signature := range envelope.Signatures {
 		public, known := trusted.Lookup(signature.KeyID)
 		if !known {
 			continue
 		}
-		sawTrustedKey = true
-
 		raw, err := base64.StdEncoding.DecodeString(signature.Sig)
 		if err != nil {
-			continue
+			return nil, nil, fmt.Errorf("%w: signature for key %s is not base64",
+				ErrMalformedEnvelope, signature.KeyID)
 		}
 		if !ed25519.Verify(public, signed, raw) {
-			return nil, "", fmt.Errorf("%w for key %s", ErrBadSignature, signature.KeyID)
+			return nil, nil, fmt.Errorf("%w for key %s", ErrBadSignature, signature.KeyID)
 		}
-		return payload, signature.KeyID, nil
+		// One key signing twice is one signer. Counting it twice would let a single
+		// compromised key satisfy a threshold on its own, which is the one thing a
+		// threshold exists to prevent.
+		if _, repeat := seen[signature.KeyID]; repeat {
+			continue
+		}
+		seen[signature.KeyID] = struct{}{}
+		signers = append(signers, signature.KeyID)
 	}
 
-	if !sawTrustedKey {
-		return nil, "", ErrUntrustedKey
+	if len(signers) == 0 {
+		return nil, nil, ErrUntrustedKey
 	}
-	return nil, "", ErrBadSignature
+	return payload, signers, nil
+}
+
+// Countersign appends a signature over an envelope's existing payload bytes.
+//
+// The payload is not re-serialized. A second signer signs exactly what the first one signed,
+// which is the property that makes the two signatures comparable at all — re-encoding the
+// same JSON could reorder keys or reformat a number and produce two signatures over two
+// different documents that a verifier would then have to guess between.
+func Countersign(envelope *Envelope, key ed25519.PrivateKey) error {
+	payload, err := base64.StdEncoding.DecodeString(envelope.Payload)
+	if err != nil {
+		return fmt.Errorf("%w: payload is not base64: %v", ErrMalformedEnvelope, err)
+	}
+	public := key.Public().(ed25519.PublicKey)
+	keyID := KeyID(public)
+	for _, signature := range envelope.Signatures {
+		if signature.KeyID == keyID {
+			return fmt.Errorf("%s has already signed this", Fingerprint(keyID))
+		}
+	}
+	signature := ed25519.Sign(key, pae(envelope.PayloadType, payload))
+	envelope.Signatures = append(envelope.Signatures, Signature{
+		KeyID: keyID, Sig: base64.StdEncoding.EncodeToString(signature),
+	})
+	return nil
 }
 
 // Sign marshals the statement, signs those exact bytes, and returns the envelope.

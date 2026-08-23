@@ -1,28 +1,16 @@
-# Check a catalog repository on every pull request.
+# The signature gate, run by the action this repository ships.
 #
-# This is the workflow SkillTrust exists to make possible, and the only place where the
-# check is genuinely enforced: an ephemeral runner with a controlled image is the one
-# environment where the developer whose change is under review has no privileges. On a
-# laptop the same commands are advisory, because anything able to edit a skill can also
-# edit the hook that checks it.
-#
-# The gate is that the signed index still names the exact bytes in the repository. Without
-# it a catalog rots silently: a skill is edited and merged, nobody republishes, and every
-# consumer either refuses the skill or keeps running the old copy — with the catalog still
-# looking authoritative.
+# Dogfooding is the point: this repository is itself a Claude Code marketplace, so the same
+# action an organisation drops into their marketplace repo guards this one. An action that has
+# never run against a real repository is an action that works in the README.
 name: skills-check
 
 on:
   pull_request:
-    paths:
-      - "skills/**"
-      - "catalog.dsse.json"
-      - ".github/workflows/skills-check.yml"
+    paths: ["plugin/**", ".claude-plugin/**", "catalog.dsse.json", "action.yml", ".github/workflows/skills-check.yml"]
   push:
     branches: [main]
-    paths:
-      - "skills/**"
-      - "catalog.dsse.json"
+    paths: ["plugin/**", ".claude-plugin/**", "catalog.dsse.json", "action.yml"]
 
 permissions:
   contents: read
@@ -30,68 +18,13 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Only this job may write findings, and only findings.
-      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # `uses: ./` runs the action from this checkout, so a change to the action is tested by
+      # the same pull request that makes it rather than after it is tagged.
+      - name: The signature still describes this repository
+        uses: ./
         with:
-          go-version-file: client/go.mod
-          cache-dependency-path: client/go.sum
-
-      # Built from the commit under review rather than downloaded, so the check cannot be
-      # subverted by pointing at a different release.
-      - name: Build skillctl
-        run: go build -trimpath -o "${RUNNER_TEMP}/skillctl" ./cmd/skillctl
-        working-directory: client
-
-      # A catalog repository keeps its skills under skills/, beside the signed index.
-      - name: Locate the skills tree
-        id: tree
-        run: |
-          if [ -d skills ]; then
-            echo "path=skills" >> "${GITHUB_OUTPUT}"
-          else
-            echo "path=" >> "${GITHUB_OUTPUT}"
-            echo "no skills/ directory in this repository; nothing to check"
-          fi
-
-      # A stale index fails the build. This is the gate: a skill that changed without
-      # being republished is a skill the catalog no longer describes, and merging it makes
-      # every consumer's verification wrong rather than merely out of date.
-      - name: Verify the signed index covers the repository
-        if: steps.tree.outputs.path != ''
-        run: |
-          # Both the index and the key it must be signed by are committed. Missing either
-          # is a warning rather than a failure: a repository of skills that has not been
-          # made into a catalog yet is a legitimate state, and a red build for it would
-          # teach people that this job's failures are not worth reading.
-          if [ ! -f catalog.dsse.json ]; then
-            echo "::warning::no catalog.dsse.json; run 'skillctl catalog publish' and commit it"
-          elif [ ! -f catalog.pub ]; then
-            echo "::warning::catalog.dsse.json is present but catalog.pub is not, so the index cannot be checked against a known key"
-          else
-            "${RUNNER_TEMP}/skillctl" catalog verify --key catalog.pub .
-          fi
-
-      # Risk indicators are reported as findings, never as a gate on their own: they are
-      # material for a human reviewer, and a scanner that blocks merges on heuristics is a
-      # scanner people learn to bypass. Drift, above, is the gate.
-      - name: Scan skills for risk indicators
-        if: steps.tree.outputs.path != ''
-        run: |
-          "${RUNNER_TEMP}/skillctl" lint \
-            --format sarif \
-            --output skillctl.sarif \
-            --fail-on never \
-            "${{ steps.tree.outputs.path }}"
-
-      - name: Upload findings
-        if: steps.tree.outputs.path != ''
-        uses: github/codeql-action/upload-sarif@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
-        with:
-          sarif_file: skillctl.sarif
-          category: skillctl
+          command: verify
+          public-key: catalog.pub

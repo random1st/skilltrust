@@ -92,29 +92,13 @@ signs:
     artifacts: checksum
     output: true
 
-homebrew_casks:
-  - name: skillctl
-    repository:
-      owner: random1st
-      name: homebrew-tap
-      branch: main
-      # GITHUB_TOKEN is scoped to this repository; the tap lives in another one.
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Casks
-    homepage: https://github.com/random1st/skilltrust
-    description: Inventory, verify and revoke Agent Skills
-    binaries:
-      - skillctl
-    # Strip the quarantine attribute only for notarized builds; without this a downloaded
-    # binary is blocked by Gatekeeper on first run.
-    hooks:
-      post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"], print_stderr: false).exit_status == 0
-            system_command "/usr/bin/xattr",
-                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/skillctl"]
-          end
-
+# Homebrew is deferred until the licence is decided.
+#
+# A cask can only serve a release the public can download, and this repository is private, so
+# publishing one would produce a tap whose every install fails with a 404 — worse than no tap,
+# because the failure looks like a broken tool rather than a closed door. Releases are GitHub
+# assets and `go install`; the cask block is in git history and comes back unchanged when the
+# licence question is answered.
 release:
   draft: true
   prerelease: auto

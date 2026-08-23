@@ -13,6 +13,7 @@ import (
 	"github.com/random1st/skilltrust/client/internal/attest"
 	"github.com/random1st/skilltrust/client/internal/catalog"
 	"github.com/random1st/skilltrust/client/internal/lint"
+	"github.com/random1st/skilltrust/client/internal/marketplace"
 	"github.com/random1st/skilltrust/client/internal/skillmd"
 	"github.com/random1st/skilltrust/client/internal/source"
 )
@@ -346,19 +347,33 @@ func runCatalogVerify(args []string) int {
 		return exitFindings
 	}
 
+	// A repository is either a Claude Code marketplace or a plain tree of skills, and the
+	// same question — does the signature still describe what is here — has to be answerable
+	// for both. Digesting a marketplace's plugins as though they were skill folders would
+	// compare the right names against the wrong bytes and call every plugin stale.
 	onDisk := map[string]string{}
-	directories, _ := lint.Discover(filepath.Join(repository, source.SkillsSubdirectory),
-		lint.Options{})
-	for _, directory := range directories {
-		declared, _ := skillmd.Parse(filepath.Join(directory, skillmd.FileName)).Name()
-		if declared == "" {
-			continue
-		}
-		built, err := archive.Build(directory, archive.Limits{})
+	if manifest, err := marketplace.Load(repository); err == nil {
+		coverage, err := marketplace.Plan(repository, manifest)
 		if err != nil {
 			return fail(err)
 		}
-		onDisk[declared] = built.Digest
+		for _, managed := range coverage.Signed {
+			onDisk[managed.Name] = managed.Digest
+		}
+	} else {
+		directories, _ := lint.Discover(filepath.Join(repository, source.SkillsSubdirectory),
+			lint.Options{})
+		for _, directory := range directories {
+			declared, _ := skillmd.Parse(filepath.Join(directory, skillmd.FileName)).Name()
+			if declared == "" {
+				continue
+			}
+			built, err := archive.Build(directory, archive.Limits{})
+			if err != nil {
+				return fail(err)
+			}
+			onDisk[declared] = built.Digest
+		}
 	}
 
 	problems := 0

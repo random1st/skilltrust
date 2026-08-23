@@ -1,0 +1,103 @@
+name: SkillTrust
+description: >-
+  Verify that a Claude Code marketplace's signed index still names the exact bytes in the
+  repository, or sign it.
+
+# Verifying is the default and needs no secret. Signing is opt-in and needs a key, which in
+# CI means the key lives in a secret — and a secret is reachable by anything that can change
+# a workflow file. Read `signing-key` below before turning it on.
+inputs:
+  command:
+    description: "verify (default) or sign"
+    required: false
+    default: verify
+  repository:
+    description: "Path to the marketplace checkout"
+    required: false
+    default: "."
+  public-key:
+    description: >-
+      PEM public key the index must be signed by. Required for verify. Commit it in the
+      repository: the check is only as good as the key it checks against, and a key supplied
+      by the same person who can change the workflow checks nothing.
+    required: false
+    default: catalog.pub
+  signing-key:
+    description: >-
+      PEM private key, for command=sign. Putting a signing key in CI means whoever can change
+      a workflow can publish a signed marketplace, so pair it with a threshold of signatures
+      that CI alone cannot reach.
+    required: false
+  marketplace-name:
+    description: "Name recorded in the index, when signing"
+    required: false
+  valid-for:
+    description: "How long consumers may use the signature before refreshing"
+    required: false
+    default: 168h
+
+outputs:
+  plugin-count:
+    description: "How many plugins the index covers"
+    value: ${{ steps.run.outputs.plugin-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/client/go.mod
+        cache-dependency-path: ${{ github.action_path }}/client/go.sum
+
+    # Built from the action's own checkout rather than downloaded. A release asset would be
+    # faster, but it would also mean the check that guards a repository is fetched over the
+    # network at the moment it runs, from somewhere the repository does not control.
+    - name: Build skillctl
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}/client"
+        go build -trimpath -o "${RUNNER_TEMP}/skillctl" ./cmd/skillctl
+
+    - name: Run
+      id: run
+      shell: bash
+      env:
+        SKILLTRUST_COMMAND: ${{ inputs.command }}
+        SKILLTRUST_REPO: ${{ inputs.repository }}
+        SKILLTRUST_PUBLIC_KEY: ${{ inputs.public-key }}
+        SKILLTRUST_SIGNING_KEY: ${{ inputs.signing-key }}
+        SKILLTRUST_NAME: ${{ inputs.marketplace-name }}
+        SKILLTRUST_VALID_FOR: ${{ inputs.valid-for }}
+      run: |
+        set -euo pipefail
+        case "${SKILLTRUST_COMMAND}" in
+          verify)
+            # The publisher gate: does the signature still describe this repository. The
+            # consumer check compares against an installed plugin cache, which a runner does
+            # not have — running it here would pass by describing nothing.
+            "${RUNNER_TEMP}/skillctl" catalog verify "${SKILLTRUST_REPO}" \
+              --key "${SKILLTRUST_PUBLIC_KEY}" | tee "${RUNNER_TEMP}/out"
+            ;;
+          sign)
+            if [ -z "${SKILLTRUST_SIGNING_KEY}" ]; then
+              echo "::error::command=sign needs signing-key" >&2
+              exit 1
+            fi
+            # The key is written with no group or world access and removed on exit, including
+            # on failure: a signing key left in a runner's temp directory outlives the job on
+            # a self-hosted runner.
+            key="${RUNNER_TEMP}/signing.key"
+            trap 'rm -f "${key}"' EXIT
+            umask 077
+            printf '%s' "${SKILLTRUST_SIGNING_KEY}" > "${key}"
+            args=(marketplace sign "${SKILLTRUST_REPO}" --key "${key}" --valid-for "${SKILLTRUST_VALID_FOR}")
+            "${RUNNER_TEMP}/skillctl" "${args[@]}" | tee "${RUNNER_TEMP}/out"
+            ;;
+          *)
+            echo "::error::unknown command ${SKILLTRUST_COMMAND}" >&2
+            exit 1
+            ;;
+        esac
+        count=$(grep -oE '[0-9]+ (of [0-9]+ plugin|skill)' "${RUNNER_TEMP}/out" | head -1 | cut -d' ' -f1 || true)
+        echo "plugin-count=${count:-0}" >> "${GITHUB_OUTPUT}"

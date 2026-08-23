@@ -55,4 +55,3 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Separate token: the Homebrew tap lives in another repository, and GITHUB_TOKEN
           # is scoped to this one.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

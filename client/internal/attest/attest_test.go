@@ -320,3 +320,107 @@ func TestPrivateKeyPermissionsAreNotCheckedOnWindows(t *testing.T) {
 		t.Fatalf("Windows carries no usable mode, so the key must still load: %v", err)
 	}
 }
+
+// One valid signature proves the bytes were not tampered with. It does not prove more than
+// one person agreed to them, and that difference is the whole of what a threshold buys: an
+// attacker holding one signing key, or a CI job that can reach one, produces a perfectly
+// valid envelope.
+func TestEverySignerIsReported(t *testing.T) {
+	author, authorKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer, reviewerKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelope := SignPayload("application/test", []byte(`{"a":1}`), authorKey)
+	if err := Countersign(envelope, reviewerKey); err != nil {
+		t.Fatal(err)
+	}
+
+	_, signers, err := VerifyPayloadSigners(envelope, "application/test",
+		NewTrustedKeys(author, reviewer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signers) != 2 {
+		t.Fatalf("signers = %v, want both", signers)
+	}
+	// Only the keys a verifier pins count, whoever else signed.
+	_, one, err := VerifyPayloadSigners(envelope, "application/test", NewTrustedKeys(author))
+	if err != nil || len(one) != 1 {
+		t.Fatalf("signers = %v, err = %v", one, err)
+	}
+}
+
+// A key signing twice is one signer. Counting it twice would let a single compromised key
+// satisfy a threshold on its own, which is the one thing a threshold exists to prevent.
+func TestOneKeySigningTwiceIsOneSigner(t *testing.T) {
+	public, private, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := SignPayload("application/test", []byte(`{"a":1}`), private)
+
+	if err := Countersign(envelope, private); err == nil {
+		t.Fatal("countersigning with a key that already signed must be refused")
+	}
+	// Even if an attacker appends the duplicate by hand rather than through Countersign.
+	envelope.Signatures = append(envelope.Signatures, envelope.Signatures[0])
+
+	_, signers, err := VerifyPayloadSigners(envelope, "application/test", NewTrustedKeys(public))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signers) != 1 {
+		t.Fatalf("signers = %v; one key is one signer however often it appears", signers)
+	}
+}
+
+// A signature that is present but does not verify fails the whole envelope. Skipping it would
+// let an attacker append garbage to reach a count, and would turn a forgery attempt into a
+// silent non-event.
+func TestABadSignatureFailsTheEnvelopeRatherThanBeingSkipped(t *testing.T) {
+	author, authorKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer, reviewerKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := SignPayload("application/test", []byte(`{"a":1}`), authorKey)
+	if err := Countersign(envelope, reviewerKey); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signatures[1].Sig = SignPayload("application/test",
+		[]byte(`{"a":2}`), reviewerKey).Signatures[0].Sig
+
+	if _, _, err := VerifyPayloadSigners(envelope, "application/test",
+		NewTrustedKeys(author, reviewer)); err == nil {
+		t.Fatal("a signature over different bytes must fail the envelope, not be ignored")
+	}
+}
+
+// Countersigning must not re-serialize the payload: two signatures have to cover the same
+// bytes, or a verifier is comparing signatures over two different documents.
+func TestCountersigningDoesNotTouchThePayload(t *testing.T) {
+	_, authorKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, reviewerKey, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := SignPayload("application/test", []byte(`{"b":2,"a":1}`), authorKey)
+	before := envelope.Payload
+	if err := Countersign(envelope, reviewerKey); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Payload != before {
+		t.Fatal("the payload moved, so the two signatures no longer cover the same document")
+	}
+}
