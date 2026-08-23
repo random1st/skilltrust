@@ -114,6 +114,20 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 		return nil, fmt.Errorf("%w: %v", ErrRefused, err)
 	}
 
+	// Drop any signature already claiming this notary's key before signing fresh. Two
+	// real cases land here: a CI job re-run submits the countersigned output of its
+	// previous run, which should be idempotent rather than a refusal; and an uploader
+	// could attach a garbage signature under this notary's key id, which — if kept —
+	// would make every threshold-2 machine refuse the whole envelope as a forgery. The
+	// payload just verified, so replacing our own entry loses nothing.
+	kept := envelope.Signatures[:0]
+	for _, signature := range envelope.Signatures {
+		if signature.KeyID != s.KeyID() {
+			kept = append(kept, signature)
+		}
+	}
+	envelope.Signatures = kept
+
 	if err := attest.Countersign(&envelope, s.key); err != nil {
 		return nil, err
 	}

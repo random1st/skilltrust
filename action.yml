@@ -8,7 +8,7 @@ description: >-
 # a workflow file. Read `signing-key` below before turning it on.
 inputs:
   command:
-    description: "verify (default) or sign"
+    description: "verify (default), sign, or notarize an already-signed index"
     required: false
     default: verify
   repository:
@@ -35,6 +35,22 @@ inputs:
     description: "How long consumers may use the signature before refreshing"
     required: false
     default: 168h
+  notary-url:
+    description: >-
+      Full catalog endpoint on a SkillTrust notary, e.g.
+      https://notary.example.com/v1/catalogs/acme/plugins. With command=sign the freshly
+      signed index is submitted there and the countersigned envelope replaces
+      catalog.dsse.json in the checkout, so a workflow that commits it keeps the git path
+      and the notary path carrying the same bytes. With command=notarize an
+      already-committed index is submitted as-is.
+    required: false
+  notary-token:
+    description: >-
+      The organisation's publish token for the notary. A secret — but a deliberately
+      narrow one: it authorizes submitting catalogs for countersigning, and the notary
+      refuses anything not signed by the publisher keys it pinned, so a leaked token
+      alone publishes nothing.
+    required: false
 
 outputs:
   plugin-count:
@@ -69,8 +85,32 @@ runs:
         SKILLTRUST_SIGNING_KEY: ${{ inputs.signing-key }}
         SKILLTRUST_NAME: ${{ inputs.marketplace-name }}
         SKILLTRUST_VALID_FOR: ${{ inputs.valid-for }}
+        SKILLTRUST_NOTARY_URL: ${{ inputs.notary-url }}
+        SKILLTRUST_NOTARY_TOKEN: ${{ inputs.notary-token }}
       run: |
         set -euo pipefail
+
+        # Submit catalog.dsse.json for countersigning and replace it with the notary's
+        # answer. The response is written only on HTTP 200: a 409 is a rollback the
+        # notary refused, a 422 is a catalog it could not verify, and both must fail the
+        # job rather than leave a half-published state.
+        notarize() {
+          if [ -z "${SKILLTRUST_NOTARY_TOKEN}" ]; then
+            echo "::error::notary-url needs notary-token" >&2
+            exit 1
+          fi
+          index="${SKILLTRUST_REPO}/catalog.dsse.json"
+          status=$(curl -sS -o "${RUNNER_TEMP}/notary-response" -w '%{http_code}' \
+            -X PUT -H "Authorization: Bearer ${SKILLTRUST_NOTARY_TOKEN}" \
+            --data-binary @"${index}" "${SKILLTRUST_NOTARY_URL}")
+          if [ "${status}" != "200" ]; then
+            echo "::error::the notary answered ${status}: $(cat "${RUNNER_TEMP}/notary-response")" >&2
+            exit 1
+          fi
+          mv "${RUNNER_TEMP}/notary-response" "${index}"
+          echo "notarized: ${SKILLTRUST_NOTARY_URL}"
+        }
+
         case "${SKILLTRUST_COMMAND}" in
           verify)
             # The publisher gate: does the signature still describe this repository. The
@@ -93,6 +133,17 @@ runs:
             printf '%s' "${SKILLTRUST_SIGNING_KEY}" > "${key}"
             args=(marketplace sign "${SKILLTRUST_REPO}" --key "${key}" --valid-for "${SKILLTRUST_VALID_FOR}")
             "${RUNNER_TEMP}/skillctl" "${args[@]}" | tee "${RUNNER_TEMP}/out"
+            if [ -n "${SKILLTRUST_NOTARY_URL}" ]; then
+              notarize
+            fi
+            ;;
+          notarize)
+            if [ -z "${SKILLTRUST_NOTARY_URL}" ]; then
+              echo "::error::command=notarize needs notary-url" >&2
+              exit 1
+            fi
+            notarize
+            : > "${RUNNER_TEMP}/out"
             ;;
           *)
             echo "::error::unknown command ${SKILLTRUST_COMMAND}" >&2

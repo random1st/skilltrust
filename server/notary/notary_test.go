@@ -116,6 +116,44 @@ func TestPublishCountersignsAndServes(t *testing.T) {
 	}
 }
 
+// A CI job that gets re-run submits the countersigned output of its previous run. That
+// must be idempotent — same catalog out, two signatures, not three and not a refusal.
+// The same code path also stops an uploader planting a garbage signature under the
+// notary's key id, which would otherwise make every threshold-2 machine refuse the
+// envelope as a forgery.
+func TestRepublishingTheCountersignedOutputIsIdempotent(t *testing.T) {
+	f := newFixture(t)
+
+	first := f.publish(t, "publish-token", f.signedCatalog(t, 1))
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first publish: %s", first.Status)
+	}
+	countersigned, err := io.ReadAll(first.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := f.publish(t, "publish-token", countersigned)
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("republishing the countersigned catalog answered %s", second.Status)
+	}
+	body, err := io.ReadAll(second.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope attest.Envelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Signatures) != 2 {
+		t.Fatalf("%d signatures after a re-run; it must stay publisher + notary", len(envelope.Signatures))
+	}
+	trusted := attest.NewTrustedKeys(f.publisherPub, f.notaryPub)
+	if _, signers, err := catalog.VerifySigners(&envelope, trusted, nil, time.Now().UTC()); err != nil || len(signers) != 2 {
+		t.Fatalf("the re-run output must still verify with both signers: %v, %v", signers, err)
+	}
+}
+
 func TestAWrongTokenPublishesNothing(t *testing.T) {
 	f := newFixture(t)
 
