@@ -131,7 +131,38 @@ type collected struct {
 
 // Build packages sourceDir into the canonical archive and returns its digest.
 func Build(sourceDir string, limits Limits) (*Archive, error) {
+	return BuildExcluding(sourceDir, limits)
+}
+
+// BuildExcluding packages sourceDir while omitting named entries at its root, in addition to
+// the always-reserved attestation.
+//
+// The extra exclusions exist for one situation and should not grow past it: comparing a tree
+// against a copy of itself that another program maintains. A Claude Code plugin cache is such
+// a copy — the client writes a runtime marker inside the installed directory and may install
+// dependencies there — so a like-for-like comparison has to leave out what the client owns on
+// both sides. Every exclusion is unsigned space, so each one has to be justified where it is
+// named, not here.
+func BuildExcluding(sourceDir string, limits Limits, excludeRoots ...string) (*Archive, error) {
+	return BuildFiltered(sourceDir, limits, nil, excludeRoots...)
+}
+
+// BuildFiltered additionally keeps only the members a filter accepts, by slash-separated
+// path relative to the root.
+//
+// The filter exists because a working directory is not what anyone receives. A publisher's
+// checkout carries build output and local scratch that git never ships and a consumer's
+// clone never has, so digesting the directory in front of the publisher describes a tree
+// that exists on exactly one machine. Passing the set of tracked files makes the signature
+// cover what a clone would contain, which is the only thing a consumer can reproduce.
+func BuildFiltered(
+	sourceDir string, limits Limits, keep func(string) bool, excludeRoots ...string,
+) (*Archive, error) {
 	limits = limits.withDefaults()
+	excluded := make(map[string]struct{}, len(excludeRoots))
+	for _, name := range excludeRoots {
+		excluded[foldCase(norm.NFC.String(name))] = struct{}{}
+	}
 
 	// Stat, not Lstat: the root is a path the caller handed us, and resolving it decides
 	// only where to start. Links *inside* the tree stay refused, because there they would
@@ -145,7 +176,7 @@ func Build(sourceDir string, limits Limits) (*Archive, error) {
 		return nil, failf(KindSource, "source %s is not a directory", sourceDir)
 	}
 
-	files, err := collectFiles(sourceDir, limits)
+	files, err := collectFiles(sourceDir, limits, excluded, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +205,9 @@ func Build(sourceDir string, limits Limits) (*Archive, error) {
 	}, nil
 }
 
-func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
+func collectFiles(
+	sourceDir string, limits Limits, excluded map[string]struct{}, keep func(string) bool,
+) ([]collected, error) {
 	registry := newPathRegistry()
 	var files []collected
 	var totalBytes int64
@@ -204,6 +237,9 @@ func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
 			// root, so that a directory or a symlink wearing that name is refused rather
 			// than descended into or reported as an ordinary symlink.
 			if directory == sourceDir {
+				if _, skip := excluded[foldCase(norm.NFC.String(entry.Name()))]; skip {
+					continue
+				}
 				switch reserved, exact := matchesAttestationName(entry.Name()); {
 				case reserved && !exact:
 					return failf(KindCollision,
@@ -241,6 +277,10 @@ func collectFiles(sourceDir string, limits Limits) ([]collected, error) {
 				return failf(KindEntryType,
 					"source entry %q has %d hard links; hard-linked files are denied",
 					relative, links)
+			}
+
+			if keep != nil && !keep(filepath.ToSlash(relative)) {
+				continue
 			}
 
 			if err := registry.registerFile(relative); err != nil {

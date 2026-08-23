@@ -45,6 +45,9 @@ const SnapshotVersion = 1
 type Managed struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
+	// Version is the version the client installs this under, which is part of the path the
+	// installed copy lives at. Without it the tree to verify cannot be named.
+	Version string `json:"version,omitempty"`
 	// Path is where the skill lives inside the catalog repository, when it is not the
 	// conventional skills/<name>.
 	Path string `json:"path,omitempty"`
