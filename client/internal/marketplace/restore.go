@@ -72,7 +72,7 @@ func signedTree(source string) (*archive.Archive, error) {
 	if tracked := trackedFiles(source); tracked != nil {
 		keep = func(path string) bool { _, ok := tracked[path]; return ok }
 	}
-	return archive.BuildFiltered(source, PluginLimits(), keep, ClientManagedRoots...)
+	return archive.BuildFiltered(source, PluginLimits(), keep, excludedRoots()...)
 }
 
 // quarantine moves a directory aside under a timestamped name, never replacing one already

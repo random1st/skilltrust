@@ -11,7 +11,6 @@ import (
 
 	"github.com/random1st/skilltrust/client/internal/attest"
 	"github.com/random1st/skilltrust/client/internal/catalog"
-	"github.com/random1st/skilltrust/client/internal/fleet"
 	"github.com/random1st/skilltrust/client/internal/source"
 )
 
@@ -138,89 +137,34 @@ func statePath(catalogName string) string {
 }
 
 // runSync brings every managed skill back to what its catalog publishes.
-func runSync(args []string) int {
-	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
-	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl sync [flags]\n\n"+
-			"Fetches every catalog you follow, verifies its signature, and reconciles the\n"+
-			"skills it manages. A managed skill that was changed here is put back and the\n"+
-			"copy that was there is kept. Nothing outside a catalog is touched.\n\n"+
-			"Exit codes: %d nothing to do, %d something changed, %d error.\n\nFlags:\n",
-			exitClean, exitFindings, exitUsage)
-		flags.PrintDefaults()
-	}
 
-	into := flags.String("into", "", "skills directory to manage (default ~/.agents/skills)")
-	dryRun := flags.Bool("dry-run", false, "report what would happen and change nothing")
-	offline := flags.Bool("offline", false, "use the catalogs already fetched, without network")
-
-	if err := parseArgs(flags, args); err != nil {
-		return exitUsage
+// shortCommit renders a commit for a person rather than for git.
+func shortCommit(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
 	}
-
-	subscriptions, err := loadSubscriptions()
-	if err != nil {
-		return fail(err)
-	}
-	if len(subscriptions) == 0 {
-		fmt.Fprintf(os.Stderr, "skillctl: no catalogs followed; subscribe to one with "+
-			"`skillctl subscribe <git-url> --key <publisher.pub>`\n")
-		return exitUsage
-	}
-
-	installRoot, err := installRoot(*into)
-	if err != nil {
-		return fail(err)
-	}
-	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
-	if err != nil {
-		return fail(err)
-	}
-
-	now := time.Now().UTC()
-	var all []fleet.Change
-	for _, subscription := range subscriptions {
-		changes, code := syncOne(subscription, trusted, installRoot, now, *dryRun, *offline)
-		if code != exitClean {
-			return code
-		}
-		all = append(all, changes...)
-	}
-
-	return reportSync(all, installRoot, *dryRun)
+	return commit
 }
 
-// fetchCatalog refreshes one catalog checkout from its repository.
+// fetchCatalog refreshes one marketplace checkout from its repository.
 func fetchCatalog(subscription Subscription) (source.Source, error) {
 	return source.Fetch(catalogRoot(), subscription.Name,
 		subscription.Repository, subscription.Ref)
 }
 
-// verifiedSnapshot loads the index from a catalog checkout and returns it only if every
-// check passes: signature, payload type, schema version, freshness, rollback resistance, and
-// that the signer is the key pinned for this catalog specifically.
+// readSnapshot loads a marketplace signature and returns it only if every check passes:
+// signature, payload type, schema version, freshness, rollback resistance, and that the
+// signer is the key pinned for this marketplace specifically.
 //
 // The last one is easy to leave out and expensive to leave out. Verifying against the whole
 // trusted set would let any publisher this machine trusts sign an index claiming another
-// organisation's skill names, and the machine would install their bytes under those names.
-func verifiedSnapshot(
-	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
-) (*catalog.Snapshot, error) {
-	return readSnapshot(subscription, trusted, now, true)
-}
-
-// readSnapshotOnly verifies without recording the sequence it saw.
+// organisation's plugin names, and the machine would then treat their bytes as authoritative
+// for those names.
 //
-// The recording is what makes rollback resistance work, and it must happen exactly where a
-// catalog is being adopted. It must not happen on a path that runs before every single skill
-// invocation: that would write a file on the critical path hundreds of times a session, and
-// worse, a check that only reads would start deciding what later checks are allowed to see.
-func readSnapshotOnly(
-	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
-) (*catalog.Snapshot, error) {
-	return readSnapshot(subscription, trusted, now, false)
-}
-
+// persist records the sequence that was seen, which is what makes rollback resistance work.
+// It belongs where a marketplace is adopted and must not happen on a path that runs before
+// every skill invocation: that would write a file on the critical path hundreds of times a
+// session, and a check that only reads would start deciding what later checks may see.
 func readSnapshot(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time, persist bool,
 ) (*catalog.Snapshot, error) {
@@ -254,91 +198,9 @@ func readSnapshot(
 	return snapshot, nil
 }
 
-func syncOne(
-	subscription Subscription, trusted *attest.TrustedKeys, installRoot string,
-	now time.Time, dryRun, offline bool,
-) ([]fleet.Change, int) {
-	if !offline {
-		if _, err := fetchCatalog(subscription); err != nil {
-			fmt.Fprintf(os.Stderr, "skillctl: cannot reach catalog %s: %v\n",
-				subscription.Name, err)
-			return nil, exitUsage
-		}
-	}
-
-	snapshot, err := verifiedSnapshot(subscription, trusted, now)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "skillctl: catalog %s did not verify, so nothing was "+
-			"changed: %v\n", subscription.Name, err)
-		return nil, exitUsage
-	}
-
-	state, err := fleet.LoadState(statePath(subscription.Name))
-	if err != nil {
-		return nil, fail(err)
-	}
-
-	changes, err := fleet.Reconcile(snapshot, state, fleet.Options{
-		SourceRoot:     source.Path(catalogRoot(), subscription.Name),
-		InstallRoot:    installRoot,
-		QuarantineRoot: quarantineRoot(),
-		DryRun:         dryRun,
-		Now:            now,
-	})
-	if err != nil {
-		return nil, fail(err)
-	}
-
-	if !dryRun {
-		state.Catalog, state.Sequence = subscription.Name, snapshot.Sequence
-		if err := state.Save(statePath(subscription.Name)); err != nil {
-			return nil, fail(err)
-		}
-	}
-	return changes, exitClean
-}
-
-func reportSync(changes []fleet.Change, installRoot string, dryRun bool) int {
-	acted, failed := 0, 0
-	for _, change := range changes {
-		if !change.Needed() {
-			continue
-		}
-		acted++
-		if change.Action == fleet.ActionFailed {
-			failed++
-		}
-		fmt.Printf("  %-11s %s\n", change.Action, change.Name)
-		if change.Reason != "" {
-			fmt.Printf("              %s\n", change.Reason)
-		}
-		if change.Action == fleet.ActionRolledBack {
-			fmt.Printf("              this copy had been changed on this machine\n")
-			fmt.Printf("              restored  %s\n", change.Now)
-			fmt.Printf("              was       %s\n", change.Was)
-		}
-		if change.Quarantine != "" {
-			fmt.Printf("              kept at   %s\n", change.Quarantine)
-		}
-		fmt.Println()
-	}
-
-	fmt.Printf("%d managed skill%s · %d changed", len(changes),
-		plural(len(changes), "", "s"), acted)
-	if failed > 0 {
-		fmt.Printf(" · %d failed", failed)
-	}
-	fmt.Printf("\nmanaged under %s; everything else there is yours and was not touched.\n",
-		installRoot)
-
-	if dryRun && acted > 0 {
-		fmt.Printf("\nNothing was changed. Run without --dry-run to apply.\n")
-	}
-	if failed > 0 {
-		return exitFindings
-	}
-	if acted > 0 {
-		return exitFindings
-	}
-	return exitClean
+// readSnapshotOnly verifies without recording the sequence it saw.
+func readSnapshotOnly(
+	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
+) (*catalog.Snapshot, error) {
+	return readSnapshot(subscription, trusted, now, false)
 }

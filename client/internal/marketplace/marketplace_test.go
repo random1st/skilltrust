@@ -237,3 +237,71 @@ func copyTree(t *testing.T, from, to string) {
 		t.Fatal(err)
 	}
 }
+
+// The marketplace signature lands inside the tree it signs whenever a plugin's source is the
+// repository root, which is the most natural single-plugin layout there is. The publisher
+// digests the tree, then writes the signature into it; a consumer cloning the repository
+// digests a tree containing a file the publisher's digest never saw.
+//
+// The symptom is not a failed check. It is a restore that never converges: the plugin is put
+// back, still mismatches, and is put back again every session, forever — while the report
+// says it is protecting you.
+func TestTheMarketplaceSignatureIsNotPartOfWhatItSigns(t *testing.T) {
+	root := t.TempDir()
+	directory := writePlugin(t, root, "demo", "1.0.0")
+
+	before, _, err := DigestPlugin(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, SignatureFileName),
+		[]byte(`{"payloadType":"x","payload":"y","signatures":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, _, err := DigestPlugin(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("writing the signature moved the identity it certifies:\n  %s\n  %s",
+			before, after)
+	}
+}
+
+// A restore has to land on exactly the digest that was signed, or the next check sees a
+// mismatch and restores again.
+func TestARestoreConvergesOnTheSignedDigest(t *testing.T) {
+	root := t.TempDir()
+	source := writePlugin(t, root, "demo", "1.0.0")
+	if err := os.WriteFile(filepath.Join(source, SignatureFileName), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	signed, _, err := DigestPlugin(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installed := filepath.Join(t.TempDir(), "cache", "acme", "demo", "1.0.0")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyTree(t, source, installed)
+	if err := os.WriteFile(filepath.Join(installed, "README.md"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	quarantineRoot := filepath.Join(t.TempDir(), "q")
+	now := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	if _, err := Restore(installed, source, quarantineRoot, "demo", now); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _, err := DigestPlugin(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != signed {
+		t.Fatalf("restore did not converge, so it would repeat every session:\n"+
+			"  signed   %s\n  restored %s", signed, after)
+	}
+}

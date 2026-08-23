@@ -214,6 +214,13 @@ func (s *State) Save(path string, sequence int64, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	// The sequence a machine has seen is often the first thing it records, before anything
+	// has created the directory to record it in. Failing there would leave the machine
+	// unable to adopt a catalog at all — and, worse, would surface as "this catalog could
+	// not be used" rather than as the missing directory it is.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
 	return writeFile(path, append(body, '\n'))
 }
 

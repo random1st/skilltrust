@@ -453,6 +453,13 @@ func Fingerprint(keyID string) string {
 // every previously pinned publisher to a hex string the first time a second one was added —
 // the kind of loss that is invisible until somebody has to work out whose key is whose.
 func PinKey(path, label string, public ed25519.PublicKey) error {
+	// Pinning a key is often the very first thing a machine does, before anything has
+	// created the home directory. Failing there would make subscribing to a marketplace
+	// impossible on a fresh machine, which is the only kind of machine that needs to.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+
 	document := trustedKeysFile{Version: 1, Keys: map[string]string{}}
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &document); err != nil {

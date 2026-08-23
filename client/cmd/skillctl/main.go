@@ -35,8 +35,7 @@ const usage = `skillctl - keep your organisation's skills the ones it published
 Following a catalog (on a machine):
   skillctl subscribe <git-url> --key <pub>
                                  follow an organisation's signed skill catalog
-  skillctl sync                  fetch, verify, and reconcile managed skills
-  skillctl status                what is managed here, and whether it matches
+  skillctl sync                  fetch, verify, and reconcile signed plugins
   skillctl hook <subcommand>     run or install the session-start reconciler
 
 Publishing a catalog (in a repository of skills):
@@ -69,8 +68,6 @@ func main() {
 		os.Exit(runSubscribe(os.Args[2:]))
 	case "init":
 		os.Exit(runInit(os.Args[2:]))
-	case "status":
-		os.Exit(runStatus(os.Args[2:]))
 	case "digest":
 		os.Exit(runDigest(os.Args[2:]))
 	case "hook":

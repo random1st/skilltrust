@@ -27,6 +27,25 @@ import (
 // coverage vendors its dependencies.
 var ClientManagedRoots = []string{".in_use", "node_modules", ".git"}
 
+// SignatureFileName is the marketplace's own signature, which cannot be part of what it
+// signs.
+//
+// This is the same chicken-and-egg as the per-skill attestation, one level up, and it bites
+// on the most natural layout there is: a marketplace whose single plugin is the repository
+// root. The signature is written into that root after the digest is taken, so a consumer
+// cloning the repository digests a tree containing a file the publisher's digest never saw.
+// The symptom is not a failed check but a restore that never converges — the plugin is put
+// back, still mismatches, and is put back again every session, forever.
+//
+// It is excluded at the root of a digested plugin only. Deeper in a tree the same name is
+// ordinary content, exactly as with the attestation.
+const SignatureFileName = "catalog.dsse.json"
+
+// excludedRoots are every entry left out of a plugin's identity.
+func excludedRoots() []string {
+	return append(append([]string{}, ClientManagedRoots...), SignatureFileName)
+}
+
 // PluginLimits bound a plugin tree, which is a different animal from a skill folder.
 //
 // The skill defaults assume instructions: a few files, a few kilobytes each. A plugin
@@ -52,7 +71,7 @@ func DigestPlugin(directory string) (string, bool, error) {
 	if tracked := trackedFiles(directory); tracked != nil {
 		keep = func(path string) bool { _, ok := tracked[path]; return ok }
 	}
-	built, err := archive.BuildFiltered(directory, PluginLimits(), keep, ClientManagedRoots...)
+	built, err := archive.BuildFiltered(directory, PluginLimits(), keep, excludedRoots()...)
 	if err != nil {
 		return "", false, err
 	}
