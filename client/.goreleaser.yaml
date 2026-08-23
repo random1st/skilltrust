@@ -64,6 +64,12 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+      # macOS ships as a zip because that is what Apple's notary service accepts —
+      # notarytool takes .zip, .pkg or .dmg and refuses a tarball. Found by running a real
+      # release: everything else passed and the submission was rejected at the last step,
+      # which is the only place this could have shown up.
+      - goos: darwin
+        formats: [zip]
     files:
       - LICENSE*
       - README*
