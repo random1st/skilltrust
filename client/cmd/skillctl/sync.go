@@ -42,6 +42,17 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 					fmt.Sprintf("%s could not be reached: %v", subscription.Name, err))
 				continue
 			}
+			// The notary's index and the repository's bytes are both required: the index
+			// alone can detect but not restore, and restoring from bytes the fresh index
+			// no longer names would fail the digest check anyway. Refusing on either
+			// failure keeps "checked" meaning checked.
+			if subscription.CatalogURL != "" {
+				if err := source.FetchIndex(subscription.CatalogURL, indexPath(subscription)); err != nil {
+					unusable = append(unusable,
+						fmt.Sprintf("%s: %v", subscription.Name, err))
+					continue
+				}
+			}
 		}
 		snapshot, err := readSnapshot(subscription, trusted, now, !offline)
 		if err != nil {

@@ -27,6 +27,13 @@ type Subscription struct {
 	Name       string `json:"name"`
 	Repository string `json:"repository"`
 	Ref        string `json:"ref,omitempty"`
+	// CatalogURL, when set, is where the signed index is fetched from instead of the
+	// repository — a notary service that countersigns and serves the catalog. The
+	// repository remains the source of the plugin bytes; splitting the two is what lets a
+	// revocation reach machines on the notary's schedule rather than the publisher's next
+	// push. The URL changes nothing about verification: the notary's signature counts only
+	// if its key is pinned here, like any other signer.
+	CatalogURL string `json:"catalog_url,omitempty"`
 	// KeyID is the single pinned key of a subscription made before thresholds existed. It is
 	// read but never written: KeyIDs is the field now, and dropping this would silently
 	// unsubscribe every machine that already follows something.
@@ -135,6 +142,8 @@ func runSubscribe(args []string) int {
 
 	name := flags.String("name", "", "short name for this catalog (default the repository name)")
 	ref := flags.String("ref", "", "branch or tag to follow (default the repository's HEAD)")
+	catalogURL := flags.String("catalog", "",
+		"HTTPS URL to fetch the signed index from (a notary service); the repository still provides the plugin bytes")
 	var keyPaths repeatedString
 	flags.Var(&keyPaths, "key",
 		"PEM public key allowed to sign this marketplace (repeatable)")
@@ -190,13 +199,22 @@ func runSubscribe(args []string) int {
 		return fail(err)
 	}
 
+	entry := Subscription{
+		Name: catalogName, Repository: repository, Ref: *ref, CatalogURL: *catalogURL,
+		KeyIDs: keyIDs, Threshold: *threshold,
+	}
+	// Fetch the index now rather than at the first sync: a subscription to an unreachable
+	// or misspelled notary should fail while the person who typed the URL is still looking
+	// at it, not during a hook run days later.
+	if entry.CatalogURL != "" {
+		if err := source.FetchIndex(entry.CatalogURL, indexPath(entry)); err != nil {
+			return fail(err)
+		}
+	}
+
 	subscriptions, err := loadSubscriptions()
 	if err != nil {
 		return fail(err)
-	}
-	entry := Subscription{
-		Name: catalogName, Repository: repository, Ref: *ref,
-		KeyIDs: keyIDs, Threshold: *threshold,
 	}
 	replaced := false
 	for index, existing := range subscriptions {
@@ -214,6 +232,9 @@ func runSubscribe(args []string) int {
 
 	fmt.Printf("catalog     %s\n", catalogName)
 	fmt.Printf("repository  %s @ %s\n", repository, shortCommit(fetched.Commit))
+	if entry.CatalogURL != "" {
+		fmt.Printf("index from  %s\n", entry.CatalogURL)
+	}
 	fmt.Printf("pinned keys %s\n", strings.Join(fingerprints(keyIDs), ", "))
 	fmt.Printf("threshold   %d of %d must sign\n\n", *threshold, len(keyIDs))
 	fmt.Printf("Next: skillctl sync --dry-run   — see what this catalog would change\n")
@@ -222,6 +243,19 @@ func runSubscribe(args []string) int {
 
 // catalogRoot is where catalog checkouts live, kept apart from anything the user edits.
 func catalogRoot() string { return Home() }
+
+// indexPath is where a subscription's signed index lives.
+//
+// A subscription with a notary keeps its index outside the git checkout on purpose: the
+// checkout is reset hard and cleaned on every fetch, which would silently discard a file
+// this tool wrote into it, and the failure would surface as "no usable catalog.dsse.json"
+// with nothing pointing at why.
+func indexPath(subscription Subscription) string {
+	if subscription.CatalogURL != "" {
+		return filepath.Join(Home(), "indexes", subscription.Name+".dsse.json")
+	}
+	return filepath.Join(source.Path(catalogRoot(), subscription.Name), CatalogFileName)
+}
 
 func quarantineRoot() string { return homePath("quarantine") }
 
@@ -261,8 +295,7 @@ func fetchCatalog(subscription Subscription) (source.Source, error) {
 func readSnapshot(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time, persist bool,
 ) (*catalog.Snapshot, error) {
-	checkout := source.Path(catalogRoot(), subscription.Name)
-	envelope, err := attest.LoadEnvelope(filepath.Join(checkout, CatalogFileName))
+	envelope, err := attest.LoadEnvelope(indexPath(subscription))
 	if err != nil {
 		return nil, fmt.Errorf("no usable %s: %w", CatalogFileName, err)
 	}
