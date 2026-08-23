@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
+	"github.com/random1st/skilltrust/internal/attest"
 )
 
 func fixture(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, time.Time) {

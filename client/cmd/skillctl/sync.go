@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/catalog"
-	"github.com/random1st/skilltrust/client/internal/marketplace"
-	"github.com/random1st/skilltrust/client/internal/source"
+	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/internal/catalog"
+	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/internal/source"
 )
 
 // reconcileAll runs every followed marketplace against this machine's plugin cache.

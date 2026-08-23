@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/marketplace"
-	"github.com/random1st/skilltrust/client/internal/source"
+	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/internal/source"
 )
 
 // exitDeny is the exit code a PreToolUse hook uses to refuse the tool call.

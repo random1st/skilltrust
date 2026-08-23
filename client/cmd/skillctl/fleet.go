@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/report"
+	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/internal/report"
 )
 
 // runFleet aggregates the events machines filed, into the view an administrator asks for.

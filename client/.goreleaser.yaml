@@ -13,7 +13,9 @@ project_name: skillctl
 before:
   hooks:
     - go mod tidy
-    - go test ./...
+    # The module path pattern, not ./...: the module root is the repository root and this
+    # runs from client/, where ./... would test the commands and skip internal/.
+    - go test github.com/random1st/skilltrust/...
 
 builds:
   - id: skillctl

@@ -12,7 +12,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/random1st/skilltrust/client/internal/lint"
+	"github.com/random1st/skilltrust/internal/lint"
 )
 
 // Build metadata, injected at release time with -ldflags.

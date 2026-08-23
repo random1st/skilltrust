@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/archive"
-	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/skillmd"
+	"github.com/random1st/skilltrust/internal/archive"
+	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/internal/skillmd"
 )
 
 const attestUsage = `Usage: skillctl attest <subcommand> [flags]

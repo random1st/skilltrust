@@ -277,10 +277,15 @@ distribution of a marketplace other than a git repository the machine can reach.
 
 ```
 action.yml     the GitHub Action that runs the gate
-client/        skillctl — the Go client. One static binary, two dependencies.
+client/        skillctl — the CLI. One static binary, two dependencies.
+internal/      the packages both sides are built from: digest, DSSE, catalog, reporting
 plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
 docs/          the threat model, and running the gate in other CIs
 ```
+
+The Go module lives at the root so that the notary service and the client verify with the
+same code. Two implementations of a digest agree until the day it matters; this layout
+makes a second one impossible to add by accident.
 
 There was once a Python control plane here, and documents describing four trust layers, a
 private ACME CA and a transparency log. None of it was built. It was removed rather than left

@@ -24,7 +24,7 @@ import (
 
 	"crypto/ed25519"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
+	"github.com/random1st/skilltrust/internal/attest"
 )
 
 // PayloadType keeps a catalog signature from being presented as an attestation, and the

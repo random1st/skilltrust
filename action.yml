@@ -47,8 +47,8 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version-file: ${{ github.action_path }}/client/go.mod
-        cache-dependency-path: ${{ github.action_path }}/client/go.sum
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.sum
 
     # Built from the action's own checkout rather than downloaded. A release asset would be
     # faster, but it would also mean the check that guards a repository is fetched over the

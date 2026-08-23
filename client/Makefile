@@ -11,14 +11,19 @@ build:
 
 check: fmt lint test
 
+# The module lives at the repository root and internal/ is shared with the server, so
+# ./... from this directory would quietly test the commands and skip every package they
+# are built from. The module path pattern covers the whole module from anywhere.
+MODULE := github.com/random1st/skilltrust/...
+
 fmt:
-	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+	@test -z "$$(gofmt -l . ../internal)" || (echo "gofmt needed:"; gofmt -l . ../internal; exit 1)
 
 lint:
-	go vet ./...
+	go vet $(MODULE)
 
 test:
-	go test -race -cover ./...
+	go test -race -cover $(MODULE)
 
 # Cross-compile every release target without publishing anything.
 snapshot:

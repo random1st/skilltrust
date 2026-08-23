@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
+	"github.com/random1st/skilltrust/internal/attest"
 	"os"
 	"path/filepath"
 	"sort"

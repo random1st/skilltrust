@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/random1st/skilltrust/client/internal/skillmd"
+	"github.com/random1st/skilltrust/internal/skillmd"
 )
 
 // invisibleRunes are characters a reviewer cannot see but the agent still reads. Bidi

@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/random1st/skilltrust/client/internal/attest"
+	"github.com/random1st/skilltrust/internal/attest"
 )
 
 func runInit(args []string) int {

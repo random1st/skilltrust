@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/archive"
+	"github.com/random1st/skilltrust/internal/archive"
 )
 
 // Restore replaces an installed plugin with the bytes its publisher signed, keeping what the

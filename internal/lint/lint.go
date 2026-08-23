@@ -14,7 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/random1st/skilltrust/client/internal/skillmd"
+	"github.com/random1st/skilltrust/internal/skillmd"
 )
 
 // Scan bounds. Large monorepos must not turn a lint run into a filesystem crawl.

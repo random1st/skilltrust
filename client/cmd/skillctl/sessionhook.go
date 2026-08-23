@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/marketplace"
+	"github.com/random1st/skilltrust/internal/marketplace"
 )
 
 // runHookSessionStart reconciles signed plugins as a session begins.

@@ -9,13 +9,13 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/client/internal/archive"
-	"github.com/random1st/skilltrust/client/internal/attest"
-	"github.com/random1st/skilltrust/client/internal/catalog"
-	"github.com/random1st/skilltrust/client/internal/lint"
-	"github.com/random1st/skilltrust/client/internal/marketplace"
-	"github.com/random1st/skilltrust/client/internal/skillmd"
-	"github.com/random1st/skilltrust/client/internal/source"
+	"github.com/random1st/skilltrust/internal/archive"
+	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/internal/catalog"
+	"github.com/random1st/skilltrust/internal/lint"
+	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/internal/skillmd"
+	"github.com/random1st/skilltrust/internal/source"
 )
 
 const catalogUsage = `Usage: skillctl catalog <subcommand> [flags]

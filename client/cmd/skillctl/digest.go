@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/random1st/skilltrust/client/internal/archive"
+	"github.com/random1st/skilltrust/internal/archive"
 )
 
 // runDigest computes the canonical identity of a directory.

@@ -1,4 +1,4 @@
-module github.com/random1st/skilltrust/client
+module github.com/random1st/skilltrust
 
 go 1.26
 

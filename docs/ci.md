@@ -113,7 +113,9 @@ verify-marketplace:
     - changes: [plugins/**/*, .claude-plugin/**/*, catalog.dsse.json]
   script:
     - git clone --depth 1 --branch v0.1.0 https://github.com/random1st/skilltrust /tmp/skilltrust
-    - go build -trimpath -o /tmp/skillctl /tmp/skilltrust/client/cmd/skillctl
+    # Build from inside the clone: go resolves the module from the working directory,
+    # so a path into somebody else's checkout fails with "go.mod file not found".
+    - (cd /tmp/skilltrust/client && go build -trimpath -o /tmp/skillctl ./cmd/skillctl)
     - /tmp/skillctl catalog verify . --key catalog.pub
 ```
 
@@ -122,7 +124,7 @@ Make it a required job for the merge request, not merely a job that runs.
 ## Jenkins, Buildkite, Bamboo, anything else
 
 ```groovy
-sh 'go build -trimpath -o skillctl ./skilltrust/client/cmd/skillctl'
+sh 'cd skilltrust/client && go build -trimpath -o "${WORKSPACE}/skillctl" ./cmd/skillctl'
 sh './skillctl catalog verify . --key catalog.pub'
 ```
 
