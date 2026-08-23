@@ -81,11 +81,12 @@ jobs:
       # goes on PATH and a non-executable shim would resolve to nothing.
       - name: The Claude Code plugin assembles
         run: |
-          make -C client plugin VERSION=ci
-          test -x plugin/bin/skillctl
+          make plugin VERSION=ci
+          test -x ../plugin/bin/skillctl
+          test -f ../plugin/bin/skillctl.cmd
           for pair in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
-            test -x "plugin/bin/skillctl-${pair}" || { echo "missing ${pair}"; exit 1; }
+            test -x "../plugin/bin/skillctl-${pair}" || { echo "missing ${pair}"; exit 1; }
           done
-          test -f plugin/bin/skillctl-windows-amd64.exe
-          ./plugin/bin/skillctl-linux-amd64 version >/dev/null 2>&1 || true
+          test -f ../plugin/bin/skillctl-windows-amd64.exe
+          ../plugin/bin/skillctl version
           echo "plugin assembled"
