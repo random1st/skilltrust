@@ -17,7 +17,7 @@ check: fmt lint test
 MODULE := github.com/random1st/skilltrust/...
 
 fmt:
-	@test -z "$$(gofmt -l . ../internal)" || (echo "gofmt needed:"; gofmt -l . ../internal; exit 1)
+	@test -z "$$(gofmt -l . ../internal ../server)" || (echo "gofmt needed:"; gofmt -l . ../internal ../server; exit 1)
 
 lint:
 	go vet $(MODULE)
