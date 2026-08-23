@@ -275,9 +275,10 @@ distribution of a marketplace other than a git repository the machine can reach.
 ## Layout
 
 ```
+action.yml     the GitHub Action that runs the gate
 client/        skillctl — the Go client. One static binary, two dependencies.
 plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
-docs/          the threat model
+docs/          the threat model, and running the gate in other CIs
 ```
 
 There was once a Python control plane here, and documents describing four trust layers, a

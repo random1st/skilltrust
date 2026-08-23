@@ -145,33 +145,52 @@ func Verify(
 	state *State,
 	now time.Time,
 ) (*Snapshot, string, error) {
-	payload, keyID, err := attest.VerifyPayload(envelope, PayloadType, trusted)
+	snapshot, signers, err := VerifySigners(envelope, trusted, state, now)
 	if err != nil {
 		return nil, "", err
+	}
+	return snapshot, signers[0], nil
+}
+
+// VerifySigners is Verify, reporting every trusted key that signed rather than the first.
+//
+// A caller that requires more than one signature needs the whole set: knowing that somebody
+// trusted signed says the bytes are intact, and says nothing about how many people agreed to
+// them. That is the difference between an index anyone with one stolen key can publish and
+// one that needs a second person.
+func VerifySigners(
+	envelope *attest.Envelope,
+	trusted *attest.TrustedKeys,
+	state *State,
+	now time.Time,
+) (*Snapshot, []string, error) {
+	payload, signers, err := attest.VerifyPayloadSigners(envelope, PayloadType, trusted)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var snapshot Snapshot
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
-		return nil, "", fmt.Errorf("%w: %v", ErrBadSnapshot, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrBadSnapshot, err)
 	}
 	if snapshot.Version != SnapshotVersion {
-		return nil, "", fmt.Errorf("%w: version %d", ErrUnknownVersion, snapshot.Version)
+		return nil, nil, fmt.Errorf("%w: version %d", ErrUnknownVersion, snapshot.Version)
 	}
 
 	if snapshot.IssuedAt.After(now.Add(clockSkew)) {
-		return nil, "", fmt.Errorf("%w: issued %s, now %s",
+		return nil, nil, fmt.Errorf("%w: issued %s, now %s",
 			ErrFromFuture, snapshot.IssuedAt.Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	if !now.Before(snapshot.ValidUntil) {
-		return nil, "", fmt.Errorf("%w: valid until %s, now %s",
+		return nil, nil, fmt.Errorf("%w: valid until %s, now %s",
 			ErrExpired, snapshot.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	if state != nil && snapshot.Sequence < state.Sequence {
-		return nil, "", fmt.Errorf("%w: seen %d, offered %d",
+		return nil, nil, fmt.Errorf("%w: seen %d, offered %d",
 			ErrRolledBack, state.Sequence, snapshot.Sequence)
 	}
 
-	return &snapshot, keyID, nil
+	return &snapshot, signers, nil
 }
 
 // State is the highest catalog sequence this machine has accepted.

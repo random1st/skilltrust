@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -16,7 +17,8 @@ import (
 
 const marketplaceUsage = `Usage: skillctl marketplace <subcommand> [flags]
 
-  sign    sign the plugins a Claude Code marketplace repository owns
+  sign         sign the plugins a Claude Code marketplace repository owns
+  countersign  add a second signature to an index somebody else signed
   verify  check installed plugins against the marketplace's signature
 
 `
@@ -29,6 +31,8 @@ func runMarketplace(args []string) int {
 	switch args[0] {
 	case "sign":
 		return runMarketplaceSign(args[1:])
+	case "countersign":
+		return runMarketplaceCountersign(args[1:])
 	case "verify":
 		return runMarketplaceVerify(args[1:])
 	default:
@@ -399,4 +403,86 @@ func marketplaceSnapshots(repo, keyPath string) (map[string]*catalog.Snapshot, i
 		snapshots[snapshot.Name] = snapshot
 	}
 	return snapshots, exitClean
+}
+
+// runMarketplaceCountersign adds a signature to an index another key already signed.
+//
+// This is the second half of a threshold, and it is a separate command because it is a
+// separate act: signing says these are the bytes I publish, countersigning says I have looked
+// at what you published and agree. Folding it into `sign` would let one person do both from
+// one machine, which is the arrangement a threshold exists to prevent.
+//
+// The payload is never re-serialized. Both signatures cover the same bytes, so a verifier is
+// comparing agreement about one document rather than two encodings of it.
+func runMarketplaceCountersign(args []string) int {
+	flags := flag.NewFlagSet("marketplace countersign", flag.ContinueOnError)
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(),
+			"Usage: skillctl marketplace countersign [flags] [repository]\n\n"+
+				"Adds your signature to %s without changing what it says. Verify what it\n"+
+				"covers first: countersigning is agreement, not a formality.\n\n"+
+				"Exit codes: %d signed, %d error.\n\nFlags:\n",
+			CatalogFileName, exitClean, exitUsage)
+		flags.PrintDefaults()
+	}
+
+	keyPath := flags.String("key", defaultSigningKey(), "your signing key")
+	expect := flags.String("expect-sequence", "",
+		"refuse unless the index is at this sequence, so a republish cannot slip past review")
+
+	if err := parseArgs(flags, args); err != nil {
+		return exitUsage
+	}
+	repository := flags.Arg(0)
+	if repository == "" {
+		repository = "."
+	}
+	repository, err := filepath.Abs(repository)
+	if err != nil {
+		return fail(err)
+	}
+
+	indexPath := filepath.Join(repository, CatalogFileName)
+	envelope, err := attest.LoadEnvelope(indexPath)
+	if err != nil {
+		return fail(err)
+	}
+
+	// Read what is being agreed to, without verifying against any particular key: the point
+	// here is to show the reviewer the contents, and their own signature is the assertion.
+	payload, err := envelope.DecodedPayload()
+	if err != nil {
+		return fail(err)
+	}
+	var snapshot catalog.Snapshot
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return fail(err)
+	}
+	if *expect != "" && *expect != fmt.Sprint(snapshot.Sequence) {
+		fmt.Fprintf(os.Stderr, "skillctl: the index is at sequence %d, not %s; refusing to "+
+			"sign something other than what you reviewed\n", snapshot.Sequence, *expect)
+		return exitUsage
+	}
+
+	key, err := attest.LoadPrivateKey(*keyPath)
+	if err != nil {
+		return fail(err)
+	}
+	if err := attest.Countersign(envelope, key); err != nil {
+		return fail(err)
+	}
+	if err := envelope.Save(indexPath); err != nil {
+		return fail(err)
+	}
+
+	fmt.Printf("marketplace %s\n", snapshot.Name)
+	fmt.Printf("sequence    %d\n", snapshot.Sequence)
+	fmt.Printf("covers      %d plugin%s\n", len(snapshot.Skills),
+		plural(len(snapshot.Skills), "", "s"))
+	fmt.Printf("signatures  %d\n\n", len(envelope.Signatures))
+	for _, managed := range snapshot.Skills {
+		fmt.Printf("  %s  %-28s %s\n", shortDigest(managed.Digest), managed.Name, managed.Version)
+	}
+	fmt.Printf("\nCommit %s.\n", CatalogFileName)
+	return exitClean
 }

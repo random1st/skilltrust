@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/client/internal/attest"
@@ -26,7 +27,71 @@ type Subscription struct {
 	Name       string `json:"name"`
 	Repository string `json:"repository"`
 	Ref        string `json:"ref,omitempty"`
-	KeyID      string `json:"key_id"`
+	// KeyID is the single pinned key of a subscription made before thresholds existed. It is
+	// read but never written: KeyIDs is the field now, and dropping this would silently
+	// unsubscribe every machine that already follows something.
+	KeyID string `json:"key_id,omitempty"`
+	// KeyIDs are the keys allowed to sign this marketplace's index.
+	KeyIDs []string `json:"key_ids,omitempty"`
+	// Threshold is how many distinct pinned keys must have signed. One is the default and is
+	// enough to know the bytes are intact; more is what makes a single stolen key, or a CI
+	// job that can reach one, insufficient to publish.
+	//
+	// The consumer sets it, never the publisher. A publisher whose key was stolen would
+	// declare a threshold of one, so a threshold a catalog carries about itself protects
+	// nobody.
+	Threshold int `json:"threshold,omitempty"`
+}
+
+// Keys returns every key allowed to sign for this subscription.
+func (s Subscription) Keys() []string {
+	if len(s.KeyIDs) > 0 {
+		return s.KeyIDs
+	}
+	if s.KeyID != "" {
+		return []string{s.KeyID}
+	}
+	return nil
+}
+
+// Required is how many distinct signers must be present.
+func (s Subscription) Required() int {
+	if s.Threshold > 1 {
+		return s.Threshold
+	}
+	return 1
+}
+
+// Satisfied reports whether the keys that signed meet this subscription's requirement, and
+// says what was missing when they do not.
+func (s Subscription) Satisfied(signers []string) error {
+	allowed := map[string]struct{}{}
+	for _, key := range s.Keys() {
+		allowed[key] = struct{}{}
+	}
+	matched := 0
+	for _, signer := range signers {
+		if _, ok := allowed[signer]; ok {
+			matched++
+		}
+	}
+	if matched >= s.Required() {
+		return nil
+	}
+	if matched == 0 {
+		return fmt.Errorf("signed by %s, none of which this machine pinned for %s",
+			strings.Join(fingerprints(signers), ", "), s.Name)
+	}
+	return fmt.Errorf("%d of the %d signatures %s requires are present",
+		matched, s.Required(), s.Name)
+}
+
+func fingerprints(keys []string) []string {
+	short := make([]string, 0, len(keys))
+	for _, key := range keys {
+		short = append(short, attest.Fingerprint(key))
+	}
+	return short
 }
 
 func subscriptionsPath() string { return homePath("catalogs.json") }
@@ -70,13 +135,23 @@ func runSubscribe(args []string) int {
 
 	name := flags.String("name", "", "short name for this catalog (default the repository name)")
 	ref := flags.String("ref", "", "branch or tag to follow (default the repository's HEAD)")
-	keyPath := flags.String("key", "", "PEM public key of the catalog publisher (required)")
+	var keyPaths repeatedString
+	flags.Var(&keyPaths, "key",
+		"PEM public key allowed to sign this marketplace (repeatable)")
+	threshold := flags.Int("threshold", 1,
+		"how many distinct pinned keys must have signed; more than one makes a single stolen key insufficient")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
-	if flags.NArg() != 1 || *keyPath == "" {
+	if flags.NArg() != 1 || len(keyPaths) == 0 {
 		flags.Usage()
+		return exitUsage
+	}
+	if *threshold > len(keyPaths) {
+		fmt.Fprintf(os.Stderr, "skillctl: --threshold %d needs at least that many --key "+
+			"arguments; a requirement no set of keys can meet would refuse every index\n",
+			*threshold)
 		return exitUsage
 	}
 
@@ -86,14 +161,28 @@ func runSubscribe(args []string) int {
 		catalogName = source.NameFor(repository)
 	}
 
-	public, err := attest.LoadPublicKey(*keyPath)
-	if err != nil {
-		return fail(err)
+	var keyIDs []string
+	for index, path := range keyPaths {
+		public, err := attest.LoadPublicKey(path)
+		if err != nil {
+			return fail(err)
+		}
+		label := "catalog:" + catalogName
+		if len(keyPaths) > 1 {
+			label = fmt.Sprintf("%s:%d", label, index+1)
+		}
+		if err := attest.PinKey(defaultTrustedKeys(), label, public); err != nil {
+			return fail(err)
+		}
+		keyIDs = append(keyIDs, attest.KeyID(public))
 	}
-	keyID := attest.KeyID(public)
 
-	if err := attest.PinKey(defaultTrustedKeys(), "catalog:"+catalogName, public); err != nil {
+	// A machine that follows a marketplace will file reports about it, and a key it does not
+	// have yet turns the first real incident into "no machine key" instead of an alert.
+	if _, _, created, err := ensureSigningKey(gitIdentity()); err != nil {
 		return fail(err)
+	} else if created {
+		fmt.Printf("machine key %s\n", attest.Fingerprint(mustKeyID()))
 	}
 
 	fetched, err := source.Fetch(catalogRoot(), catalogName, repository, *ref)
@@ -105,16 +194,19 @@ func runSubscribe(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	entry := Subscription{
+		Name: catalogName, Repository: repository, Ref: *ref,
+		KeyIDs: keyIDs, Threshold: *threshold,
+	}
 	replaced := false
 	for index, existing := range subscriptions {
 		if existing.Name == catalogName {
-			subscriptions[index] = Subscription{catalogName, repository, *ref, keyID}
+			subscriptions[index] = entry
 			replaced = true
 		}
 	}
 	if !replaced {
-		subscriptions = append(subscriptions,
-			Subscription{catalogName, repository, *ref, keyID})
+		subscriptions = append(subscriptions, entry)
 	}
 	if err := saveSubscriptions(subscriptions); err != nil {
 		return fail(err)
@@ -122,7 +214,8 @@ func runSubscribe(args []string) int {
 
 	fmt.Printf("catalog     %s\n", catalogName)
 	fmt.Printf("repository  %s @ %s\n", repository, shortCommit(fetched.Commit))
-	fmt.Printf("pinned key  %s\n\n", attest.Fingerprint(keyID))
+	fmt.Printf("pinned keys %s\n", strings.Join(fingerprints(keyIDs), ", "))
+	fmt.Printf("threshold   %d of %d must sign\n\n", *threshold, len(keyIDs))
 	fmt.Printf("Next: skillctl sync --dry-run   — see what this catalog would change\n")
 	return exitClean
 }
@@ -178,13 +271,12 @@ func readSnapshot(
 	if err != nil {
 		return nil, err
 	}
-	snapshot, keyID, err := catalog.Verify(envelope, trusted, sequenceState, now)
+	snapshot, signers, err := catalog.VerifySigners(envelope, trusted, sequenceState, now)
 	if err != nil {
 		return nil, err
 	}
-	if keyID != subscription.KeyID {
-		return nil, fmt.Errorf("signed by %s but subscribed with %s",
-			attest.Fingerprint(keyID), attest.Fingerprint(subscription.KeyID))
+	if err := subscription.Satisfied(signers); err != nil {
+		return nil, err
 	}
 	if persist {
 		if err := sequenceState.Save(
@@ -203,4 +295,23 @@ func readSnapshotOnly(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
 ) (*catalog.Snapshot, error) {
 	return readSnapshot(subscription, trusted, now, false)
+}
+
+// repeatedString collects a flag given more than once, in the order it was given.
+type repeatedString []string
+
+func (r *repeatedString) String() string { return strings.Join(*r, ", ") }
+
+func (r *repeatedString) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
+// mustKeyID reports this machine's key fingerprint, or an empty string if it cannot be read.
+func mustKeyID() string {
+	public, err := attest.LoadPublicKey(defaultPublicKey())
+	if err != nil {
+		return ""
+	}
+	return attest.KeyID(public)
 }
