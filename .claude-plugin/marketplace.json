@@ -1,0 +1,15 @@
+{
+  "name": "skilltrust",
+  "owner": {
+    "name": "SkillTrust"
+  },
+  "plugins": [
+    {
+      "name": "skilltrust",
+      "source": "./plugin",
+      "description": "Verify, restore and revoke the plugins your organisation signed.",
+      "category": "security"
+    }
+  ],
+  "description": "Signed plugins for Claude Code: verify what was installed, put back what changed, refuse what was revoked."
+}

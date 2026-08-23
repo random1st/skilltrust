@@ -1,7 +1,7 @@
 # skillctl — the SkillTrust client
 #
 # Everything here runs offline. `make check` is what CI runs.
-.PHONY: build check fmt lint test snapshot install clean release notarize
+.PHONY: build check fmt lint test snapshot install clean release notarize plugin
 
 GOFLAGS ?=
 VERSION ?= dev
@@ -51,3 +51,23 @@ notarize:
 
 clean:
 	rm -rf bin dist
+
+# Assemble the Claude Code plugin: one binary per platform, chosen at run time by bin/skillctl.
+#
+# The binaries are build output and are not committed. A marketplace serves this plugin either
+# from a repository that ran this target in CI, or from a release archive; committing ~40 MB of
+# executables to keep `git clone` self-contained would make every unrelated change to this
+# repository expensive forever.
+PLUGIN_BIN := ../plugin/bin
+PLUGIN_TARGETS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
+
+plugin:
+	@for target in $(PLUGIN_TARGETS); do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		out="$(PLUGIN_BIN)/skillctl-$${os}-$${arch}"; \
+		if [ "$${os}" = "windows" ]; then out="$${out}.exe"; fi; \
+		echo "  $${os}/$${arch}"; \
+		GOOS=$${os} GOARCH=$${arch} CGO_ENABLED=0 go build -trimpath \
+			-ldflags "-s -w -X main.version=$(VERSION)" -o "$${out}" ./cmd/skillctl || exit 1; \
+	done
+	@echo "plugin assembled in $(PLUGIN_BIN)"

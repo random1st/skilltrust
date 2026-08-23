@@ -1,0 +1,7 @@
+{
+  "name": "skilltrust",
+  "version": "0.1.0",
+  "description": "Verifies that the plugins Claude Code installed are still the bytes your organisation signed, puts back any that changed, and refuses revoked ones.",
+  "author": { "name": "SkillTrust" },
+  "homepage": "https://github.com/random1st/skilltrust"
+}

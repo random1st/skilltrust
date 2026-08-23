@@ -51,6 +51,20 @@ skillctl marketplace sign ./acme-marketplace
 
 ## For the machine
 
+SkillTrust ships as a Claude Code plugin, so there is nothing to wire by hand:
+
+```
+/plugin marketplace add acme/skilltrust
+/plugin install skilltrust@skilltrust
+```
+
+The plugin puts `skillctl` on the session's `PATH` and brings its own hooks. Every hook is
+guarded by `command -v skillctl`, so a platform without a build degrades to one line at
+session start rather than a failing hook on every skill invocation — a security check that
+breaks the session is a security check people remove.
+
+Then point it at the marketplace you want verified:
+
 ```bash
 skillctl subscribe git@github.com:acme/marketplace.git --key acme.pub
 skillctl sync
@@ -172,8 +186,7 @@ Working: marketplace signing with honest coverage reporting, verification of the
 plugin cache, restore with quarantine, revocation by digest, subscription with a pinned key,
 both hooks, a CI gate, `lint`, `digest`.
 
-Not built: shipping SkillTrust as a Claude Code plugin, so installing it is `/plugin install`
-rather than wiring hooks by hand; `managed-settings.json` guidance, which is the only place
+Not built: `managed-settings.json` guidance, which is the only place
 this becomes enforcement rather than detection; a fleet view of which machines are on which
 sequence; multiple signatures per marketplace.
 

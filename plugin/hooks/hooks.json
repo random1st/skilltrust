@@ -1,0 +1,29 @@
+{
+  "description": "Every command is guarded by `command -v skillctl`. The plugin puts its own binary on PATH, but a platform without one, or an install that has not been reloaded yet, must degrade to a single line at session start rather than a failing hook on every skill invocation. A security check that breaks the session is a security check people remove.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook session-start; else echo 'skilltrust: no skillctl binary for this platform; see https://github.com/random1st/skilltrust'; fi",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook pre-skill; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

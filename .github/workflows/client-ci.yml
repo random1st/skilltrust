@@ -75,3 +75,17 @@ jobs:
             GOOS="${pair%/*}" GOARCH="${pair#*/}" go build ./... || exit 1
             echo "  ${pair} ok"
           done
+      # The plugin is how this reaches a machine, so its assembly is part of the build
+      # rather than something discovered broken at release time. The shims are checked for
+      # the property that actually matters: that they are executable, since a plugin's bin/
+      # goes on PATH and a non-executable shim would resolve to nothing.
+      - name: The Claude Code plugin assembles
+        run: |
+          make -C client plugin VERSION=ci
+          test -x plugin/bin/skillctl
+          for pair in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+            test -x "plugin/bin/skillctl-${pair}" || { echo "missing ${pair}"; exit 1; }
+          done
+          test -f plugin/bin/skillctl-windows-amd64.exe
+          ./plugin/bin/skillctl-linux-amd64 version >/dev/null 2>&1 || true
+          echo "plugin assembled"
