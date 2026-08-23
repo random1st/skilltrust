@@ -41,6 +41,7 @@ Following a catalog (on a machine):
 Publishing a catalog (in a repository of skills):
   skillctl init                  create the signing key this machine publishes with
   skillctl marketplace sign      sign the plugins a Claude Code marketplace owns
+  skillctl policy                print the managed settings that make this binding
   skillctl catalog publish       sign the index of skills the repository publishes
   skillctl catalog revoke        revoke digests in that index
   skillctl catalog show          verify an index and print it
@@ -62,6 +63,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "policy":
+		os.Exit(runPolicy(os.Args[2:]))
 	case "marketplace":
 		os.Exit(runMarketplace(os.Args[2:]))
 	case "subscribe":

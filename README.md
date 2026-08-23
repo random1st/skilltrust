@@ -119,12 +119,48 @@ reported loudly, and exit `3` never shares a code with exit `0`.
 Installing whatever is in the checkout because the URL was right is the substitution the
 signature exists to prevent.
 
+## Making it binding
+
+On its own this is detection: anything able to edit a plugin can edit the hook that checks
+it, and Claude Code documents that a hook which times out does not block. That changes when
+an organisation deploys a policy, because managed settings live in a system directory a
+developer cannot write to and nothing they set overrides them.
+
+```bash
+skillctl policy --marketplace acme --repo acme/claude-plugins --lockdown
+```
+
+It prints; it does not install. A policy a machine can grant itself is not a policy — deploy
+it with whatever already places files on your fleet:
+
+| | |
+| --- | --- |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux | `/etc/claude-code/managed-settings.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+What each key is there for:
+
+| Key | Why |
+| --- | --- |
+| `enabledPlugins` | Forces SkillTrust on. A check a developer can switch off is a suggestion. |
+| `allowManagedHooksOnly` | Only hooks a managed source declares may run — this is what stops the check being removed by the machine it checks. |
+| `strictPluginOnlyCustomization` | Skills, agents, hooks and MCP servers may come only from plugins. Without it a skill in `~/.claude/skills` runs with no signature at all and the rest is decoration. |
+| `disableSideloadFlags` | `--plugin-dir` and `--plugin-url` would otherwise load a plugin for one run. |
+| `disableCommandPluginSources` | A command source fetches its plugin by running a command, which a marketplace allowlist does not constrain. |
+| `extraKnownMarketplaces` | Registers your marketplace so a fresh machine has it without anyone typing a command. |
+| `strictKnownMarketplaces` | With `--lockdown`, only yours may be added — including instead of Anthropic's official one. |
+
+Run `/status` in Claude Code to confirm: the "Setting sources" line names the managed source
+when a policy is in force.
+
+Policy and signatures answer different questions and neither replaces the other. Policy
+decides what may run; signatures decide whether what runs is what you published.
+
 ## What this does not claim
 
-**It is not enforcement on a laptop.** Anything able to edit a skill can edit the hook that
-checks it, and the client documents that a hook which times out does not block. Real
-enforcement needs a boundary the developer does not own — CI, or OS/MDM-managed
-configuration. This tells you what happened and undoes it; it does not prevent it.
+**Without a managed policy it is detection, not enforcement.** On an unmanaged laptop the
+hook is a convention, and a convention can be edited by whoever can edit the thing it guards.
 
 **`lint` is not a safety verdict.** It reports indicators for a human. No static check can
 certify prose an agent will follow.
@@ -139,6 +175,7 @@ certify prose an agent will follow.
 | `init` | publisher | Create the signing key. |
 | `marketplace sign` | publisher | Sign the plugins a Claude Code marketplace owns. |
 | `marketplace verify` | either | Check installed plugins against a signature. |
+| `policy` | publisher | Print the managed settings that make the check binding. |
 | `catalog publish` | publisher | Sign an index of skills in a plain repository. |
 | `catalog revoke` | publisher | Revoke digests in that index. |
 | `catalog verify` | publisher | Check the index still names what the repository holds. Use in CI. |
@@ -186,9 +223,9 @@ Working: marketplace signing with honest coverage reporting, verification of the
 plugin cache, restore with quarantine, revocation by digest, subscription with a pinned key,
 both hooks, a CI gate, `lint`, `digest`.
 
-Not built: `managed-settings.json` guidance, which is the only place
-this becomes enforcement rather than detection; a fleet view of which machines are on which
-sequence; multiple signatures per marketplace.
+Not built: a fleet view of which machines are on which sequence; multiple signatures per
+marketplace; any distribution of a marketplace other than a git repository the machine can
+reach.
 
 ## Licence
 
