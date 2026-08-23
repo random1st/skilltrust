@@ -25,7 +25,11 @@ if ! xcrun notarytool history --keychain-profile "${profile}" >/dev/null 2>&1; t
 fi
 
 found=0
-for archive in "${directory}"/*darwin*.tar.gz; do
+# .zip, because notarytool accepts only .zip/.pkg/.dmg and goreleaser packages darwin as
+# zip for exactly that reason. When this globbed *.tar.gz after that switch it matched
+# nothing and the found=0 guard below is what turned the mismatch into an error instead
+# of a silent success.
+for archive in "${directory}"/*darwin*.zip; do
     [ -e "${archive}" ] || continue
     found=$((found + 1))
     echo "notarize-macos: submitting ${archive}"
