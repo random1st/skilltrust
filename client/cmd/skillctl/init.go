@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"flag"
 	"fmt"
 	"os"
@@ -50,8 +49,11 @@ func runInit(args []string) int {
 	if err := attest.WritePublicKey(defaultPublicKey(), public); err != nil {
 		return fail(err)
 	}
-	if err := attest.SaveTrustedKeys(defaultTrustedKeys(),
-		map[string]ed25519.PublicKey{identity: public}); err != nil {
+	// Pin, never replace. A machine that already follows marketplaces has their publisher
+	// keys here, and writing a fresh file over them would silently unsubscribe it from
+	// every one — which surfaces not as an error but as "no signature from a trusted key"
+	// on the next check, reported as though the catalogs themselves had gone bad.
+	if err := attest.PinKey(defaultTrustedKeys(), identity, public); err != nil {
 		return fail(err)
 	}
 

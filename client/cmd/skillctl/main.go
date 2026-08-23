@@ -42,6 +42,7 @@ Publishing a catalog (in a repository of skills):
   skillctl init                  create the signing key this machine publishes with
   skillctl marketplace sign      sign the plugins a Claude Code marketplace owns
   skillctl policy                print the managed settings that make this binding
+  skillctl fleet <dir>           summarise the signed events your machines filed
   skillctl catalog publish       sign the index of skills the repository publishes
   skillctl catalog revoke        revoke digests in that index
   skillctl catalog show          verify an index and print it
@@ -63,6 +64,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "fleet":
+		os.Exit(runFleet(os.Args[2:]))
 	case "policy":
 		os.Exit(runPolicy(os.Args[2:]))
 	case "marketplace":

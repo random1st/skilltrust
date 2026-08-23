@@ -93,6 +93,9 @@ func runSync(args []string) int {
 	if code != exitClean {
 		return code
 	}
+	if !*report {
+		recordEvents(results, unusable, time.Now().UTC())
+	}
 	return writeReconcileReport(results, unusable, home, *report)
 }
 

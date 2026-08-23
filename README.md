@@ -157,6 +157,50 @@ when a policy is in force.
 Policy and signatures answer different questions and neither replaces the other. Policy
 decides what may run; signatures decide whether what runs is what you published.
 
+## Hearing about it
+
+An incident only the developer it happened to can see is not an incident anyone acts on.
+Every restore, revocation and unverifiable check produces an event, signed by the machine that
+filed it, and sent wherever you already look:
+
+```json
+{
+  "machine": "laptop-roman",
+  "destinations": [
+    { "kind": "webhook", "url": "https://hooks.slack.com/services/…" },
+    { "kind": "command", "command": ["logger", "-t", "skilltrust"] },
+    { "kind": "file", "directory": "/Volumes/security/skilltrust" }
+  ]
+}
+```
+
+That is `~/.skilltrust/reporting.json`, placed by the same configuration management that
+places the policy. A webhook receives a `text` line a Slack hook can render and the whole
+event beside it for a SIEM that reads every field; `command` is the escape hatch that reaches
+any transport you already run without this project growing an integration for each.
+
+Reporting is an output and never an input. If the network is gone, a tampered plugin is still
+detected and still put back — only the telling is delayed, and the event waits in a local
+spool rather than being lost. A check that needs a server to reach a verdict fails open the
+first time the server is unreachable, which is exactly when it matters.
+
+```
+$ skillctl fleet /Volumes/security/skilltrust
+laptop-roman
+  last report      2026-08-23T10:26:22Z
+  restored         4
+  catalog-unusable 1
+    08-23 10:26  s5d was changed on laptop-roman and put back to what s5d publishes
+
+1 machine reporting · 5 events
+1 file refused: not signed by a machine in ~/.skilltrust/trusted-keys.json
+```
+
+A console starts as a reader over signed files you already have: no service to run, no
+database, no port to defend. Reports that no trusted machine signed are refused rather than
+counted — an aggregate built from unverifiable rows looks like evidence and is not. A hosted
+console can be built on this later; what it cannot be built on is a fleet that never reported.
+
 ## What this does not claim
 
 **Without a managed policy it is detection, not enforcement.** On an unmanaged laptop the
@@ -176,6 +220,7 @@ certify prose an agent will follow.
 | `marketplace sign` | publisher | Sign the plugins a Claude Code marketplace owns. |
 | `marketplace verify` | either | Check installed plugins against a signature. |
 | `policy` | publisher | Print the managed settings that make the check binding. |
+| `fleet` | admin | Summarise the signed events your machines filed. |
 | `catalog publish` | publisher | Sign an index of skills in a plain repository. |
 | `catalog revoke` | publisher | Revoke digests in that index. |
 | `catalog verify` | publisher | Check the index still names what the repository holds. Use in CI. |
@@ -223,9 +268,8 @@ Working: marketplace signing with honest coverage reporting, verification of the
 plugin cache, restore with quarantine, revocation by digest, subscription with a pinned key,
 both hooks, a CI gate, `lint`, `digest`.
 
-Not built: a fleet view of which machines are on which sequence; multiple signatures per
-marketplace; any distribution of a marketplace other than a git repository the machine can
-reach.
+Not built: a hosted console with a web interface; multiple signatures per marketplace; any
+distribution of a marketplace other than a git repository the machine can reach.
 
 ## Licence
 

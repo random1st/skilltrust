@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+
+	"github.com/random1st/skilltrust/client/internal/attest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,5 +87,37 @@ func TestThePolicyForcesTheCheckOn(t *testing.T) {
 func TestThePolicyRefusesToGuess(t *testing.T) {
 	if code := runPolicy([]string{"--marketplace", "acme"}); code != exitUsage {
 		t.Fatalf("exit = %d; a policy must not be invented from half an answer", code)
+	}
+}
+
+// init on a machine that already follows marketplaces must not unsubscribe it. The bug this
+// pins replaced trusted-keys.json wholesale, and it surfaced not as an error but as "no
+// signature from a trusted key" on the next check — reported as though the publisher's
+// catalog had gone bad rather than as though this machine had thrown its key away.
+func TestInitDoesNotClobberPinnedPublisherKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SKILLTRUST_HOME", home)
+
+	publisher, _, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attest.PinKey(defaultTrustedKeys(), "catalog:acme", publisher); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runInit([]string{"--as", "laptop-1"}); code != exitClean {
+		t.Fatalf("init exit = %d", code)
+	}
+
+	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := trusted.Lookup(attest.KeyID(publisher)); !still {
+		t.Fatal("the publisher key was thrown away, so every subscription on this machine broke")
+	}
+	if trusted.Len() != 2 {
+		t.Fatalf("pinned keys = %d, want the publisher's and this machine's", trusted.Len())
 	}
 }

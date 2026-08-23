@@ -64,6 +64,7 @@ func runHookSessionStart(args []string) int {
 	if code != exitClean {
 		return exitClean
 	}
+	recordEvents(results, unusable, time.Now().UTC())
 	writeSessionReport(results, unusable, *verbose)
 	return exitClean
 }
