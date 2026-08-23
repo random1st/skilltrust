@@ -78,19 +78,15 @@ sboms:
 
 # Keyless Sigstore signatures over the checksum file: one signature covers every artifact.
 # Requires cosign on the release runner.
-signs:
-  - id: cosign-checksum
-    cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
-    args:
-      - sign-blob
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
-      - "${artifact}"
-      - --yes
-    artifacts: checksum
-    output: true
+# Cosign is deferred with Homebrew, and for a sharper reason.
+#
+# Keyless signing takes an OIDC identity and writes the signature into Rekor, the public
+# transparency log. That is the right trade for a public artifact and the wrong one here: this
+# repository is private, and a Rekor entry would publish its existence, the checksum, and the
+# signer's identity to an append-only log that cannot be edited afterwards. Deferring costs
+# nothing today, because the artifacts are distributed to people who already have access to
+# the repository, and their integrity is covered by the checksums and the notarized Developer
+# ID signature. It comes back the moment the repository is public.
 
 # Homebrew is deferred until the licence is decided.
 #
