@@ -1,26 +1,19 @@
-.PHONY: setup format lint typecheck test schemas security check
+# SkillTrust
+#
+# The client is the product; this delegates to it. There was once a Python control plane here
+# with its own toolchain, and the top-level targets were about that. It described a system
+# with TUF roots, a private ACME CA and a transparency log, none of which was ever built, so
+# it was removed rather than left to imply otherwise.
+.PHONY: check plugin reproducible clean
 
-setup:
-	uv sync --all-extras
+check:
+	$(MAKE) -C client check
 
-format:
-	uv run ruff format src tests
-	uv run ruff check --fix src tests
+plugin:
+	$(MAKE) -C client plugin
 
-lint:
-	uv run ruff format --check src tests
-	uv run ruff check src tests
+reproducible:
+	$(MAKE) -C client reproducible
 
-typecheck:
-	uv run mypy src
-
-test:
-	uv run pytest
-
-schemas:
-	uv run python -m skilltrust.schemas schemas
-
-security:
-	scripts/security-audit.sh
-
-check: lint typecheck test
+clean:
+	$(MAKE) -C client clean

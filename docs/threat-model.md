@@ -1,54 +1,89 @@
 # Threat model
 
-## Protected assets
+What this defends against, what it does not, and where the line is. It describes the product
+as built; an earlier version of this file described a system with TUF roots, a private ACME
+CA and a transparency log, none of which exists, which is worse than having no threat model
+at all.
 
-Artifact and policy signing authority, TUF roots/metadata versions, source-to-artifact provenance,
-review approvals, OCI digests, revocation state, runtime capability boundaries, audit evidence, and
-tenant/repository namespace authorization.
+## What is being protected
 
-## Adversaries
+The bytes of a plugin between the moment its publisher signed them and the moment Claude Code
+follows them with a developer's credentials.
 
-- malicious contributor, maintainer, dependency, skill content, or validation hook;
-- compromised Git account/app/provider, webhook, CI runner/cache, registry, mirror, or online key;
-- TLS MITM or attacker holding a valid certificate from an unrelated CA/profile;
-- stale/split-view catalog or transparency-log operator;
-- local user/process mutating the artifact cache;
-- confused deputy that asks the notary to sign an arbitrary digest or cross-tenant namespace.
+Not the developer's machine, not the network, not the git host. Those are other people's
+problems and pretending otherwise is how a security tool gets believed about things it cannot
+see.
 
-Kernel/root compromise on a consumer host, compromise of an offline signing threshold, and collusion
-of the configured approval threshold are residual risks. They require operational controls outside
-this repository.
+## Adversaries this addresses
 
-## Security boundaries
+**An agent editing a plugin it can write to.** The case the product exists for. An agent has
+write access to the plugin cache and can edit a `SKILL.md` so an injected instruction survives
+the session. Detected on the next session start, and in the moment before the skill loads;
+the bytes are restored and the edit is kept in quarantine.
 
-1. Git input and every file inside a skill are untrusted data.
-2. Contributor/fork validation receives no signing identity, publish token, production secret, host
-   container socket, or unrestricted network.
-3. A protected builder fetches the exact immutable repository ID and merged commit, then creates the
-   canonical archive itself.
-4. Required hooks run only through a sandbox adapter that proves filesystem, secret, and network
-   isolation. Missing proof is `UNKNOWN` and denies notarization.
-5. A notary signs only a control-plane-created subject whose artifact, manifest, source, approvals,
-   policy, and validation evidence all match.
-6. Installation and each activation re-check signature identity, TUF freshness, revocation,
-   dependency closure, bounded lease, digest, and runtime enforcement capability.
+**Someone editing an installed plugin by hand.** Indistinguishable from the above and handled
+identically. The tool does not attempt to say who.
 
-## Confused-deputy defenses
+**A withdrawn or compromised plugin still installed.** Revocation is keyed by digest, so it
+follows the bytes through a rename, a move or a copy, and it outranks a valid signature —
+a signature is a statement about the past and a revocation about now.
 
-- Repository IDs and commit SHAs are immutable provider values, not contributor names/branches.
-- Approval records bind repository ID, head SHA, manifest digest, and artifact digest; a new head is
-  a new revision.
-- Public WebPKI and private transport roots are not artifact roots. `serverAuth`, `clientAuth`,
-  `codeSigning`, and Sigstore OIDC identities are separate policy domains.
-- Provider adapters use fixed API bases and typed IDs; they are not arbitrary URL fetchers.
-- Sigstore/ORAS commands use argv without a shell and pass exact digest/bundle/identity arguments.
-- TUF bootstrap root is supplied from a read-only path outside the writable metadata cache.
-- Revocation identifiers and outbox dedupe keys reject conflicting replays.
+**A replayed catalog.** A monotonic sequence means a machine that has seen N refuses N-1, so
+an old catalog cannot be served to un-revoke something. Expiry means a stale catalog is a
+refusal rather than an answer of "nothing revoked".
 
-## Incident response
+**A publisher key that is not the one you pinned.** An index must be signed by the key pinned
+for that marketplace specifically, not merely by a key the machine trusts, or one publisher
+could speak for another's plugin names.
 
-Stop notary/registry-push identities, preserve database/outbox/log/evidence state, issue signed
-artifact or signer revocations, publish fresh TUF targets/snapshot/timestamp metadata, shorten or
-invalidate runtime leases, rotate the affected role without reusing TLS keys, and add a regression
-test before re-enabling publication.
+**A repository whose contents no longer match its signature.** The catalog is signed and the
+repository is not: bytes in a checkout that the index does not name are refused rather than
+installed because the URL was right. CI fails a pull request that changes a plugin without
+republishing.
 
+**A forged fleet report.** Events are signed by the machine that filed them; a report no
+trusted machine signed is refused rather than counted.
+
+## Adversaries this does not address
+
+**Anyone who can write to the policy.** Managed settings are the enforcement boundary. Root on
+the machine, or control of the MDM that deploys them, is outside this entirely.
+
+**A compromised signing key.** Nothing here detects that the right key signed the wrong thing.
+Key custody, rotation and a second signature are the answers, and only key custody exists
+today.
+
+**A compromised git host or CI.** Whoever can push to the marketplace and hold the signing key
+can publish whatever they like. Requiring more than one signature would raise this cost and is
+not built.
+
+**Prompt injection reaching the agent by any other route.** A verified plugin is a plugin
+whose bytes someone approved. It is not a plugin that is safe: no static check can certify
+prose an agent will follow, and `lint` reports indicators for a human rather than a verdict.
+
+**Dependency code installed after fetch.** `node_modules` is excluded from a plugin's identity
+because the client installs it, so a plugin carrying dependencies is reported as *partially*
+covered. That code is real and nobody signed it.
+
+**A plugin hosted outside the marketplace.** A publisher cannot vouch for bytes they do not
+control, so remote-sourced entries are named and explicitly not signed.
+
+## The line
+
+Without a managed policy this is detection: the hook is a convention, and a convention can be
+edited by whoever can edit the thing it guards. Claude Code also documents that a hook which
+times out does not block.
+
+With a managed policy — a file in a system directory the developer cannot write to, forcing
+the plugin on and permitting only managed hooks — the check cannot be removed by the machine
+it checks. That is the one place the word enforcement is used here, and it is used nowhere
+else on purpose.
+
+## Known limitations, pinned by tests rather than footnotes
+
+Windows has no executable bit and the bit is part of a plugin's identity, so a plugin
+containing executables does not produce the same digest there.
+
+A time-of-check to time-of-use gap remains: the check runs before a skill loads, and nothing
+prevents a write between the two. Closing it would need the client to hold a lock this tool
+cannot ask for.

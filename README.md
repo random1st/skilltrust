@@ -271,6 +271,19 @@ both hooks, a CI gate, `lint`, `digest`.
 Not built: a hosted console with a web interface; multiple signatures per marketplace; any
 distribution of a marketplace other than a git repository the machine can reach.
 
+## Layout
+
+```
+client/        skillctl — the Go client. One static binary, two dependencies.
+plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
+docs/          the threat model
+```
+
+There was once a Python control plane here, and documents describing four trust layers, a
+private ACME CA and a transparency log. None of it was built. It was removed rather than left
+to imply the product does things it does not — an architecture document nobody implemented is
+read as a specification, and this one would have been read as a promise.
+
 ## Licence
 
 Proprietary; see [LICENSE.txt](LICENSE.txt).
