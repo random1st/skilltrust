@@ -13,14 +13,20 @@
 # Runs here produce unsigned macOS binaries, and that is the honest outcome: a build nobody
 # can Gatekeeper-approve says what it is, while a build signed by a key sitting in shared
 # CI does not.
+#
+# It is therefore NOT triggered by pushing a tag. It used to be, which meant one tag started
+# two releases — this one and the maintainer's local `make release` — racing to publish under
+# the same version, with the winner decided by timing and one of them unsigned. Publishing is
+# one path now: cut it locally. This remains for deliberately producing an unsigned build,
+# which is what dispatching it by hand says you meant.
 name: release
 
 on:
-  push:
-    # A plain semver tag. GoReleaser's monorepo tag prefixes are a Pro feature, and the
-    # client is the only released artifact, so there is nothing to disambiguate yet.
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: read
@@ -45,6 +51,11 @@ jobs:
 
       - name: Install syft for SBOM generation
         run: brew install syft
+
+      # This runner has no Developer ID key; saying so is what the signing hook now
+      # requires rather than assuming.
+      - name: Unsigned macOS build is intended here
+        run: echo "SKILLCTL_ALLOW_UNSIGNED=1" >> "${GITHUB_ENV}"
 
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

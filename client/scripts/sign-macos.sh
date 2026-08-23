@@ -11,13 +11,25 @@
 # An unset identity produces an unsigned binary on purpose. A build nobody can
 # Gatekeeper-approve is honest about what it is; a build signed by a key sitting in shared
 # CI is not.
+#
+# But it has to be said out loud. Skipping silently means `goreleaser release` run by hand,
+# without the Makefile target that guards on the identity, publishes an unsigned universal
+# binary and reports success — a signing step that fails open, which is the one failure mode
+# this project refuses everywhere else. SKILLCTL_ALLOW_UNSIGNED=1 is how a snapshot or a CI
+# build says it meant it.
 set -eu
 
 binary="${1:?usage: sign-macos.sh <binary>}"
 
 if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-    echo "sign-macos: APPLE_SIGNING_IDENTITY unset, leaving ${binary} unsigned"
-    exit 0
+    if [ "${SKILLCTL_ALLOW_UNSIGNED:-}" = "1" ]; then
+        echo "sign-macos: APPLE_SIGNING_IDENTITY unset, leaving ${binary} unsigned as asked"
+        exit 0
+    fi
+    echo "sign-macos: APPLE_SIGNING_IDENTITY is unset." >&2
+    echo "sign-macos: refusing to produce an unsigned macOS binary silently." >&2
+    echo "sign-macos: set the identity, or set SKILLCTL_ALLOW_UNSIGNED=1 to mean it." >&2
+    exit 1
 fi
 
 # --options runtime is required for notarization; --timestamp binds a trusted timestamp so

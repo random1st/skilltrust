@@ -259,9 +259,10 @@ cd client && make reproducible    # two independent builds, compared
 
 Rebuild a release from its tag and compare digests rather than taking our word for it. A
 verifier you cannot rebuild is a verifier you have to trust, which is the thing this exists
-to avoid. macOS builds are signed and notarized from the maintainer's machine, not from CI:
-putting the Developer ID key into a CI secret would place the key that signs every release
-wherever the runner lives.
+to avoid. macOS builds are signed and notarized from the maintainer's machine, not from CI: putting the
+Developer ID key into a CI secret would place the key that signs every release wherever the
+runner lives. Publishing is therefore one path — `make release` locally. Pushing a tag no
+longer starts a second, unsigned release racing the first under the same version.
 
 ## Status
 
