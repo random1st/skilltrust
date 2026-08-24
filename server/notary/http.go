@@ -1,6 +1,7 @@
 package notary
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -18,16 +19,57 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /v1/catalogs/{org}/{marketplace}", s.handlePublish)
 	mux.HandleFunc("GET /v1/catalogs/{org}/{marketplace}", s.handleFetch)
+	mux.HandleFunc("POST /v1/events/{org}", s.handleIngest)
+	mux.HandleFunc("GET /v1/events/{org}", s.handleEvents)
 	return mux
 }
 
-func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
-		http.Error(w, "a bearer token is required", http.StatusUnauthorized)
+// bearer extracts the token, empty when absent — which never matches, because an empty
+// configured token disables the role rather than accepting an empty header.
+func bearer(r *http.Request) string {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return token
+}
+
+func (s *Service) handleIngest(w http.ResponseWriter, r *http.Request) {
+	org, err := s.AuthorizeIngest(r.PathValue("org"), bearer(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	org, err := s.Authorize(r.PathValue("org"), token)
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxEventBytes+1))
+	if err != nil || len(body) > MaxEventBytes {
+		http.Error(w, "the event could not be read, or is too large", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.AcceptEvent(org, body); err != nil {
+		if errors.Is(err, ErrRefused) {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		http.Error(w, "the event could not be stored", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
+	org, err := s.AuthorizeAdmin(r.PathValue("org"), bearer(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	events, err := s.ServeEvents(org)
+	if err != nil {
+		http.Error(w, "events could not be read", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"events": events})
+}
+
+func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
+	org, err := s.Authorize(r.PathValue("org"), bearer(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

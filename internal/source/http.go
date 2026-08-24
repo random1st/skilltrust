@@ -39,7 +39,7 @@ func FetchIndex(address, destination string) error {
 	if err != nil {
 		return fmt.Errorf("catalog URL %q is not a URL: %w", address, err)
 	}
-	if parsed.Scheme != "https" && !loopback(parsed.Hostname()) {
+	if parsed.Scheme != "https" && !Loopback(parsed.Hostname()) {
 		return fmt.Errorf("catalog URL %q is not https; a signed index fetched in the "+
 			"clear invites the substitution the signature exists to catch", address)
 	}
@@ -83,10 +83,10 @@ func FetchIndex(address, destination string) error {
 	return os.Rename(temporary.Name(), destination)
 }
 
-// loopback allows plain HTTP only to this machine itself, which is what tests and a local
+// Loopback allows plain HTTP only to this machine itself, which is what tests and a local
 // notary during development use. Anything reachable over a network keeps the TLS
 // requirement.
-func loopback(host string) bool {
+func Loopback(host string) bool {
 	if host == "localhost" {
 		return true
 	}

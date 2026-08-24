@@ -25,6 +25,11 @@ import (
 type orgConfig struct {
 	Name  string `json:"name"`
 	Token string `json:"token"`
+	// IngestToken is what machines file events with; AdminToken is what an administrator
+	// reads them with. Either may be empty, which disables that endpoint for the
+	// organisation rather than opening it.
+	IngestToken string `json:"ingest_token"`
+	AdminToken  string `json:"admin_token"`
 	// PublisherKeys are paths to PEM public keys allowed to sign this organisation's
 	// catalogs — pinned here, in configuration an operator deploys, never learned from
 	// an upload.
@@ -87,6 +92,7 @@ func run(configPath string) error {
 		}
 		orgs = append(orgs, notary.Org{
 			Name: entry.Name, Token: entry.Token,
+			IngestToken: entry.IngestToken, AdminToken: entry.AdminToken,
 			Publishers: attest.NewTrustedKeys(publishers...),
 		})
 	}

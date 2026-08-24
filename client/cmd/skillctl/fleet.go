@@ -1,15 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/internal/attest"
 	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/internal/source"
 )
 
 // runFleet aggregates the events machines filed, into the view an administrator asks for.
@@ -26,9 +31,11 @@ import (
 func runFleet(args []string) int {
 	flags := flag.NewFlagSet("fleet", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl fleet [flags] <events-directory>\n\n"+
+		fmt.Fprintf(flags.Output(), "Usage: skillctl fleet [flags] <events-directory | notary-url>\n\n"+
 			"Reads the signed events your machines filed and summarises them: which machines\n"+
-			"reported, what was restored or refused, and what went unchecked.\n\n"+
+			"reported, what was restored or refused, and what went unchecked. The source is a\n"+
+			"directory of envelope files, or a notary's events endpoint\n"+
+			"(https://…/v1/events/<org>, with --token).\n\n"+
 			"Exit codes: %d nothing outstanding, %d something needs attention, %d error.\n\nFlags:\n",
 			exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
@@ -37,6 +44,7 @@ func runFleet(args []string) int {
 	trustedPath := flags.String("trusted-keys", defaultTrustedKeys(),
 		"keys of the machines allowed to file reports")
 	since := flags.Duration("since", 0, "only events newer than this, e.g. 168h")
+	token := flags.String("token", "", "admin token, when reading from a notary")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -52,7 +60,7 @@ func runFleet(args []string) int {
 		return fail(err)
 	}
 
-	entries, err := os.ReadDir(directory)
+	envelopes, undecodable, err := loadEventEnvelopes(directory, *token)
 	if err != nil {
 		return fail(err)
 	}
@@ -69,17 +77,9 @@ func runFleet(args []string) int {
 		highlights []report.Event
 	}
 	machines := map[string]*machine{}
-	unattributed := 0
+	unattributed := undecodable
 
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		envelope, err := attest.LoadEnvelope(filepath.Join(directory, entry.Name()))
-		if err != nil {
-			unattributed++
-			continue
-		}
+	for _, envelope := range envelopes {
 		event, _, err := report.Verify(envelope, trusted)
 		if err != nil {
 			// Refused, not counted. An aggregate that includes rows nobody signed is a
@@ -159,4 +159,81 @@ func runFleet(args []string) int {
 		return exitFindings
 	}
 	return exitClean
+}
+
+// loadEventEnvelopes reads events from a directory of envelope files or from a notary's
+// events endpoint. Files or rows that do not decode are counted rather than dropped:
+// "n files could not be attributed" is a finding, and a fetch that silently skipped them
+// would print a clean report about a fleet it did not read.
+func loadEventEnvelopes(location, token string) ([]*attest.Envelope, int, error) {
+	if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
+		return fetchEventEnvelopes(location, token)
+	}
+
+	entries, err := os.ReadDir(location)
+	if err != nil {
+		return nil, 0, err
+	}
+	var envelopes []*attest.Envelope
+	undecodable := 0
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		envelope, err := attest.LoadEnvelope(filepath.Join(location, entry.Name()))
+		if err != nil {
+			undecodable++
+			continue
+		}
+		envelopes = append(envelopes, envelope)
+	}
+	return envelopes, undecodable, nil
+}
+
+func fetchEventEnvelopes(address, token string) ([]*attest.Envelope, int, error) {
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return nil, 0, err
+	}
+	// The same TLS rule as the catalog fetch — here it protects the admin token, which
+	// plain HTTP would hand to the network.
+	if parsed.Scheme != "https" && !source.Loopback(parsed.Hostname()) {
+		return nil, 0, fmt.Errorf("%s is not https; the admin token would travel in the clear", address)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, address, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, 0, fmt.Errorf("the notary answered %s", response.Status)
+	}
+
+	var payload struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return nil, 0, fmt.Errorf("the notary's answer is not readable: %w", err)
+	}
+
+	var envelopes []*attest.Envelope
+	undecodable := 0
+	for _, raw := range payload.Events {
+		var envelope attest.Envelope
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			undecodable++
+			continue
+		}
+		envelopes = append(envelopes, &envelope)
+	}
+	return envelopes, undecodable, nil
 }

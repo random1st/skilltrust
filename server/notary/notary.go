@@ -36,9 +36,18 @@ var (
 )
 
 // Org is one organisation the notary countersigns for.
+//
+// The three tokens are three roles, deliberately not one credential: CI holds Token and
+// can publish catalogs but not read the fleet; machines hold IngestToken and can file
+// events but not publish; an administrator holds AdminToken and can read what machines
+// filed. A leak of any one of them stays the size of its role.
 type Org struct {
 	Name  string
 	Token string
+	// IngestToken lets machines file events. Empty disables the endpoint.
+	IngestToken string
+	// AdminToken lets an administrator read filed events. Empty disables the endpoint.
+	AdminToken string
 	// Publishers are the keys allowed to sign this organisation's catalogs. The notary
 	// pins them from its own configuration, never from an uploaded catalog — the same
 	// rule the client applies, for the same reason: a catalog that could introduce its
@@ -72,14 +81,29 @@ func (s *Service) KeyID() string {
 // lacks dots.
 var name = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
-// Authorize checks an organisation's token in constant time.
+// Authorize checks an organisation's publish token in constant time.
 func (s *Service) Authorize(orgName, token string) (Org, error) {
+	return s.authorize(orgName, token, func(org Org) string { return org.Token })
+}
+
+// AuthorizeIngest checks the token machines file events with.
+func (s *Service) AuthorizeIngest(orgName, token string) (Org, error) {
+	return s.authorize(orgName, token, func(org Org) string { return org.IngestToken })
+}
+
+// AuthorizeAdmin checks the token an administrator reads events with.
+func (s *Service) AuthorizeAdmin(orgName, token string) (Org, error) {
+	return s.authorize(orgName, token, func(org Org) string { return org.AdminToken })
+}
+
+func (s *Service) authorize(orgName, token string, expected func(Org) string) (Org, error) {
 	org, known := s.orgs[orgName]
 	// The comparison runs even for an unknown organisation so that the response time
-	// does not say which half of the check failed.
-	expected := org.Token
-	match := subtle.ConstantTimeCompare([]byte(expected), []byte(token)) == 1
-	if !known || !match || expected == "" || org.Publishers == nil {
+	// does not say which half of the check failed. An empty configured token disables
+	// the role rather than matching an empty header.
+	want := expected(org)
+	match := subtle.ConstantTimeCompare([]byte(want), []byte(token)) == 1
+	if !known || !match || want == "" || org.Publishers == nil {
 		return Org{}, ErrUnknownOrg
 	}
 	return org, nil
