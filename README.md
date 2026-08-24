@@ -157,6 +157,41 @@ when a policy is in force.
 Policy and signatures answer different questions and neither replaces the other. Policy
 decides what may run; signatures decide whether what runs is what you published.
 
+## The notary
+
+Everything above works with a git repository and no server. The notary is the hosted step
+on top: a service that countersigns what a publisher signed and serves it to machines.
+
+```
+CI signs the marketplace ──PUT──▶ notaryd ──countersigns──▶ machines fetch over HTTPS
+        (publisher key)              │                        (skillctl sync)
+                                     └──── machines file signed events ──▶ skillctl fleet
+```
+
+```bash
+skillctl subscribe git@github.com:acme/marketplace.git \
+  --catalog https://notary.acme.com/v1/catalogs/acme/plugins \
+  --key acme.pub --key notary.pub --threshold 2
+```
+
+What it buys, concretely: a revocation reaches machines on the next `sync` rather than on
+the publisher's next push; publishing from CI needs no long-lived secret, because a GitHub
+Actions job authenticates with the OIDC token GitHub mints for it and the notary checks
+which repository it belongs to; and the fleet's signed events collect somewhere an
+administrator can read with one command.
+
+What it deliberately does not buy is trust. The notary is a second signer, never the only
+one: a machine that pins both keys with `--threshold 2` is safe against either key alone
+being stolen, and a compromised notary can publish nothing, because the catalogs it serves
+must still carry the publisher's signature — which it does not have. The session hook still
+never touches the network; `sync` fetches the countersigned index and keeps it locally, and
+a notary outage degrades to the staleness the freshness check already handles. Tokens are
+three narrow roles (publish, ingest, admin), so a leak of any one stays the size of its
+role.
+
+Run it yourself: `notaryd --config notary.json` — one static binary, state is files in a
+directory, the countersigning key provisions itself on first boot.
+
 ## Hearing about it
 
 An incident only the developer it happened to can see is not an incident anyone acts on.
@@ -267,17 +302,20 @@ longer starts a second, unsigned release racing the first under the same version
 ## Status
 
 Working: marketplace signing with honest coverage reporting, verification of the Claude Code
-plugin cache, restore with quarantine, revocation by digest, subscription with a pinned key,
-both hooks, a CI gate, `lint`, `digest`.
+plugin cache, restore with quarantine, revocation by digest, subscription with pinned keys
+and a signature threshold, both hooks, a CI gate, the notary (countersigning, catalog
+serving, event collection, OIDC publishing), `fleet` over a directory or the notary,
+`lint`, `digest`.
 
-Not built: a hosted console with a web interface; multiple signatures per marketplace; any
-distribution of a marketplace other than a git repository the machine can reach.
+Not built: a web interface for the console; billing or any multi-tenant management beyond
+the notary's per-organisation configuration.
 
 ## Layout
 
 ```
-action.yml     the GitHub Action that runs the gate
+action.yml     the GitHub Action that runs the gate and talks to the notary
 client/        skillctl — the CLI. One static binary, two dependencies.
+server/        notaryd — the notary. Same story: one binary, files for state.
 internal/      the packages both sides are built from: digest, DSSE, catalog, reporting
 plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
 docs/          the threat model, and running the gate in other CIs
