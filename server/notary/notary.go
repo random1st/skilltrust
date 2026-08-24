@@ -48,6 +48,12 @@ type Org struct {
 	IngestToken string
 	// AdminToken lets an administrator read filed events. Empty disables the endpoint.
 	AdminToken string
+	// GitHubRepository, when set, lets that repository's Actions jobs publish with
+	// their OIDC token instead of the static token — no long-lived secret in CI. The
+	// token replaces only the credential: the catalog must still carry a pinned
+	// publisher's signature, so Actions of the right repository with the wrong key
+	// still publish nothing.
+	GitHubRepository string
 	// Publishers are the keys allowed to sign this organisation's catalogs. The notary
 	// pins them from its own configuration, never from an uploaded catalog — the same
 	// rule the client applies, for the same reason: a catalog that could introduce its
@@ -60,6 +66,7 @@ type Service struct {
 	dataDir string
 	key     ed25519.PrivateKey
 	orgs    map[string]Org
+	oidc    *OIDCVerifier
 }
 
 func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
@@ -68,6 +75,30 @@ func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
 		index[org.Name] = org
 	}
 	return &Service{dataDir: dataDir, key: key, orgs: index}
+}
+
+// WithOIDC enables OIDC publishing for organisations that registered a repository.
+func (s *Service) WithOIDC(verifier *OIDCVerifier) *Service {
+	s.oidc = verifier
+	return s
+}
+
+// AuthorizeOIDC accepts a publish when a GitHub Actions token proves the caller is a
+// workflow of the repository this organisation registered.
+func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, error) {
+	org, known := s.orgs[orgName]
+	if !known || s.oidc == nil || org.GitHubRepository == "" || org.Publishers == nil {
+		return Org{}, ErrUnknownOrg
+	}
+	repository, err := s.oidc.Verify(token, now)
+	if err != nil {
+		return Org{}, err
+	}
+	if repository != org.GitHubRepository {
+		return Org{}, fmt.Errorf("%w: the token belongs to %s, which is not %s's registered repository",
+			ErrOIDC, repository, orgName)
+	}
+	return org, nil
 }
 
 // KeyID identifies the notary's countersigning key, which consumers pin.

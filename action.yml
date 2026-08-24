@@ -49,8 +49,14 @@ inputs:
       The organisation's publish token for the notary. A secret — but a deliberately
       narrow one: it authorizes submitting catalogs for countersigning, and the notary
       refuses anything not signed by the publisher keys it pinned, so a leaked token
-      alone publishes nothing.
+      alone publishes nothing. Leave it empty to authenticate with the job's OIDC token
+      instead — no stored secret at all — which needs `permissions: id-token: write` in
+      the workflow and the repository registered with the notary.
     required: false
+  notary-audience:
+    description: "Audience the OIDC token is minted for; must match the notary's configuration"
+    required: false
+    default: skilltrust-notary
 
 outputs:
   plugin-count:
@@ -87,6 +93,7 @@ runs:
         SKILLTRUST_VALID_FOR: ${{ inputs.valid-for }}
         SKILLTRUST_NOTARY_URL: ${{ inputs.notary-url }}
         SKILLTRUST_NOTARY_TOKEN: ${{ inputs.notary-token }}
+        SKILLTRUST_NOTARY_AUDIENCE: ${{ inputs.notary-audience }}
       run: |
         set -euo pipefail
 
@@ -95,9 +102,21 @@ runs:
         # notary refused, a 422 is a catalog it could not verify, and both must fail the
         # job rather than leave a half-published state.
         notarize() {
+          # No stored token: authenticate as this workflow, with the OIDC token GitHub
+          # mints for the job. Requires `permissions: id-token: write`; without it the
+          # request URL is absent and the error below says what to add.
           if [ -z "${SKILLTRUST_NOTARY_TOKEN}" ]; then
-            echo "::error::notary-url needs notary-token" >&2
-            exit 1
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              echo "::error::no notary-token, and the job cannot mint an OIDC token; add 'permissions: id-token: write' or set notary-token" >&2
+              exit 1
+            fi
+            SKILLTRUST_NOTARY_TOKEN=$(curl -sS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${SKILLTRUST_NOTARY_AUDIENCE}" | jq -r '.value')
+            if [ -z "${SKILLTRUST_NOTARY_TOKEN}" ] || [ "${SKILLTRUST_NOTARY_TOKEN}" = "null" ]; then
+              echo "::error::minting the OIDC token failed" >&2
+              exit 1
+            fi
           fi
           index="${SKILLTRUST_REPO}/catalog.dsse.json"
           status=$(curl -sS -o "${RUNNER_TEMP}/notary-response" -w '%{http_code}' \

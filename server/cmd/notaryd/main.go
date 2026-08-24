@@ -30,6 +30,9 @@ type orgConfig struct {
 	// organisation rather than opening it.
 	IngestToken string `json:"ingest_token"`
 	AdminToken  string `json:"admin_token"`
+	// GitHubRepository lets that repository's Actions publish with their OIDC token
+	// instead of a static secret. Empty keeps OIDC closed for this organisation.
+	GitHubRepository string `json:"github_repository"`
 	// PublisherKeys are paths to PEM public keys allowed to sign this organisation's
 	// catalogs — pinned here, in configuration an operator deploys, never learned from
 	// an upload.
@@ -41,6 +44,10 @@ type config struct {
 	Data   string      `json:"data"`
 	Key    string      `json:"key"`
 	Orgs   []orgConfig `json:"orgs"`
+	// OIDCAudience is what publishing workflows must mint their token for. Defaults to
+	// "skilltrust-notary"; set it when one issuer serves several notaries, so a token
+	// minted for one cannot be replayed at another.
+	OIDCAudience string `json:"oidc_audience"`
 }
 
 func main() {
@@ -93,11 +100,19 @@ func run(configPath string) error {
 		orgs = append(orgs, notary.Org{
 			Name: entry.Name, Token: entry.Token,
 			IngestToken: entry.IngestToken, AdminToken: entry.AdminToken,
-			Publishers: attest.NewTrustedKeys(publishers...),
+			GitHubRepository: entry.GitHubRepository,
+			Publishers:       attest.NewTrustedKeys(publishers...),
 		})
 	}
 
 	service := notary.New(conf.Data, key, orgs)
+	for _, org := range orgs {
+		if org.GitHubRepository != "" {
+			service.WithOIDC(&notary.OIDCVerifier{Audience: conf.OIDCAudience})
+			log.Printf("notaryd: OIDC publishing enabled for repositories registered in the config")
+			break
+		}
+	}
 	log.Printf("notaryd: countersigning as %s", attest.Fingerprint(service.KeyID()))
 	log.Printf("notaryd: %d organisation(s), listening on %s", len(orgs), conf.Listen)
 

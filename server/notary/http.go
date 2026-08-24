@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/random1st/skilltrust/internal/source"
 )
@@ -69,7 +70,16 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
-	org, err := s.Authorize(r.PathValue("org"), bearer(r))
+	// Two dots make a JWT; anything else is a static token. A static token containing
+	// dots is not a case worth supporting — it would be indistinguishable on purpose.
+	token := bearer(r)
+	var org Org
+	var err error
+	if strings.Count(token, ".") == 2 {
+		org, err = s.AuthorizeOIDC(r.PathValue("org"), token, time.Now().UTC())
+	} else {
+		org, err = s.Authorize(r.PathValue("org"), token)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
