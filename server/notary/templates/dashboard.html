@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skilltrust · {{.Org}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+    max-width: 60rem; margin: 2rem auto; padding: 0 1rem;
+  }
+  h1 { font-size: 1.2rem; }
+  h1 small { font-weight: normal; opacity: .6; }
+  h2 { font-size: 1rem; margin-top: 2rem; border-bottom: 1px solid rgba(128,128,128,.35); padding-bottom: .3rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .35rem .75rem .35rem 0; vertical-align: top; }
+  th { font-weight: 600; opacity: .65; font-size: .85rem; }
+  td.n, th.n { text-align: right; padding-right: 1.25rem; }
+  .mono { font-family: ui-monospace, monospace; font-size: .85rem; }
+  .muted { opacity: .6; }
+  .bad { color: #c0392b; font-weight: 600; }
+  .tag { font-size: .75rem; border: 1px solid rgba(128,128,128,.5); border-radius: .6rem;
+         padding: 0 .45rem; margin-right: .25rem; white-space: nowrap; }
+  .empty { opacity: .6; font-style: italic; }
+  footer { margin-top: 3rem; font-size: .8rem; opacity: .55; }
+</style>
+</head>
+<body>
+
+<h1>skilltrust <small>· {{.Org}} · {{.Now.Format "2006-01-02 15:04"}} UTC</small></h1>
+
+<h2>Marketplaces</h2>
+{{if .Marketplaces}}
+<table>
+  <tr><th>name</th><th class="n">sequence</th><th class="n">plugins</th><th class="n">revoked</th><th>valid until</th><th>signed by</th></tr>
+  {{range .Marketplaces}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td class="n">{{.Sequence}}</td>
+    <td class="n">{{.Skills}}</td>
+    <td class="n">{{if .Revoked}}<span class="bad">{{.Revoked}}</span>{{else}}0{{end}}</td>
+    <td>{{if .Expired}}<span class="bad">expired {{.ValidUntil.Format "2006-01-02 15:04"}}</span>{{else}}{{.ValidUntil.Format "2006-01-02 15:04"}}{{end}}</td>
+    <td>{{range .Signers}}<span class="tag">{{.Role}} <span class="mono">{{.Fingerprint}}</span></span>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">nothing published yet</p>{{end}}
+
+<h2>Machines</h2>
+{{if .Machines}}
+<table>
+  <tr><th>machine</th><th>last report</th><th class="n">restored</th><th class="n">revoked seen</th><th class="n">unverifiable</th><th class="n">catalog unusable</th></tr>
+  {{range .Machines}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td>{{.Last.Format "2006-01-02 15:04"}}</td>
+    <td class="n">{{if .Restored}}<span class="bad">{{.Restored}}</span>{{else}}0{{end}}</td>
+    <td class="n">{{if .Revoked}}<span class="bad">{{.Revoked}}</span>{{else}}0{{end}}</td>
+    <td class="n">{{.Unverifiable}}</td>
+    <td class="n">{{.CatalogUnusable}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">no machine has reported</p>{{end}}
+
+<h2>Events</h2>
+{{if .Events}}
+<table>
+  {{range .Events}}
+  <tr>
+    <td class="mono muted">{{.At.Format "01-02 15:04"}}</td>
+    <td>{{.Machine}}</td>
+    <td>{{.Summary}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">no events</p>{{end}}
+
+{{if .Unverified}}
+<p class="bad">{{.Unverified}} stored event(s) are not signed by any machine key this
+notary's configuration pins, and are not shown above.</p>
+{{end}}
+
+<footer>
+This console observes; it cannot sign, publish or revoke — the keys that could are not on
+this server. Revocation happens at the publisher: <span class="mono">skillctl catalog revoke</span>.
+</footer>
+
+</body>
+</html>

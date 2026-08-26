@@ -22,6 +22,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/catalogs/{org}/{marketplace}", s.handleFetch)
 	mux.HandleFunc("POST /v1/events/{org}", s.handleIngest)
 	mux.HandleFunc("GET /v1/events/{org}", s.handleEvents)
+	mux.HandleFunc("GET /ui/{org}", s.handleDashboard)
 	return mux
 }
 

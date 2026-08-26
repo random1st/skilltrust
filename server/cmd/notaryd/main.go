@@ -33,6 +33,9 @@ type orgConfig struct {
 	// GitHubRepository lets that repository's Actions publish with their OIDC token
 	// instead of a static secret. Empty keeps OIDC closed for this organisation.
 	GitHubRepository string `json:"github_repository"`
+	// MachineKeys are paths to PEM public keys of machines whose events the console
+	// shows as verified — the same keys `skillctl trust` pins for the CLI.
+	MachineKeys []string `json:"machine_keys"`
 	// PublisherKeys are paths to PEM public keys allowed to sign this organisation's
 	// catalogs — pinned here, in configuration an operator deploys, never learned from
 	// an upload.
@@ -97,11 +100,24 @@ func run(configPath string) error {
 			}
 			publishers = append(publishers, public)
 		}
+		var machines *attest.TrustedKeys
+		if len(entry.MachineKeys) > 0 {
+			var keys []ed25519.PublicKey
+			for _, path := range entry.MachineKeys {
+				public, err := attest.LoadPublicKey(path)
+				if err != nil {
+					return fmt.Errorf("organisation %q machine key: %w", entry.Name, err)
+				}
+				keys = append(keys, public)
+			}
+			machines = attest.NewTrustedKeys(keys...)
+		}
 		orgs = append(orgs, notary.Org{
 			Name: entry.Name, Token: entry.Token,
 			IngestToken: entry.IngestToken, AdminToken: entry.AdminToken,
 			GitHubRepository: entry.GitHubRepository,
 			Publishers:       attest.NewTrustedKeys(publishers...),
+			Machines:         machines,
 		})
 	}
 

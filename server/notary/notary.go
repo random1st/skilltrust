@@ -59,6 +59,10 @@ type Org struct {
 	// rule the client applies, for the same reason: a catalog that could introduce its
 	// own signing key could replace itself.
 	Publishers *attest.TrustedKeys
+	// Machines are the keys whose events the console shows as verified. Nil means every
+	// stored event renders as an unverified count — the mailbox still accepts them, but
+	// nothing vouches for who filed them.
+	Machines *attest.TrustedKeys
 }
 
 // Service accepts, countersigns, stores and serves catalogs.
