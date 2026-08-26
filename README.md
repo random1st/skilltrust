@@ -236,6 +236,17 @@ database, no port to defend. Reports that no trusted machine signed are refused 
 counted — an aggregate built from unverifiable rows looks like evidence and is not. A hosted
 console can be built on this later; what it cannot be built on is a fleet that never reported.
 
+Which machines count is one command per machine, not a JSON file to hand-edit:
+
+```bash
+skillctl trust laptop-roman.pub        # pin; the file name becomes the label
+skillctl trust                         # list what is pinned
+skillctl trust --remove laptop-roman   # decommission deliberately
+```
+
+Repointing an existing label to a different key is refused — that is how an attacker's key
+would inherit a name everyone already trusts. Remove first, then pin.
+
 ## What this does not claim
 
 **Without a managed policy it is detection, not enforcement.** On an unmanaged laptop the
@@ -255,6 +266,7 @@ certify prose an agent will follow.
 | `marketplace sign` | publisher | Sign the plugins a Claude Code marketplace owns. |
 | `marketplace verify` | either | Check installed plugins against a signature. |
 | `policy` | publisher | Print the managed settings that make the check binding. |
+| `trust` | admin | Pin a key, list the pinned set, or remove a label. |
 | `fleet` | admin | Summarise the signed events your machines filed. |
 | `catalog verify` | publisher | Check the index still names what the repository holds. Used by the action. |
 | `catalog publish` | publisher | Sign an index of skills in a plain repository. |

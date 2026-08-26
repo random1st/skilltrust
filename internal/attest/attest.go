@@ -548,3 +548,62 @@ func PinKey(path, label string, public ed25519.PublicKey) error {
 	}
 	return writeFile(path, append(body, '\n'), 0o644)
 }
+
+// PinnedKeys reads the pinned set with its labels, for showing a person what this
+// machine trusts. Verification code wants TrustedKeys instead: labels are for people.
+// A missing file is an empty set here, not an error — "you trust nobody yet" is a
+// normal thing to show.
+func PinnedKeys(path string) (map[string]ed25519.PublicKey, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]ed25519.PublicKey{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var document trustedKeysFile
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, fmt.Errorf("%s is not a readable trusted-key file: %w", path, err)
+	}
+	if document.Version != 1 {
+		return nil, fmt.Errorf("%s uses trusted-key format version %d, this build understands 1",
+			path, document.Version)
+	}
+	keys := make(map[string]ed25519.PublicKey, len(document.Keys))
+	for label, encoded := range document.Keys {
+		key, err := ParsePublicKey([]byte(encoded))
+		if err != nil {
+			return nil, fmt.Errorf("trusted key %q in %s: %w", label, path, err)
+		}
+		keys[label] = key
+	}
+	return keys, nil
+}
+
+// UnpinKey removes a label from the pinned set. Removing a label that is not there is an
+// error, not a no-op: the caller believed something was trusted, and "removed" would
+// confirm a belief the file never held.
+func UnpinKey(path, label string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document trustedKeysFile
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("%s is not a readable trusted-key file: %w", path, err)
+	}
+	if document.Version != 1 {
+		return fmt.Errorf("%s uses trusted-key format version %d, this build understands 1",
+			path, document.Version)
+	}
+	if _, pinned := document.Keys[label]; !pinned {
+		return fmt.Errorf("%q is not pinned in %s", label, path)
+	}
+	delete(document.Keys, label)
+
+	body, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFile(path, append(body, '\n'), 0o644)
+}
