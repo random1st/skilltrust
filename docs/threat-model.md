@@ -50,12 +50,12 @@ trusted machine signed is refused rather than counted.
 the machine, or control of the MDM that deploys them, is outside this entirely.
 
 **A compromised signing key.** Nothing here detects that the right key signed the wrong thing.
-Key custody, rotation and a second signature are the answers, and only key custody exists
-today.
+A notary countersignature raises the cost of using a stolen key — see below — but it does not
+close this: the notary checks who signed, never what they signed.
 
 **A compromised git host or CI.** Whoever can push to the marketplace and hold the signing key
-can publish whatever they like. Requiring more than one signature would raise this cost and is
-not built.
+can publish whatever they like. With a notary the attacker needs the publish credential too,
+which is a second thing to steal rather than a second opinion about the contents.
 
 **Prompt injection reaching the agent by any other route.** A verified plugin is a plugin
 whose bytes someone approved. It is not a plugin that is safe: no static check can certify
@@ -67,6 +67,44 @@ covered. That code is real and nobody signed it.
 
 **A plugin hosted outside the marketplace.** A publisher cannot vouch for bytes they do not
 control, so remote-sourced entries are named and explicitly not signed.
+
+## What a notary changes, and what it does not
+
+A notary countersigns catalogs a registered publisher signed. Machines that pin both keys and
+require two signatures get a specific, bounded improvement — worth stating precisely, because
+"two signatures" invites believing more than it delivers.
+
+**It does not review anything.** The notary verifies *who* signed, never *what*. A stolen
+publisher key used with the publish credential produces a catalog the notary countersigns
+without hesitation, because from where it stands nothing is wrong. This is not a second
+opinion; it is a second lock on the same door.
+
+**A compromised notary alone publishes nothing.** It can countersign, and it cannot produce
+the publisher's signature. A machine requiring two refuses what only the notary signed. This
+is the property the design exists for and the reason the notary is deliberately not a trust
+root.
+
+**A stolen publisher key alone publishes nothing either**, to machines that fetch the catalog
+from the notary. The attacker also needs the publish credential — or the registered
+repository's CI, when OIDC publishing is enabled. Two things to steal instead of one.
+
+**Rollback protection becomes central.** The notary refuses a sequence below what it recorded,
+so a replay is stopped before it reaches any machine rather than by each machine separately.
+
+**It is not on the verification path.** Machines verify from the catalog already on disk; the
+network is for refreshing. A notary that is down, unreachable or hostile cannot make a machine
+accept anything — at worst it stops delivering updates, and staleness is a refusal.
+
+**The mailbox is not a trust root.** The notary stores the events machines file without
+verifying their signatures — it has no registry of machine keys, and inventing one would make
+the mailbox authoritative about who reported what. `skillctl fleet` and the console verify
+against keys the administrator pinned, and count the rest as unverified rather than showing
+them as evidence.
+
+**What a hosted notary sees.** Which organisations publish which marketplaces, when, and what
+their machines report. Not skill contents beyond what the catalog names, and never a
+publisher's private key. An operator of a shared notary is trusted with that metadata, which
+is a reason to run your own — `notaryd` is the same code.
 
 ## The line
 
