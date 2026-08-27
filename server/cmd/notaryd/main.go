@@ -51,6 +51,8 @@ type config struct {
 	// "skilltrust-notary"; set it when one issuer serves several notaries, so a token
 	// minted for one cannot be replayed at another.
 	OIDCAudience string `json:"oidc_audience"`
+	// Brand names this deployment on its web pages; empty means the project name.
+	Brand string `json:"brand"`
 }
 
 func main() {
@@ -121,7 +123,7 @@ func run(configPath string) error {
 		})
 	}
 
-	service := notary.New(conf.Data, key, orgs)
+	service := notary.New(conf.Data, key, orgs).WithBrand(conf.Brand)
 	for _, org := range orgs {
 		if org.GitHubRepository != "" {
 			service.WithOIDC(&notary.OIDCVerifier{Audience: conf.OIDCAudience})

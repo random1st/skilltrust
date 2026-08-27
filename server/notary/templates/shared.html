@@ -64,7 +64,7 @@
 
 {{define "brandbar"}}
 <header class="site">
-  <a class="brand" href="/"><b>◈</b> Axela</a>
+  <a class="brand" href="/"><b>◈</b> {{.Brand}}</a>
   {{if .Org}}<span class="crumb">/ {{.Org}}</span>{{end}}
   {{if .Session}}<form method="post" action="/logout"><button>sign out</button></form>{{end}}
 </header>

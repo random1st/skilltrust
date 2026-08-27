@@ -71,6 +71,7 @@ type Service struct {
 	key     ed25519.PrivateKey
 	orgs    map[string]Org
 	oidc    *OIDCVerifier
+	brand   string
 }
 
 func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
@@ -78,12 +79,21 @@ func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
 	for _, org := range orgs {
 		index[org.Name] = org
 	}
-	return &Service{dataDir: dataDir, key: key, orgs: index}
+	return &Service{dataDir: dataDir, key: key, orgs: index, brand: "SkillTrust"}
 }
 
 // WithOIDC enables OIDC publishing for organisations that registered a repository.
 func (s *Service) WithOIDC(verifier *OIDCVerifier) *Service {
 	s.oidc = verifier
+	return s
+}
+
+// WithBrand names the deployment on its web pages. The default is the project name;
+// a hosted service sets its own. Nothing but presentation hangs on it.
+func (s *Service) WithBrand(brand string) *Service {
+	if brand != "" {
+		s.brand = brand
+	}
 	return s
 }
 

@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1340" height="900" viewBox="0 0 1340 900" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5568"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#27ae60"/>
+    </marker>
+  </defs>
+
+  <rect width="1340" height="900" fill="#ffffff"/>
+  <text x="670" y="40" text-anchor="middle" font-size="22" font-weight="700" fill="#1a202c">SkillTrust — как это работает</text>
+
+  <!-- ================= PUBLISHER ZONE ================= -->
+  <rect x="30" y="80" width="360" height="500" rx="12" fill="#fdf6ee" stroke="#e67e22" stroke-width="1.5"/>
+  <rect x="30" y="80" width="360" height="34" rx="12" fill="#e67e22"/>
+  <text x="210" y="103" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">ОРГАНИЗАЦИЯ-ИЗДАТЕЛЬ</text>
+
+  <!-- repo -->
+  <rect x="55" y="135" width="310" height="120" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="70" y="160" font-size="14" font-weight="600" fill="#1a202c">Git-репозиторий маркетплейса</text>
+  <text x="70" y="182" font-size="12" fill="#4a5568">.claude-plugin/marketplace.json</text>
+  <text x="70" y="200" font-size="12" fill="#4a5568">plugins/… — байты плагинов</text>
+  <text x="70" y="218" font-size="12" fill="#4a5568">catalog.dsse.json — подписанный индекс</text>
+  <rect x="70" y="228" width="120" height="18" rx="9" fill="#fdebd0"/>
+  <text x="130" y="241" text-anchor="middle" font-size="10.5" fill="#9c5700">подпись: издатель</text>
+
+  <!-- CI -->
+  <rect x="55" y="300" width="310" height="160" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="70" y="325" font-size="14" font-weight="600" fill="#1a202c">CI (GitHub Actions / ADO / GitLab)</text>
+  <text x="70" y="349" font-size="12" fill="#4a5568">1. skillctl marketplace sign</text>
+  <text x="70" y="367" font-size="12" fill="#4a5568">2. каталог → нотариусу</text>
+  <text x="70" y="385" font-size="12" fill="#4a5568">3. контрподписанный ответ — в коммит</text>
+  <rect x="70" y="400" width="150" height="18" rx="9" fill="#fdebd0"/>
+  <text x="145" y="413" text-anchor="middle" font-size="10.5" fill="#9c5700">ключ издателя (свой)</text>
+  <rect x="230" y="400" width="120" height="18" rx="9" fill="#e8f4fd"/>
+  <text x="290" y="413" text-anchor="middle" font-size="10.5" fill="#1b5e8a">OIDC — без секрета</text>
+
+  <text x="210" y="500" text-anchor="middle" font-size="12.5" font-weight="600" fill="#9c5700">отзыв — тоже здесь:</text>
+  <text x="210" y="520" text-anchor="middle" font-size="12" fill="#9c5700">skillctl catalog revoke sha256:…</text>
+  <text x="210" y="538" text-anchor="middle" font-size="12" fill="#9c5700">и заново sign → нотариус разнесёт</text>
+
+  <!-- ================= NOTARY ZONE ================= -->
+  <rect x="490" y="80" width="360" height="560" rx="12" fill="#eef5fb" stroke="#2980b9" stroke-width="1.5"/>
+  <rect x="490" y="80" width="360" height="34" rx="12" fill="#2980b9"/>
+  <text x="670" y="103" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">НОТАРИУС — notaryd (SaaS)</text>
+
+  <rect x="515" y="135" width="310" height="150" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="530" y="160" font-size="14" font-weight="600" fill="#1a202c">Публикация каталога</text>
+  <text x="530" y="184" font-size="12" fill="#4a5568">1. проверить подпись издателя (ключ запинен</text>
+  <text x="542" y="200" font-size="12" fill="#4a5568">в конфиге, не из аплоада)</text>
+  <text x="530" y="218" font-size="12" fill="#4a5568">2. свежесть + защита от отката sequence</text>
+  <text x="530" y="236" font-size="12" fill="#4a5568">3. контрподписать те же байты</text>
+  <rect x="530" y="250" width="200" height="18" rx="9" fill="#d6eaf8"/>
+  <text x="630" y="263" text-anchor="middle" font-size="10.5" fill="#1b5e8a">теперь подписей две: издатель + нотариус</text>
+
+  <rect x="515" y="310" width="310" height="90" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="530" y="335" font-size="14" font-weight="600" fill="#1a202c">Раздача</text>
+  <text x="530" y="357" font-size="12" fill="#4a5568">GET /v1/catalogs/… — без аутентификации:</text>
+  <text x="530" y="375" font-size="12" fill="#4a5568">каталог — публичное подписанное заявление</text>
+
+  <rect x="515" y="425" width="310" height="90" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="530" y="450" font-size="14" font-weight="600" fill="#1a202c">Почтовый ящик событий</text>
+  <text x="530" y="472" font-size="12" fill="#4a5568">хранит подписанные события машин,</text>
+  <text x="530" y="490" font-size="12" fill="#4a5568">сам ничего не верифицирует — не trust root</text>
+
+  <rect x="515" y="540" width="310" height="80" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="530" y="565" font-size="14" font-weight="600" fill="#1a202c">Консоль /ui</text>
+  <text x="530" y="587" font-size="12" fill="#4a5568">только чтение: ключей для подписи</text>
+  <text x="530" y="605" font-size="12" fill="#4a5568">и отзыва на сервере нет</text>
+
+  <!-- ================= MACHINE ZONE ================= -->
+  <rect x="950" y="80" width="360" height="560" rx="12" fill="#eefaf1" stroke="#27ae60" stroke-width="1.5"/>
+  <rect x="950" y="80" width="360" height="34" rx="12" fill="#27ae60"/>
+  <text x="1130" y="103" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">МАШИНА РАЗРАБОТЧИКА</text>
+
+  <rect x="975" y="135" width="310" height="100" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="990" y="160" font-size="14" font-weight="600" fill="#1a202c">Claude Code</text>
+  <text x="990" y="182" font-size="12" fill="#4a5568">~/.claude/plugins/cache — то, что реально</text>
+  <text x="990" y="200" font-size="12" fill="#4a5568">исполняется; ставится самим Claude Code</text>
+  <text x="990" y="222" font-size="12" fill="#4a5568">плагин skilltrust приносит хуки и skillctl</text>
+
+  <rect x="975" y="260" width="310" height="180" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="990" y="285" font-size="14" font-weight="600" fill="#1a202c">skillctl sync + хуки сессии</text>
+  <text x="990" y="309" font-size="12" fill="#4a5568">1. каталог с нотариуса, байты из git</text>
+  <text x="990" y="327" font-size="12" fill="#4a5568">2. проверить ОБЕ подписи (threshold 2)</text>
+  <text x="990" y="345" font-size="12" fill="#4a5568">3. кэш сравнить с каталогом</text>
+  <text x="990" y="363" font-size="12" fill="#4a5568">4. изменённое — вернуть, копию в карантин</text>
+  <text x="990" y="381" font-size="12" fill="#4a5568">5. отозванное — доложить</text>
+  <rect x="990" y="396" width="130" height="18" rx="9" fill="#fdebd0"/>
+  <text x="1055" y="409" text-anchor="middle" font-size="10.5" fill="#9c5700">пин: ключ издателя</text>
+  <rect x="1130" y="396" width="135" height="18" rx="9" fill="#d6eaf8"/>
+  <text x="1197" y="409" text-anchor="middle" font-size="10.5" fill="#1b5e8a">пин: ключ нотариуса</text>
+
+  <rect x="975" y="465" width="310" height="90" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="990" y="490" font-size="14" font-weight="600" fill="#1a202c">Офлайн — не проблема</text>
+  <text x="990" y="512" font-size="12" fill="#4a5568">хук сессии в сеть не ходит: проверяет по</text>
+  <text x="990" y="530" font-size="12" fill="#4a5568">последнему скачанному каталогу</text>
+
+  <rect x="975" y="575" width="310" height="45" rx="8" fill="#ffffff" stroke="#cbd5e0"/>
+  <rect x="990" y="588" width="115" height="18" rx="9" fill="#d5f5e3"/>
+  <text x="1047" y="601" text-anchor="middle" font-size="10.5" fill="#186a3b">ключ машины</text>
+  <text x="1115" y="601" font-size="12" fill="#4a5568">подписывает каждое событие</text>
+
+  <!-- ================= ADMIN ZONE ================= -->
+  <rect x="490" y="700" width="360" height="150" rx="12" fill="#f6effa" stroke="#8e44ad" stroke-width="1.5"/>
+  <rect x="490" y="700" width="360" height="34" rx="12" fill="#8e44ad"/>
+  <text x="670" y="723" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">АДМИНИСТРАТОР</text>
+  <text x="510" y="760" font-size="12" fill="#4a5568">браузер → /ui или skillctl fleet (admin-токен)</text>
+  <text x="510" y="782" font-size="12" fill="#4a5568">видит: маркетплейсы, машины, инциденты</text>
+  <text x="510" y="804" font-size="12" fill="#4a5568">события без подписи доверенной машины —</text>
+  <text x="510" y="822" font-size="12" fill="#4a5568">красный счётчик, не строки</text>
+
+  <!-- ================= ARROWS ================= -->
+  <!-- CI -> notary -->
+  <line x1="365" y1="360" x2="512" y2="360" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="438" y="345" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4a5568">PUT каталог</text>
+  <text x="438" y="380" text-anchor="middle" font-size="10.5" fill="#718096">OIDC или токен</text>
+  <text x="438" y="394" text-anchor="middle" font-size="10.5" fill="#718096">публикации</text>
+
+  <!-- notary -> machine (catalog) -->
+  <line x1="825" y1="350" x2="972" y2="350" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="898" y="335" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4a5568">GET каталог</text>
+  <text x="898" y="370" text-anchor="middle" font-size="10.5" fill="#718096">HTTPS, 2 подписи</text>
+
+  <!-- repo -> machine (bytes), routed over the top -->
+  <path d="M 210 133 L 210 60 L 1130 60 L 1130 133" fill="none" stroke="#27ae60" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowGreen)"/>
+  <text x="670" y="52" text-anchor="middle" font-size="11.5" font-weight="600" fill="#27ae60">байты плагинов — git clone (ставит Claude Code)</text>
+
+  <!-- machine -> notary (events) -->
+  <line x1="972" y1="500" x2="828" y2="470" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="900" y="510" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4a5568">POST события</text>
+  <text x="900" y="526" text-anchor="middle" font-size="10.5" fill="#718096">ingest-токен + подпись машины</text>
+
+  <!-- admin -> notary console -->
+  <line x1="670" y1="697" x2="670" y2="643" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="758" y="672" text-anchor="middle" font-size="10.5" fill="#718096">admin-токен, только чтение</text>
+
+  <!-- ================= FOOTER ================= -->
+  <rect x="30" y="700" width="420" height="150" rx="12" fill="#fffbea" stroke="#d4a017"/>
+  <text x="50" y="730" font-size="13" font-weight="700" fill="#7a5c00">Почему это безопасно</text>
+  <text x="50" y="756" font-size="12" fill="#7a5c00">• украден ключ издателя → нет подписи нотариуса</text>
+  <text x="50" y="776" font-size="12" fill="#7a5c00">• взломан нотариус → нет подписи издателя</text>
+  <text x="50" y="796" font-size="12" fill="#7a5c00">• машина требует обе — порог 2 из 2</text>
+  <text x="50" y="822" font-size="12" fill="#7a5c00">• каталог не может привезти свой ключ:</text>
+  <text x="62" y="840" font-size="12" fill="#7a5c00">все ключи пинятся заранее, вне канала</text>
+
+  <rect x="950" y="700" width="360" height="150" rx="12" fill="#f7f9fa" stroke="#cbd5e0"/>
+  <text x="970" y="730" font-size="13" font-weight="700" fill="#1a202c">Границы честности</text>
+  <text x="970" y="756" font-size="12" fill="#4a5568">• без managed-политики это детекция,</text>
+  <text x="982" y="774" font-size="12" fill="#4a5568">не enforcement</text>
+  <text x="970" y="796" font-size="12" fill="#4a5568">• «не смог проверить» ≠ «всё в порядке»:</text>
+  <text x="982" y="814" font-size="12" fill="#4a5568">exit 3 никогда не совпадает с exit 0</text>
+  <text x="970" y="836" font-size="12" fill="#4a5568">• неподписанное — не трогаем и не считаем</text>
+</svg>

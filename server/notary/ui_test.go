@@ -203,8 +203,20 @@ func TestLandingIsPublicAndSilent(t *testing.T) {
 	if strings.Contains(string(body), "acme") {
 		t.Fatal("the landing page must not name registered organisations")
 	}
-	if !strings.Contains(string(body), "Axela") {
-		t.Fatal("the landing page must present the product")
+	if !strings.Contains(string(body), "SkillTrust") {
+		t.Fatal("the landing page must present the default brand")
+	}
+
+	// A hosted deployment presents itself under its own name.
+	f.service.WithBrand("Axela")
+	response, err = http.Get(f.server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	branded, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if !strings.Contains(string(branded), "Axela") || strings.Contains(string(branded), "SkillTrust") {
+		t.Fatal("WithBrand must rename the landing page")
 	}
 
 	// The root pattern is exact: an unknown path is still a 404, not the landing.

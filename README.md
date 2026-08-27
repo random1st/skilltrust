@@ -344,4 +344,9 @@ read as a specification, and this one would have been read as a promise.
 
 ## Licence
 
-Proprietary; see [LICENSE.txt](LICENSE.txt).
+Apache-2.0; see [LICENSE](LICENSE). All of it — the CLI, the libraries and the notary
+server. The verification path must be auditable and rebuildable by the people it asks to
+trust it, and a self-hosted notary is a supported deployment, not a crippled demo.
+
+The hosted service built on this code is **Axela** (https://axela.app): registration,
+multi-tenant operation and the console as a service. That part is not in this repository.

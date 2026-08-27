@@ -29,6 +29,7 @@ var pages = template.Must(template.ParseFS(templates, "templates/*.html"))
 
 // Dashboard is everything one organisation's page shows.
 type Dashboard struct {
+	Brand        string
 	Org          string
 	Now          time.Time
 	Marketplaces []MarketplaceView
@@ -80,7 +81,7 @@ type EventView struct {
 // unreadable marketplace must not blank the whole console, and is instead absent — the
 // events section still names what its machines reported about it.
 func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
-	dashboard := Dashboard{Org: org.Name, Now: now}
+	dashboard := Dashboard{Brand: s.brand, Org: org.Name, Now: now}
 
 	for _, name := range s.marketplaceNames(org.Name) {
 		body, err := s.Serve(org.Name, name)
@@ -199,11 +200,12 @@ func (s *Service) marketplaceNames(orgName string) []string {
 // sessionCookie carries "org:admin-token" — exactly the credential HTTP Basic resends on
 // every request, in a jar the browser manages better: HttpOnly, SameSite, and clearable
 // by a sign-out button. There is deliberately no server-side session to store or fixate.
-const sessionCookie = "axela_session"
+const sessionCookie = "notary_session"
 
 // page is what the public templates render: no organisation data beyond the name the
 // viewer already typed.
 type page struct {
+	Brand   string
 	Org     string
 	Session bool
 	Error   string
@@ -225,11 +227,11 @@ func secureRequest(r *http.Request) bool {
 }
 
 func (s *Service) handleLanding(w http.ResponseWriter, r *http.Request) {
-	render(w, "landing.html", page{})
+	render(w, "landing.html", page{Brand: s.brand})
 }
 
 func (s *Service) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	render(w, "login.html", page{Prefill: r.URL.Query().Get("org")})
+	render(w, "login.html", page{Brand: s.brand, Prefill: r.URL.Query().Get("org")})
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +241,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// answer, and the comparison inside is constant-time.
 	if _, err := s.AuthorizeAdmin(orgName, token); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		render(w, "login.html", page{Prefill: orgName, Error: err.Error()})
+		render(w, "login.html", page{Brand: s.brand, Prefill: orgName, Error: err.Error()})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -284,7 +286,7 @@ func (s *Service) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			s.handleLogout(w, r)
 			return
 		}
-		w.Header().Set("WWW-Authenticate", `Basic realm="axela", charset="UTF-8"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="notary", charset="UTF-8"`)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}

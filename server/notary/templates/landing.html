@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-<title>Axela — a notary for agent skills</title>
+<title>{{.Brand}} — a notary for agent skills</title>
 {{template "style" .}}
 </head>
 <body>
@@ -12,7 +12,7 @@
   <h1>Two stamps on every skill your agents run.</h1>
   <p>
     Publishers sign their skill catalogs with a key that never leaves their machine.
-    Axela verifies each publication and countersigns it, so your machines accept a
+    The notary verifies each publication and countersigns it, so your machines accept a
     catalog only when both signatures check out — a stolen publisher key alone
     publishes nothing, and neither does a compromised notary.
   </p>
@@ -23,7 +23,7 @@
   <div>
     <h3>Publish from CI, no secrets</h3>
     <p>A GitHub Actions job authenticates with the OIDC identity GitHub mints for
-    it. Axela checks the repository claim against your registration and
+    it. The notary checks the repository claim against your registration and
     countersigns — nothing to store, nothing to leak.</p>
   </div>
   <div>
