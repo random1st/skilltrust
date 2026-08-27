@@ -1,34 +1,14 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>skilltrust · {{.Org}}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
-    max-width: 60rem; margin: 2rem auto; padding: 0 1rem;
-  }
-  h1 { font-size: 1.2rem; }
-  h1 small { font-weight: normal; opacity: .6; }
-  h2 { font-size: 1rem; margin-top: 2rem; border-bottom: 1px solid rgba(128,128,128,.35); padding-bottom: .3rem; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: .35rem .75rem .35rem 0; vertical-align: top; }
-  th { font-weight: 600; opacity: .65; font-size: .85rem; }
-  td.n, th.n { text-align: right; padding-right: 1.25rem; }
-  .mono { font-family: ui-monospace, monospace; font-size: .85rem; }
-  .muted { opacity: .6; }
-  .bad { color: #c0392b; font-weight: 600; }
-  .tag { font-size: .75rem; border: 1px solid rgba(128,128,128,.5); border-radius: .6rem;
-         padding: 0 .45rem; margin-right: .25rem; white-space: nowrap; }
-  .empty { opacity: .6; font-style: italic; }
-  footer { margin-top: 3rem; font-size: .8rem; opacity: .55; }
-</style>
+<title>Axela · {{.Org}}</title>
+{{template "style" .}}
 </head>
 <body>
 
-<h1>skilltrust <small>· {{.Org}} · {{.Now.Format "2006-01-02 15:04"}} UTC</small></h1>
+{{template "brandbar" .}}
+
+<h1>{{.Org}} <small class="muted">· {{.Now.Format "2006-01-02 15:04"}} UTC</small></h1>
 
 <h2>Marketplaces</h2>
 {{if .Marketplaces}}

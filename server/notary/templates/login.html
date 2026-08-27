@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Axela — sign in</title>
+{{template "style" .}}
+</head>
+<body>
+
+{{template "brandbar" .}}
+
+<form class="card" method="post" action="/login">
+  <label>organisation
+    <input name="org" value="{{.Prefill}}" autocomplete="username" autofocus required>
+  </label>
+  <label>admin token
+    <input name="token" type="password" autocomplete="current-password" required>
+  </label>
+  {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+  <button>Open console</button>
+</form>
+
+<footer>
+The admin token is read-only: it opens this console and the events feed, and can
+neither publish nor revoke.
+</footer>
+
+</body>
+</html>

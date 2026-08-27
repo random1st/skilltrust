@@ -23,6 +23,11 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/events/{org}", s.handleIngest)
 	mux.HandleFunc("GET /v1/events/{org}", s.handleEvents)
 	mux.HandleFunc("GET /ui/{org}", s.handleDashboard)
+	mux.HandleFunc("GET /{$}", s.handleLanding)
+	mux.HandleFunc("GET /login", s.handleLoginForm)
+	mux.HandleFunc("POST /login", s.handleLogin)
+	mux.HandleFunc("POST /logout", s.handleLogout)
+	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	return mux
 }
 

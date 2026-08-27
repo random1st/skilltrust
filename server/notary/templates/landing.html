@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Axela — a notary for agent skills</title>
+{{template "style" .}}
+</head>
+<body>
+
+{{template "brandbar" .}}
+
+<div class="hero">
+  <h1>Two stamps on every skill your agents run.</h1>
+  <p>
+    Publishers sign their skill catalogs with a key that never leaves their machine.
+    Axela verifies each publication and countersigns it, so your machines accept a
+    catalog only when both signatures check out — a stolen publisher key alone
+    publishes nothing, and neither does a compromised notary.
+  </p>
+  <a class="go" href="/login">Open the console</a>
+</div>
+
+<div class="cols">
+  <div>
+    <h3>Publish from CI, no secrets</h3>
+    <p>A GitHub Actions job authenticates with the OIDC identity GitHub mints for
+    it. Axela checks the repository claim against your registration and
+    countersigns — nothing to store, nothing to leak.</p>
+  </div>
+  <div>
+    <h3>Verify offline</h3>
+    <p>Machines pin both public keys and check every skill before every session,
+    from the catalog already on disk. The network is for refreshing, never for
+    deciding.</p>
+  </div>
+  <div>
+    <h3>See what happened</h3>
+    <p>When a machine quarantines a tampered skill and restores the signed
+    version, it files a signed report. The console shows the fleet's incidents —
+    and can do nothing else, because no signing key lives here.</p>
+  </div>
+</div>
+
+<footer>
+Organisations are registered by the operator; there is no self-service signup yet.
+The API lives under <span class="mono">/v1/</span>.
+</footer>
+
+</body>
+</html>

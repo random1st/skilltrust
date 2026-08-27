@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/internal/attest"
@@ -20,10 +22,10 @@ import (
 // are deliberately not on this server. A browser compromise therefore reads a dashboard —
 // it does not publish a catalog.
 
-//go:embed templates/dashboard.html
+//go:embed templates
 var templates embed.FS
 
-var dashboardTemplate = template.Must(template.ParseFS(templates, "templates/dashboard.html"))
+var pages = template.Must(template.ParseFS(templates, "templates/*.html"))
 
 // Dashboard is everything one organisation's page shows.
 type Dashboard struct {
@@ -36,6 +38,9 @@ type Dashboard struct {
 	// number rather than as rows: unverifiable prose next to verified evidence invites
 	// reading the wrong one.
 	Unverified int
+	// Session is true when the viewer arrived through the login form rather than
+	// HTTP Basic; it decides whether a sign-out button makes sense.
+	Session bool
 }
 
 type MarketplaceView struct {
@@ -191,27 +196,109 @@ func (s *Service) marketplaceNames(orgName string) []string {
 	return names
 }
 
-// handleDashboard serves the console under HTTP Basic auth, the admin token as the
-// password. Basic fits a read-only page: the browser handles the prompt, there is no
-// session to fixate and no state-changing endpoint for CSRF to reach.
-func (s *Service) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	_, password, ok := r.BasicAuth()
-	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="skilltrust", charset="UTF-8"`)
-		http.Error(w, "the admin token is the password", http.StatusUnauthorized)
-		return
+// sessionCookie carries "org:admin-token" — exactly the credential HTTP Basic resends on
+// every request, in a jar the browser manages better: HttpOnly, SameSite, and clearable
+// by a sign-out button. There is deliberately no server-side session to store or fixate.
+const sessionCookie = "axela_session"
+
+// page is what the public templates render: no organisation data beyond the name the
+// viewer already typed.
+type page struct {
+	Org     string
+	Session bool
+	Error   string
+	Prefill string
+}
+
+func render(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pages.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)
 	}
+}
+
+// secureRequest reports whether the viewer reached us over TLS, directly or through the
+// reverse proxy that terminates it; the session cookie is marked Secure exactly then, so
+// a loopback deployment without TLS still works.
+func secureRequest(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+func (s *Service) handleLanding(w http.ResponseWriter, r *http.Request) {
+	render(w, "landing.html", page{})
+}
+
+func (s *Service) handleLoginForm(w http.ResponseWriter, r *http.Request) {
+	render(w, "login.html", page{Prefill: r.URL.Query().Get("org")})
+}
+
+func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
+	orgName := r.FormValue("org")
+	token := r.FormValue("token")
 	// The same non-oracle as the API: a wrong token and an unknown organisation are one
 	// answer, and the comparison inside is constant-time.
-	org, err := s.AuthorizeAdmin(r.PathValue("org"), password)
+	if _, err := s.AuthorizeAdmin(orgName, token); err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		render(w, "login.html", page{Prefill: orgName, Error: err.Error()})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: orgName + ":" + token,
+		Path: "/", MaxAge: 12 * 60 * 60,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureRequest(r),
+	})
+	http.Redirect(w, r, "/ui/"+orgName, http.StatusSeeOther)
+}
+
+func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureRequest(r),
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleDashboard accepts either HTTP Basic (the admin token as the password — curl and
+// the tests use this) or the session cookie the login form set. A browser with neither
+// is sent to the form rather than shown a bare 401.
+func (s *Service) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	orgName := r.PathValue("org")
+	session := false
+	_, token, haveBasic := r.BasicAuth()
+	if !haveBasic {
+		if cookie, err := r.Cookie(sessionCookie); err == nil {
+			if cookieOrg, cookieToken, ok := strings.Cut(cookie.Value, ":"); ok && cookieOrg == orgName {
+				token, session = cookieToken, true
+			}
+		}
+	}
+	if token == "" {
+		http.Redirect(w, r, "/login?org="+url.QueryEscape(orgName), http.StatusSeeOther)
+		return
+	}
+
+	org, err := s.AuthorizeAdmin(orgName, token)
 	if err != nil {
-		w.Header().Set("WWW-Authenticate", `Basic realm="skilltrust", charset="UTF-8"`)
+		if session {
+			// The cookie is stale — the token rotated, most likely. Back to the form.
+			s.handleLogout(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="axela", charset="UTF-8"`)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := dashboardTemplate.Execute(w, s.BuildDashboard(org, time.Now().UTC())); err != nil {
-		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)
-	}
+	dashboard := s.BuildDashboard(org, time.Now().UTC())
+	dashboard.Session = session
+	render(w, "dashboard.html", dashboard)
+}
+
+// A diamond seal: the mark two signatures close.
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#2563eb"/><path d="M50 18 82 50 50 82 18 50Z" fill="none" stroke="#fff" stroke-width="8"/></svg>`
+
+func (s *Service) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write([]byte(faviconSVG))
 }

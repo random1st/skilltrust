@@ -1,0 +1,71 @@
+{{define "style"}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: light dark; --accent: #2563eb; --bad: #c0392b; }
+  body {
+    font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+    max-width: 60rem; margin: 0 auto; padding: 0 1rem 2rem;
+  }
+  header.site {
+    display: flex; align-items: baseline; gap: .75rem;
+    padding: 1.1rem 0; margin-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(128,128,128,.25);
+  }
+  header.site .brand { font-weight: 700; font-size: 1.05rem; text-decoration: none; color: inherit; }
+  header.site .brand b { color: var(--accent); }
+  header.site .crumb { opacity: .6; }
+  header.site form { margin-left: auto; }
+  header.site button {
+    font: inherit; font-size: .85rem; background: none; color: inherit;
+    border: 1px solid rgba(128,128,128,.5); border-radius: .5rem;
+    padding: .15rem .7rem; cursor: pointer;
+  }
+  h1 { font-size: 1.2rem; }
+  h2 { font-size: 1rem; margin-top: 2rem; border-bottom: 1px solid rgba(128,128,128,.35); padding-bottom: .3rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .35rem .75rem .35rem 0; vertical-align: top; }
+  th { font-weight: 600; opacity: .65; font-size: .85rem; }
+  td.n, th.n { text-align: right; padding-right: 1.25rem; }
+  .mono { font-family: ui-monospace, monospace; font-size: .85rem; }
+  .muted { opacity: .6; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .tag { font-size: .75rem; border: 1px solid rgba(128,128,128,.5); border-radius: .6rem;
+         padding: 0 .45rem; margin-right: .25rem; white-space: nowrap; }
+  .empty { opacity: .6; font-style: italic; }
+  footer { margin-top: 3rem; font-size: .8rem; opacity: .55; }
+  form.card {
+    max-width: 22rem; margin: 4rem auto; display: grid; gap: .8rem;
+    border: 1px solid rgba(128,128,128,.35); border-radius: .8rem; padding: 1.5rem;
+  }
+  form.card label { display: grid; gap: .25rem; font-size: .85rem; opacity: .85; }
+  form.card input {
+    font: inherit; padding: .45rem .6rem; border-radius: .5rem;
+    border: 1px solid rgba(128,128,128,.5); background: none; color: inherit;
+  }
+  form.card button {
+    font: inherit; padding: .5rem; border: 0; border-radius: .5rem;
+    background: var(--accent); color: white; cursor: pointer;
+  }
+  .error { color: var(--bad); font-size: .85rem; }
+  .hero { margin: 3.5rem 0 2.5rem; }
+  .hero h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 .6rem; }
+  .hero p { max-width: 38rem; opacity: .85; }
+  .hero a.go {
+    display: inline-block; margin-top: 1rem; background: var(--accent); color: white;
+    text-decoration: none; padding: .55rem 1.1rem; border-radius: .55rem;
+  }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1.5rem; margin-top: 2.5rem; }
+  .cols h3 { font-size: .95rem; margin-bottom: .3rem; }
+  .cols p { font-size: .9rem; opacity: .8; margin-top: 0; }
+</style>
+{{end}}
+
+{{define "brandbar"}}
+<header class="site">
+  <a class="brand" href="/"><b>◈</b> Axela</a>
+  {{if .Org}}<span class="crumb">/ {{.Org}}</span>{{end}}
+  {{if .Session}}<form method="post" action="/logout"><button>sign out</button></form>{{end}}
+</header>
+{{end}}
