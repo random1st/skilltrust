@@ -264,6 +264,7 @@ func lintSkill(directory, root string) SkillReport {
 	}
 	findings = append(findings, contentFindings(parsed, relative)...)
 	findings = append(findings, treeFindings(parsed, files, truncated, directory, root)...)
+	findings = append(findings, portabilityFindings(files, root)...)
 
 	var totalBytes int64
 	var executables []string

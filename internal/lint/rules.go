@@ -441,3 +441,63 @@ func hasShebang(path string) bool {
 	read, err := file.Read(prefix)
 	return err == nil && read == 2 && prefix[0] == '#' && prefix[1] == '!'
 }
+
+// portabilityFindings catches bytes that will not survive the trip to another machine.
+//
+// The digest covers the file exactly as it is, which is what makes it worth signing and
+// also what makes line endings load-bearing. A publisher who signs on macOS and a
+// colleague whose git checkout rewrites LF to CRLF do not disagree about the skill's
+// contents — but they compute different digests, so the hook reports a skill that was
+// changed locally and quarantines a file nobody touched. A false quarantine is worse
+// than a missed one: it teaches people the check is noise.
+func portabilityFindings(files []string, root string) []Finding {
+	var findings []Finding
+
+	for _, file := range files {
+		if !hasCarriageReturns(file) {
+			continue
+		}
+		findings = append(findings, Finding{
+			Rule:     "portability/crlf-line-endings",
+			Severity: SeverityMedium,
+			Message: "CRLF line endings: a checkout that rewrites them computes a different " +
+				"digest, so this skill is quarantined on machines that did nothing wrong " +
+				"(pin the bytes with `* -text` in .gitattributes)",
+			Path: relativeTo(file, root),
+		})
+	}
+	return findings
+}
+
+// crlfSample bounds the read: line endings are uniform in practice, and a rule that
+// reads every byte of every asset turns linting a repository into reading it.
+const crlfSample = 64 << 10
+
+func hasCarriageReturns(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	buffer := make([]byte, crlfSample)
+	read, err := file.Read(buffer)
+	if read <= 0 || (err != nil && read == 0) {
+		return false
+	}
+	sample := buffer[:read]
+
+	// A NUL byte means binary, where a CR is data rather than a line ending — an image
+	// or a compiled asset is not something git rewrites.
+	for _, b := range sample {
+		if b == 0 {
+			return false
+		}
+	}
+	for i := 0; i+1 < len(sample); i++ {
+		if sample[i] == '\r' && sample[i+1] == '\n' {
+			return true
+		}
+	}
+	return false
+}

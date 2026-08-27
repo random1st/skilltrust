@@ -258,3 +258,33 @@ func TestFindingLinesMatchTheFile(t *testing.T) {
 		}
 	}
 }
+
+// CRLF is the cross-platform false alarm: the bytes are signed as they are, so a checkout
+// that rewrites line endings computes a different digest and the hook quarantines a skill
+// nobody touched. Catching it at lint time is the only place it is cheap.
+func TestCarriageReturnsAreReported(t *testing.T) {
+	root := writeSkill(t, "demo", validHeader+"\nJust prose.\r\n", map[string]string{
+		"references/notes.md": "one\r\ntwo\r\n",
+	})
+
+	found := rules(Run(root, Options{}))
+	if severity, reported := found["portability/crlf-line-endings"]; !reported {
+		t.Fatalf("CRLF went unreported; rules = %v", found)
+	} else if severity != SeverityMedium {
+		t.Fatalf("severity = %q", severity)
+	}
+}
+
+// A lone CR is not a line ending git rewrites, and binary files legitimately contain both
+// bytes. Reporting either would make the rule noise, and a noisy rule gets ignored along
+// with the true positives.
+func TestPortabilityDoesNotFireOnCleanOrBinaryFiles(t *testing.T) {
+	root := writeSkill(t, "demo", validHeader+"\nJust prose.\n", map[string]string{
+		"assets/logo.png":  "\x89PNG\x00\r\nIHDR\x00\x00",
+		"references/ok.md": "one\ntwo\n",
+	})
+
+	if found := rules(Run(root, Options{})); found["portability/crlf-line-endings"] != "" {
+		t.Fatalf("the rule fired on files it should ignore; rules = %v", found)
+	}
+}

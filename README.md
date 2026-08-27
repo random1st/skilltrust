@@ -298,6 +298,19 @@ Windows has no executable bit, and the bit is part of the identity on purpose, s
 containing executables does not produce the same digest there. That is pinned by a test
 rather than a footnote.
 
+Line endings are part of the identity for the same reason, and git rewrites them by
+default: `core.autocrlf` is `true` on a stock Windows install, so the same commit checks
+out as different bytes there. Publishers should pin them in the marketplace repository —
+
+```
+# .gitattributes
+* -text
+```
+
+— and `skillctl lint` reports CRLF as `portability/crlf-line-endings`, because the failure
+it causes is a quarantine on a machine that did nothing wrong, which is the kind of false
+alarm that teaches people to switch the check off.
+
 ## Verifying the tool itself
 
 ```bash
