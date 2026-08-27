@@ -133,6 +133,12 @@ func (s *Service) KeyID() string {
 // lacks dots.
 var name = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
+// ValidName reports whether a string is usable as an organisation or marketplace name.
+// A deployment that registers organisations should check before it stores one, so the
+// refusal reads as "pick another name" at the point of choosing rather than as a 404
+// from every request afterwards.
+func ValidName(candidate string) bool { return name.MatchString(candidate) }
+
 // Authorize checks an organisation's publish token in constant time.
 func (s *Service) Authorize(orgName, token string) (Org, error) {
 	return s.authorize(orgName, token, func(org Org) Secret { return org.Token })
