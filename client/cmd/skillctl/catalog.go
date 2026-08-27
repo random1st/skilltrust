@@ -75,8 +75,12 @@ func runCatalogRevoke(args []string) int {
 	now := time.Now().UTC()
 	snapshot := catalog.Snapshot{Sequence: 1, IssuedAt: now, ValidUntil: now.Add(*validFor)}
 
-	// Extend the existing catalog when there is one, so the sequence advances and nothing
-	// previously revoked is quietly dropped.
+	// Extend the existing catalog when there is one: everything it said stays said, and
+	// only the revocation list grows. Carrying the sequence and the revocations but not
+	// the name and the skills is the shape of the bug this reads as guarding against —
+	// the result verifies, publishes and advances the sequence, and every machine
+	// following it quietly stops managing skills it managed a moment earlier. Silence is
+	// what makes it bad: nothing refuses, protection just ends.
 	if existing, err := attest.LoadEnvelope(*catalogPath); err == nil {
 		trusted, err := attest.LoadTrustedKeys(*trustedPath)
 		if err != nil {
@@ -87,6 +91,9 @@ func runCatalogRevoke(args []string) int {
 			fmt.Fprintf(os.Stderr, "skillctl: refusing to extend an unverifiable catalog: %v\n", err)
 			return exitUsage
 		}
+		snapshot.Version = previous.Version
+		snapshot.Name = previous.Name
+		snapshot.Skills = previous.Skills
 		snapshot.Sequence = previous.Sequence + 1
 		snapshot.Revoked = previous.Revoked
 	} else if !os.IsNotExist(err) {
