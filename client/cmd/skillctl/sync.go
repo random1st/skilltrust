@@ -162,6 +162,17 @@ func writeReconcileReport(
 	fmt.Printf("checked in %s; anything unsigned there is not this tool's business.\n",
 		marketplace.CacheRoot(claudeHome))
 
+	// A marketplace that could not be read contributes zero to every count above, so the
+	// summary of a failed run reads exactly like the summary of a clean one — and it is
+	// the last thing on screen, which is the part people actually read. The failure is
+	// already on stderr; this puts it back under the numbers it invalidates, because a
+	// tool built on refusing to overstate what it verified cannot overstate its own run.
+	if len(unusable) > 0 {
+		fmt.Printf("\n%d marketplace%s could not be read, and nothing above covers %s. "+
+			"These plugins were not checked at all.\n",
+			len(unusable), plural(len(unusable), "", "s"), plural(len(unusable), "it", "them"))
+	}
+
 	if reportOnly && acted > 0 {
 		fmt.Printf("\nNothing was changed. Run without --report-only to put plugins back.\n")
 	}
