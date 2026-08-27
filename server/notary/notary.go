@@ -67,19 +67,25 @@ type Org struct {
 
 // Service accepts, countersigns, stores and serves catalogs.
 type Service struct {
-	dataDir string
-	key     ed25519.PrivateKey
-	orgs    map[string]Org
-	oidc    *OIDCVerifier
-	brand   string
+	storage   Storage
+	directory Directory
+	key       ed25519.PrivateKey
+	oidc      *OIDCVerifier
+	brand     string
 }
 
+// New wires the default deployment: records under a data directory, organisations from
+// the configuration. NewFrom is the seam a different storage or directory plugs into.
 func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
-	index := make(map[string]Org, len(orgs))
+	index := make(StaticDirectory, len(orgs))
 	for _, org := range orgs {
 		index[org.Name] = org
 	}
-	return &Service{dataDir: dataDir, key: key, orgs: index, brand: "SkillTrust"}
+	return NewFrom(NewFileStorage(dataDir), index, key)
+}
+
+func NewFrom(storage Storage, directory Directory, key ed25519.PrivateKey) *Service {
+	return &Service{storage: storage, directory: directory, key: key, brand: "SkillTrust"}
 }
 
 // WithOIDC enables OIDC publishing for organisations that registered a repository.
@@ -100,7 +106,7 @@ func (s *Service) WithBrand(brand string) *Service {
 // AuthorizeOIDC accepts a publish when a GitHub Actions token proves the caller is a
 // workflow of the repository this organisation registered.
 func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, error) {
-	org, known := s.orgs[orgName]
+	org, known := s.directory.LookupOrg(orgName)
 	if !known || s.oidc == nil || org.GitHubRepository == "" || org.Publishers == nil {
 		return Org{}, ErrUnknownOrg
 	}
@@ -142,7 +148,7 @@ func (s *Service) AuthorizeAdmin(orgName, token string) (Org, error) {
 }
 
 func (s *Service) authorize(orgName, token string, expected func(Org) string) (Org, error) {
-	org, known := s.orgs[orgName]
+	org, known := s.directory.LookupOrg(orgName)
 	// The comparison runs even for an unknown organisation so that the response time
 	// does not say which half of the check failed. An empty configured token disables
 	// the role rather than matching an empty header.
@@ -171,7 +177,7 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 	// expired catalog would put this service's name on something every client refuses,
 	// and rollback protection here stops a compromised pipeline replaying an old catalog
 	// to un-revoke something.
-	state, err := catalog.LoadState(s.statePath(org.Name, marketplace))
+	state, err := s.storage.LoadState(org.Name, marketplace)
 	if err != nil {
 		return nil, err
 	}
@@ -205,14 +211,10 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 		return nil, err
 	}
 
-	directory := filepath.Join(s.dataDir, "orgs", org.Name, marketplace)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := s.storage.PutCatalog(org.Name, marketplace, countersigned); err != nil {
 		return nil, err
 	}
-	if err := writeAtomically(filepath.Join(directory, "catalog.dsse.json"), countersigned); err != nil {
-		return nil, err
-	}
-	if err := state.Save(s.statePath(org.Name, marketplace), snapshot.Sequence, time.Now().UTC()); err != nil {
+	if err := s.storage.SaveState(org.Name, marketplace, state, snapshot.Sequence, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	return countersigned, nil
@@ -225,15 +227,7 @@ func (s *Service) Serve(orgName, marketplace string) ([]byte, error) {
 	if !name.MatchString(orgName) || !name.MatchString(marketplace) {
 		return nil, ErrAbsent
 	}
-	body, err := os.ReadFile(filepath.Join(s.dataDir, "orgs", orgName, marketplace, "catalog.dsse.json"))
-	if os.IsNotExist(err) {
-		return nil, ErrAbsent
-	}
-	return body, err
-}
-
-func (s *Service) statePath(orgName, marketplace string) string {
-	return filepath.Join(s.dataDir, "orgs", orgName, marketplace, "sequence.json")
+	return s.storage.GetCatalog(orgName, marketplace)
 }
 
 // writeAtomically stages next to the destination and renames, so a crash mid-write

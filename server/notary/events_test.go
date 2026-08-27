@@ -12,10 +12,10 @@ import (
 )
 
 func withEventTokens(f *fixture) *fixture {
-	org := f.service.orgs["acme"]
+	org := f.orgs["acme"]
 	org.IngestToken = "ingest-token"
 	org.AdminToken = "admin-token"
-	f.service.orgs["acme"] = org
+	f.orgs["acme"] = org
 	return f
 }
 

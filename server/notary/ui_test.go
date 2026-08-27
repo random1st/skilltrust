@@ -43,10 +43,10 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	org := f.service.orgs["acme"]
+	org := f.orgs["acme"]
 	org.AdminToken = "admin-token"
 	org.Machines = attest.NewTrustedKeys(machinePub)
-	f.service.orgs["acme"] = org
+	f.orgs["acme"] = org
 
 	if response := f.publish(t, "publish-token", f.signedCatalog(t, 7)); response.StatusCode != http.StatusOK {
 		t.Fatalf("publish: %s", response.Status)
@@ -88,9 +88,9 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 
 func TestDashboardRequiresTheAdminToken(t *testing.T) {
 	f := withEventTokens(newFixture(t))
-	org := f.service.orgs["acme"]
+	org := f.orgs["acme"]
 	org.AdminToken = "admin-token"
-	f.service.orgs["acme"] = org
+	f.orgs["acme"] = org
 
 	for _, password := range []string{"wrong", "publish-token", "ingest-token"} {
 		response, _ := getDashboard(t, f, password)
@@ -128,9 +128,9 @@ func TestDashboardWithoutCredentialsRedirectsToLogin(t *testing.T) {
 
 func TestLoginFormFlow(t *testing.T) {
 	f := withEventTokens(newFixture(t))
-	org := f.service.orgs["acme"]
+	org := f.orgs["acme"]
 	org.AdminToken = "admin-token"
-	f.service.orgs["acme"] = org
+	f.orgs["acme"] = org
 
 	// A wrong token re-renders the form as a 401 and sets no cookie.
 	response, err := noRedirect.PostForm(f.server.URL+"/login",

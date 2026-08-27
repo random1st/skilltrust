@@ -16,6 +16,7 @@ import (
 
 type fixture struct {
 	service      *Service
+	orgs         StaticDirectory
 	server       *httptest.Server
 	publisher    ed25519.PrivateKey
 	publisherPub ed25519.PublicKey
@@ -32,15 +33,16 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := New(t.TempDir(), notaryKey, []Org{{
+	orgs := StaticDirectory{"acme": {
 		Name:       "acme",
 		Token:      "publish-token",
 		Publishers: attest.NewTrustedKeys(publisherPub),
-	}})
+	}}
+	service := NewFrom(NewFileStorage(t.TempDir()), orgs, notaryKey)
 	server := httptest.NewServer(service.Handler())
 	t.Cleanup(server.Close)
 	return &fixture{
-		service: service, server: server,
+		service: service, orgs: orgs, server: server,
 		publisher: publisherKey, publisherPub: publisherPub, notaryPub: notaryPub,
 	}
 }

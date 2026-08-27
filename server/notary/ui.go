@@ -6,8 +6,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -83,7 +81,7 @@ type EventView struct {
 func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 	dashboard := Dashboard{Brand: s.brand, Org: org.Name, Now: now}
 
-	for _, name := range s.marketplaceNames(org.Name) {
+	for _, name := range s.storage.Marketplaces(org.Name) {
 		body, err := s.Serve(org.Name, name)
 		if err != nil {
 			continue
@@ -178,23 +176,6 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 		return dashboard.Marketplaces[i].Name < dashboard.Marketplaces[j].Name
 	})
 	return dashboard
-}
-
-// marketplaceNames lists what has been published for an organisation: the directories
-// beside "events" that hold a catalog.
-func (s *Service) marketplaceNames(orgName string) []string {
-	entries, err := os.ReadDir(filepath.Join(s.dataDir, "orgs", orgName))
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "events" || !name.MatchString(entry.Name()) {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	return names
 }
 
 // sessionCookie carries "org:admin-token" — exactly the credential HTTP Basic resends on

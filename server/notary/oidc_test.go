@@ -78,9 +78,9 @@ func (i *issuer) mint(t *testing.T, spec tokenSpec) string {
 }
 
 func withOIDC(f *fixture, i *issuer, repository string) *fixture {
-	org := f.service.orgs["acme"]
+	org := f.orgs["acme"]
 	org.GitHubRepository = repository
-	f.service.orgs["acme"] = org
+	f.orgs["acme"] = org
 	f.service.WithOIDC(&OIDCVerifier{JWKSURL: i.server.URL})
 	return f
 }

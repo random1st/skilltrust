@@ -4,11 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 
 	"github.com/random1st/skilltrust/internal/attest"
 	"github.com/random1st/skilltrust/internal/report"
@@ -50,44 +46,23 @@ func (s *Service) AcceptEvent(org Org, body []byte) (string, error) {
 	}
 
 	// Content-addressed naming makes redelivery idempotent: a spool that retries after a
-	// partial failure stores the same file, not a duplicate row in somebody's count.
+	// partial failure stores the same record, not a duplicate row in somebody's count.
 	sum := sha256.Sum256(envelope)
 	name := hex.EncodeToString(sum[:8]) + ".json"
-	directory := filepath.Join(s.dataDir, "orgs", org.Name, "events")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", err
-	}
-	if err := writeAtomically(filepath.Join(directory, name), envelope); err != nil {
+	if err := s.storage.PutEvent(org.Name, name, envelope); err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
-// ServeEvents returns every stored envelope, oldest file name first.
+// ServeEvents returns every stored envelope, oldest name first.
 func (s *Service) ServeEvents(org Org) ([]json.RawMessage, error) {
-	directory := filepath.Join(s.dataDir, "orgs", org.Name, "events")
-	entries, err := os.ReadDir(directory)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	stored, err := s.storage.ListEvents(org.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
-
-	events := make([]json.RawMessage, 0, len(names))
-	for _, name := range names {
-		body, err := os.ReadFile(filepath.Join(directory, name))
-		if err != nil {
-			return nil, err
-		}
+	events := make([]json.RawMessage, 0, len(stored))
+	for _, body := range stored {
 		events = append(events, json.RawMessage(body))
 	}
 	return events, nil
