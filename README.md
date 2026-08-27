@@ -316,11 +316,15 @@ longer starts a second, unsigned release racing the first under the same version
 Working: marketplace signing with honest coverage reporting, verification of the Claude Code
 plugin cache, restore with quarantine, revocation by digest, subscription with pinned keys
 and a signature threshold, both hooks, a CI gate, the notary (countersigning, catalog
-serving, event collection, OIDC publishing), `fleet` over a directory or the notary,
-`lint`, `digest`.
+serving, event collection, OIDC publishing, a read-only web console), `fleet` over a
+directory or the notary, `lint`, `digest`.
 
-Not built: a web interface for the console; billing or any multi-tenant management beyond
-the notary's per-organisation configuration.
+Not built here: registration, multi-tenancy, billing. `notaryd` serves the organisations
+its configuration names and is meant to be run by the people it serves — a hosted service
+on top of it is a different product, and [Axela](https://axela.app) is ours. Nothing about
+verification lives there: it implements the `Storage` and `Directory` seams and imports
+this module, and `notarytest.Contract` is the suite any implementation of those seams
+should pass.
 
 ## Layout
 
