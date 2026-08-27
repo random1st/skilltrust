@@ -272,6 +272,15 @@ func (s *Service) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.RenderDashboard(w, org, session)
+}
+
+// RenderDashboard writes the console for an organisation the caller has already
+// authorized. A deployment that authenticates its operators some other way — an identity
+// provider, an authenticating proxy — reaches the same page through here rather than
+// reimplementing the template, and the notary keeps no opinion about how the person at
+// the other end proved who they are.
+func (s *Service) RenderDashboard(w http.ResponseWriter, org Org, session bool) {
 	dashboard := s.BuildDashboard(org, time.Now().UTC())
 	dashboard.Session = session
 	render(w, "dashboard.html", dashboard)
