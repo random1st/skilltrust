@@ -226,7 +226,7 @@
     <text x="910" y="766" font-size="13" fill="#2d3748">Оля отзывает скилл одной командой —</text>
     <text x="910" y="788" font-size="13" fill="#2d3748">по отпечатку, так что переименование</text>
     <text x="910" y="810" font-size="13" fill="#2d3748">или копия его не спасут.</text>
-    <text x="910" y="840" font-size="13" font-weight="700" fill="#2d3748">Следующий sync — и он снят везде,</text>
+    <text x="910" y="840" font-size="13" font-weight="700" fill="#2d3748">Следующий sync — и он больше не запустится,</text>
     <text x="910" y="862" font-size="13" font-weight="700" fill="#2d3748">каждая машина отчиталась.</text>
   </g>
 
