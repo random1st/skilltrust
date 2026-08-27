@@ -20,7 +20,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/attest"
 )
 
 // PayloadType keeps an event signature from being replayed as an attestation or a catalog.

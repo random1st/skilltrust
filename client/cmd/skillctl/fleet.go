@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
-	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/report"
 	"github.com/random1st/skilltrust/internal/source"
 )
 

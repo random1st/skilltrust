@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/random1st/skilltrust/internal/attest"
-	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/report"
 )
 
 // MaxEventBytes bounds one submitted event. An event is a sentence about one incident;

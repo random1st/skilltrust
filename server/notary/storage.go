@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/catalog"
+	"github.com/random1st/skilltrust/catalog"
 )
 
 // Storage is where a notary keeps what it accepted: countersigned catalogs, the

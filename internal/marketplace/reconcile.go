@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/catalog"
+	"github.com/random1st/skilltrust/catalog"
 )
 
 // Outcome is what a reconciliation found for one signed plugin.

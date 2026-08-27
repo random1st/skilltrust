@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/attest"
 )
 
 func TestAnEventRoundTripsAndCarriesItsSeverity(t *testing.T) {

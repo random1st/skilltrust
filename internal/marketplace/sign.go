@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/random1st/skilltrust/internal/archive"
-	"github.com/random1st/skilltrust/internal/catalog"
+	"github.com/random1st/skilltrust/catalog"
 )
 
 // ClientManagedRoots are entries Claude Code maintains inside an installed plugin directory,

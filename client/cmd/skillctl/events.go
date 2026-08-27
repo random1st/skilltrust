@@ -5,9 +5,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/marketplace"
-	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/report"
 )
 
 func reportConfigPath() string { return homePath("reporting.json") }

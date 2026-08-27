@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/attest"
 )
 
 // runTrust manages the pinned keys directly, which is what an administrator collecting a

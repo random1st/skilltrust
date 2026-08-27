@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
+	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/server/notary"
 )
 

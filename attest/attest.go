@@ -306,17 +306,28 @@ func LoadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	key, err := ParsePrivateKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return key, nil
+}
+
+// ParsePrivateKey decodes a PEM-encoded signing key. Callers that read from a file want
+// LoadPrivateKey, which also refuses a key the whole machine can read; this exists for
+// keys that arrive from a secret store rather than a path.
+func ParsePrivateKey(raw []byte) (ed25519.PrivateKey, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil {
-		return nil, fmt.Errorf("%s is not a PEM file", path)
+		return nil, errors.New("not a PEM-encoded key")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("%s is not a usable private key: %w", path, err)
+		return nil, fmt.Errorf("not a usable private key: %w", err)
 	}
 	key, ok := parsed.(ed25519.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("%s holds a %T; only ed25519 is supported", path, parsed)
+		return nil, fmt.Errorf("holds a %T; only ed25519 is supported", parsed)
 	}
 	return key, nil
 }

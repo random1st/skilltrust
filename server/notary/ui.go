@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
-	"github.com/random1st/skilltrust/internal/catalog"
-	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/catalog"
+	"github.com/random1st/skilltrust/report"
 )
 
 // The console is a reader. It renders what the notary already stores and verifies it the

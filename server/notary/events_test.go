@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/attest"
-	"github.com/random1st/skilltrust/internal/report"
+	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/report"
 )
 
 func withEventTokens(f *fixture) *fixture {
