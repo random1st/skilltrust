@@ -50,14 +50,19 @@ type OIDCVerifier struct {
 	fetched time.Time
 }
 
+// registeredClaims are the ones every issuer sets and VerifyToken decides on.
+type registeredClaims struct {
+	Issuer    string   `json:"iss"`
+	Audience  audience `json:"aud"`
+	Expiry    int64    `json:"exp"`
+	NotBefore int64    `json:"nbf"`
+}
+
+// githubClaims adds what a GitHub Actions token carries about the workflow that minted it.
 type githubClaims struct {
-	Issuer     string   `json:"iss"`
-	Audience   audience `json:"aud"`
-	Expiry     int64    `json:"exp"`
-	NotBefore  int64    `json:"nbf"`
-	Repository string   `json:"repository"`
-	Ref        string   `json:"ref"`
-	Workflow   string   `json:"workflow"`
+	Repository string `json:"repository"`
+	Ref        string `json:"ref"`
+	Workflow   string `json:"workflow"`
 }
 
 // audience tolerates both the string and the array form the spec allows.
@@ -79,9 +84,28 @@ func (a *audience) UnmarshalJSON(raw []byte) error {
 
 // Verify checks the token end to end and returns the repository it was minted for.
 func (v *OIDCVerifier) Verify(token string, now time.Time) (repository string, err error) {
+	payload, err := v.VerifyToken(token, now)
+	if err != nil {
+		return "", err
+	}
+	var claims githubClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
+	}
+	if claims.Repository == "" {
+		return "", fmt.Errorf("%w: no repository claim", ErrOIDC)
+	}
+	return claims.Repository, nil
+}
+
+// VerifyToken checks signature, issuer, audience and validity window, and returns the
+// claims payload for the caller to read what its issuer puts there. Everything an
+// issuer-specific check can rely on has already been decided here; what comes back is
+// data from a token that verified, not a token to verify.
+func (v *OIDCVerifier) VerifyToken(token string, now time.Time) (json.RawMessage, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return "", fmt.Errorf("%w: not a JWT", ErrOIDC)
+		return nil, fmt.Errorf("%w: not a JWT", ErrOIDC)
 	}
 
 	var header struct {
@@ -89,30 +113,35 @@ func (v *OIDCVerifier) Verify(token string, now time.Time) (repository string, e
 		KeyID     string `json:"kid"`
 	}
 	if err := decodeSegment(parts[0], &header); err != nil {
-		return "", fmt.Errorf("%w: unreadable header", ErrOIDC)
+		return nil, fmt.Errorf("%w: unreadable header", ErrOIDC)
 	}
-	// Pinned to the one algorithm GitHub uses. Honouring whatever the header asks for is
-	// the classic JWT failure — "alg":"none" and HMAC-with-the-public-key both live there.
+	// Pinned to the one algorithm these issuers use. Honouring whatever the header asks
+	// for is the classic JWT failure — "alg":"none" and HMAC-with-the-public-key both
+	// live there.
 	if header.Algorithm != "RS256" {
-		return "", fmt.Errorf("%w: algorithm %q", ErrOIDC, header.Algorithm)
+		return nil, fmt.Errorf("%w: algorithm %q", ErrOIDC, header.Algorithm)
 	}
 
 	key, err := v.keyFor(header.KeyID, now)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return "", fmt.Errorf("%w: unreadable signature", ErrOIDC)
+		return nil, fmt.Errorf("%w: unreadable signature", ErrOIDC)
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature); err != nil {
-		return "", fmt.Errorf("%w: signature does not verify", ErrOIDC)
+		return nil, fmt.Errorf("%w: signature does not verify", ErrOIDC)
 	}
 
-	var claims githubClaims
-	if err := decodeSegment(parts[1], &claims); err != nil {
-		return "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("%w: unreadable claims", ErrOIDC)
+	}
+	var claims registeredClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("%w: unreadable claims", ErrOIDC)
 	}
 
 	issuer := v.Issuer
@@ -124,7 +153,7 @@ func (v *OIDCVerifier) Verify(token string, now time.Time) (repository string, e
 		wanted = DefaultAudience
 	}
 	if claims.Issuer != issuer {
-		return "", fmt.Errorf("%w: issuer %q", ErrOIDC, claims.Issuer)
+		return nil, fmt.Errorf("%w: issuer %q", ErrOIDC, claims.Issuer)
 	}
 	audienceMatched := false
 	for _, entry := range claims.Audience {
@@ -133,18 +162,15 @@ func (v *OIDCVerifier) Verify(token string, now time.Time) (repository string, e
 		}
 	}
 	if !audienceMatched {
-		return "", fmt.Errorf("%w: token was minted for %v, not %q", ErrOIDC, claims.Audience, wanted)
+		return nil, fmt.Errorf("%w: token was minted for %v, not %q", ErrOIDC, claims.Audience, wanted)
 	}
 	if claims.Expiry == 0 || now.After(time.Unix(claims.Expiry, 0)) {
-		return "", fmt.Errorf("%w: expired", ErrOIDC)
+		return nil, fmt.Errorf("%w: expired", ErrOIDC)
 	}
 	if claims.NotBefore != 0 && now.Add(clockSkew).Before(time.Unix(claims.NotBefore, 0)) {
-		return "", fmt.Errorf("%w: not valid yet", ErrOIDC)
+		return nil, fmt.Errorf("%w: not valid yet", ErrOIDC)
 	}
-	if claims.Repository == "" {
-		return "", fmt.Errorf("%w: no repository claim", ErrOIDC)
-	}
-	return claims.Repository, nil
+	return payload, nil
 }
 
 // clockSkew mirrors the catalog's tolerance for clocks that disagree slightly.
