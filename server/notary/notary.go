@@ -10,7 +10,6 @@ package notary
 
 import (
 	"crypto/ed25519"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,12 +41,14 @@ var (
 // events but not publish; an administrator holds AdminToken and can read what machines
 // filed. A leak of any one of them stays the size of its role.
 type Org struct {
-	Name  string
-	Token string
-	// IngestToken lets machines file events. Empty disables the endpoint.
-	IngestToken string
-	// AdminToken lets an administrator read filed events. Empty disables the endpoint.
-	AdminToken string
+	Name string
+	// The three tokens are held as digests, not plaintext: see Secret. A disabled
+	// (zero) Secret closes its endpoint rather than opening it.
+	Token Secret
+	// IngestToken lets machines file events. Disabled closes the endpoint.
+	IngestToken Secret
+	// AdminToken lets an administrator read filed events. Disabled closes the endpoint.
+	AdminToken Secret
 	// GitHubRepository, when set, lets that repository's Actions jobs publish with
 	// their OIDC token instead of the static token — no long-lived secret in CI. The
 	// token replaces only the credential: the catalog must still carry a pinned
@@ -134,27 +135,26 @@ var name = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // Authorize checks an organisation's publish token in constant time.
 func (s *Service) Authorize(orgName, token string) (Org, error) {
-	return s.authorize(orgName, token, func(org Org) string { return org.Token })
+	return s.authorize(orgName, token, func(org Org) Secret { return org.Token })
 }
 
 // AuthorizeIngest checks the token machines file events with.
 func (s *Service) AuthorizeIngest(orgName, token string) (Org, error) {
-	return s.authorize(orgName, token, func(org Org) string { return org.IngestToken })
+	return s.authorize(orgName, token, func(org Org) Secret { return org.IngestToken })
 }
 
 // AuthorizeAdmin checks the token an administrator reads events with.
 func (s *Service) AuthorizeAdmin(orgName, token string) (Org, error) {
-	return s.authorize(orgName, token, func(org Org) string { return org.AdminToken })
+	return s.authorize(orgName, token, func(org Org) Secret { return org.AdminToken })
 }
 
-func (s *Service) authorize(orgName, token string, expected func(Org) string) (Org, error) {
+func (s *Service) authorize(orgName, token string, expected func(Org) Secret) (Org, error) {
 	org, known := s.directory.LookupOrg(orgName)
 	// The comparison runs even for an unknown organisation so that the response time
-	// does not say which half of the check failed. An empty configured token disables
-	// the role rather than matching an empty header.
-	want := expected(org)
-	match := subtle.ConstantTimeCompare([]byte(want), []byte(token)) == 1
-	if !known || !match || want == "" || org.Publishers == nil {
+	// does not say which half of the check failed. A disabled secret closes the role
+	// rather than matching an absent header.
+	match := expected(org).Matches(token)
+	if !known || !match || org.Publishers == nil {
 		return Org{}, ErrUnknownOrg
 	}
 	return org, nil

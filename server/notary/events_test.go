@@ -13,8 +13,8 @@ import (
 
 func withEventTokens(f *fixture) *fixture {
 	org := f.orgs["acme"]
-	org.IngestToken = "ingest-token"
-	org.AdminToken = "admin-token"
+	org.IngestToken = NewSecret("ingest-token")
+	org.AdminToken = NewSecret("admin-token")
 	f.orgs["acme"] = org
 	return f
 }

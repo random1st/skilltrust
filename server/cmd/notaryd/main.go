@@ -115,8 +115,9 @@ func run(configPath string) error {
 			machines = attest.NewTrustedKeys(keys...)
 		}
 		orgs = append(orgs, notary.Org{
-			Name: entry.Name, Token: entry.Token,
-			IngestToken: entry.IngestToken, AdminToken: entry.AdminToken,
+			Name: entry.Name, Token: notary.NewSecret(entry.Token),
+			IngestToken: notary.NewSecret(entry.IngestToken),
+			AdminToken:  notary.NewSecret(entry.AdminToken),
 			GitHubRepository: entry.GitHubRepository,
 			Publishers:       attest.NewTrustedKeys(publishers...),
 			Machines:         machines,

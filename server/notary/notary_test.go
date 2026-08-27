@@ -35,7 +35,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	orgs := StaticDirectory{"acme": {
 		Name:       "acme",
-		Token:      "publish-token",
+		Token:      NewSecret("publish-token"),
 		Publishers: attest.NewTrustedKeys(publisherPub),
 	}}
 	service := NewFrom(NewFileStorage(t.TempDir()), orgs, notaryKey)

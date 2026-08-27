@@ -44,7 +44,7 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 		t.Fatal(err)
 	}
 	org := f.orgs["acme"]
-	org.AdminToken = "admin-token"
+	org.AdminToken = NewSecret("admin-token")
 	org.Machines = attest.NewTrustedKeys(machinePub)
 	f.orgs["acme"] = org
 
@@ -89,7 +89,7 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 func TestDashboardRequiresTheAdminToken(t *testing.T) {
 	f := withEventTokens(newFixture(t))
 	org := f.orgs["acme"]
-	org.AdminToken = "admin-token"
+	org.AdminToken = NewSecret("admin-token")
 	f.orgs["acme"] = org
 
 	for _, password := range []string{"wrong", "publish-token", "ingest-token"} {
@@ -129,7 +129,7 @@ func TestDashboardWithoutCredentialsRedirectsToLogin(t *testing.T) {
 func TestLoginFormFlow(t *testing.T) {
 	f := withEventTokens(newFixture(t))
 	org := f.orgs["acme"]
-	org.AdminToken = "admin-token"
+	org.AdminToken = NewSecret("admin-token")
 	f.orgs["acme"] = org
 
 	// A wrong token re-renders the form as a 401 and sets no cookie.
