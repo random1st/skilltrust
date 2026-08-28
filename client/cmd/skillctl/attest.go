@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/archive"
 	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/internal/archive"
 	"github.com/random1st/skilltrust/internal/skillmd"
 )
 

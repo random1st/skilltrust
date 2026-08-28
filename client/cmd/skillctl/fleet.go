@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
-	"github.com/random1st/skilltrust/report"
 	"github.com/random1st/skilltrust/internal/source"
+	"github.com/random1st/skilltrust/report"
 )
 
 // runFleet aggregates the events machines filed, into the view an administrator asks for.

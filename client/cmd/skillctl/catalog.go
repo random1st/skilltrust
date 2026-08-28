@@ -9,9 +9,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/random1st/skilltrust/internal/archive"
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/catalog"
+	"github.com/random1st/skilltrust/internal/archive"
 	"github.com/random1st/skilltrust/internal/lint"
 	"github.com/random1st/skilltrust/internal/marketplace"
 	"github.com/random1st/skilltrust/internal/skillmd"

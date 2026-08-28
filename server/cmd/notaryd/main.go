@@ -116,8 +116,8 @@ func run(configPath string) error {
 		}
 		orgs = append(orgs, notary.Org{
 			Name: entry.Name, Token: notary.NewSecret(entry.Token),
-			IngestToken: notary.NewSecret(entry.IngestToken),
-			AdminToken:  notary.NewSecret(entry.AdminToken),
+			IngestToken:      notary.NewSecret(entry.IngestToken),
+			AdminToken:       notary.NewSecret(entry.AdminToken),
 			GitHubRepository: entry.GitHubRepository,
 			Publishers:       attest.NewTrustedKeys(publishers...),
 			Machines:         machines,
