@@ -288,7 +288,7 @@ func runSubscribe(args []string) int {
 	}
 	fmt.Printf("pinned keys %s\n", strings.Join(fingerprints(keyIDs), ", "))
 	fmt.Printf("threshold   %d of %d must sign\n\n", *threshold, len(keyIDs))
-	fmt.Printf("Next: skillctl sync --dry-run   — see what this catalog would change\n")
+	fmt.Printf("Next: skillctl sync -report-only   — see what this catalog would change\n")
 	return exitClean
 }
 
