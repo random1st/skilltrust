@@ -102,9 +102,10 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 			ValidUntil: snapshot.ValidUntil, Expired: !now.Before(snapshot.ValidUntil),
 			Skills: len(snapshot.Skills), Revoked: len(snapshot.Revoked),
 		}
+		ours := s.keyIDSet()
 		for _, signature := range envelope.Signatures {
 			role := "unknown"
-			if signature.KeyID == s.KeyID() {
+			if _, mine := ours[signature.KeyID]; mine {
 				role = "notary"
 			} else if _, pinned := org.Publishers.Lookup(signature.KeyID); pinned {
 				role = "publisher"

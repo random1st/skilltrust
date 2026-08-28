@@ -71,9 +71,12 @@ type Org struct {
 type Service struct {
 	storage   Storage
 	directory Directory
-	key       ed25519.PrivateKey
-	oidc      *OIDCVerifier
-	brand     string
+	// keys are the countersigning keys, first one primary. More than one exists only
+	// mid-rotation: every catalog is signed by all of them, so a consumer pinning either
+	// the outgoing or the incoming key keeps verifying through the overlap window.
+	keys  []ed25519.PrivateKey
+	oidc  *OIDCVerifier
+	brand string
 }
 
 // New wires the default deployment: records under a data directory, organisations from
@@ -86,8 +89,11 @@ func New(dataDir string, key ed25519.PrivateKey, orgs []Org) *Service {
 	return NewFrom(NewFileStorage(dataDir), index, key)
 }
 
-func NewFrom(storage Storage, directory Directory, key ed25519.PrivateKey) *Service {
-	return &Service{storage: storage, directory: directory, key: key, brand: "SkillTrust"}
+func NewFrom(storage Storage, directory Directory, keys ...ed25519.PrivateKey) *Service {
+	if len(keys) == 0 {
+		panic("notary: a service needs at least one countersigning key")
+	}
+	return &Service{storage: storage, directory: directory, keys: keys, brand: "SkillTrust"}
 }
 
 // WithOIDC enables OIDC publishing for organisations that registered a repository.
@@ -133,9 +139,26 @@ func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, erro
 	return org, nil
 }
 
-// KeyID identifies the notary's countersigning key, which consumers pin.
+// KeyID identifies the notary's primary countersigning key, which consumers pin.
 func (s *Service) KeyID() string {
-	return attest.KeyID(s.key.Public().(ed25519.PublicKey))
+	return attest.KeyID(s.keys[0].Public().(ed25519.PublicKey))
+}
+
+// keyIDSet indexes every countersigning key id this service currently holds.
+func (s *Service) keyIDSet() map[string]struct{} {
+	ids := make(map[string]struct{}, len(s.keys))
+	for _, key := range s.keys {
+		ids[attest.KeyID(key.Public().(ed25519.PublicKey))] = struct{}{}
+	}
+	return ids
+}
+
+// KeySet returns the signed announcement of this notary's current keys. During rotation
+// it lists the outgoing and the incoming key and is signed by both, so a consumer pinning
+// either can verify it and learn the other; a stranger pinning neither learns nothing
+// they can trust, which is the point.
+func (s *Service) KeySet(now time.Time) (*attest.Envelope, error) {
+	return attest.SignKeySet(s.keys, now)
 }
 
 // name constrains org and marketplace path elements. They become directory names, so
@@ -212,16 +235,21 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 	// could attach a garbage signature under this notary's key id, which — if kept —
 	// would make every threshold-2 machine refuse the whole envelope as a forgery. The
 	// payload just verified, so replacing our own entry loses nothing.
+	ours := s.keyIDSet()
 	kept := envelope.Signatures[:0]
 	for _, signature := range envelope.Signatures {
-		if signature.KeyID != s.KeyID() {
+		if _, mine := ours[signature.KeyID]; !mine {
 			kept = append(kept, signature)
 		}
 	}
 	envelope.Signatures = kept
 
-	if err := attest.Countersign(&envelope, s.key); err != nil {
-		return nil, err
+	// Every current key signs, not just the primary. Mid-rotation this is what keeps a
+	// machine that pinned only the outgoing key — or only the incoming one — verifying.
+	for _, key := range s.keys {
+		if err := attest.Countersign(&envelope, key); err != nil {
+			return nil, err
+		}
 	}
 	countersigned, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {

@@ -27,6 +27,42 @@ var indexClient = &http.Client{
 	},
 }
 
+// FetchJSON downloads a JSON document over HTTPS under the same transport rules as an
+// index — TLS or loopback, bounded size, no redirects — and returns the bytes. It is the
+// transport for documents that are verified in memory rather than stored, such as a
+// notary's signed key-set announcement.
+func FetchJSON(address string) ([]byte, error) {
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not a URL: %w", address, err)
+	}
+	if parsed.Scheme != "https" && !Loopback(parsed.Hostname()) {
+		return nil, fmt.Errorf("%q is not https; a signed document fetched in the "+
+			"clear invites the substitution the signature exists to catch", address)
+	}
+
+	response, err := indexClient.Get(address)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch %s: %w", address, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s answered %s", address, response.Status)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, MaxIndexBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", address, err)
+	}
+	if len(body) > MaxIndexBytes {
+		return nil, fmt.Errorf("%s is larger than %d bytes; refusing it", address, MaxIndexBytes)
+	}
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("%s is not JSON", address)
+	}
+	return body, nil
+}
+
 // FetchIndex downloads a signed catalog envelope over HTTPS and stores it at destination.
 //
 // It deliberately does not verify anything about the contents beyond being JSON: the

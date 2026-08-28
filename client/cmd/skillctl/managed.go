@@ -48,17 +48,43 @@ type Subscription struct {
 	// declare a threshold of one, so a threshold a catalog carries about itself protects
 	// nobody.
 	Threshold int `json:"threshold,omitempty"`
+	// Parties groups key ids that belong to one signer, so a signer mid-rotation — two
+	// keys, one owner — still counts once toward the threshold. Without this, pinning a
+	// notary's current and next key at threshold two would let the notary's two
+	// signatures alone reach the count and publish without the publisher, which is the
+	// exact thing the threshold exists to prevent. A key in no party is its own party;
+	// existing flat subscriptions therefore behave exactly as before. The map is a party
+	// label to the ids it covers, and an id listed here is pinned whether or not it also
+	// appears in KeyIDs.
+	Parties map[string][]string `json:"parties,omitempty"`
 }
 
 // Keys returns every key allowed to sign for this subscription.
 func (s Subscription) Keys() []string {
-	if len(s.KeyIDs) > 0 {
-		return s.KeyIDs
+	keys := s.KeyIDs
+	if len(keys) == 0 && s.KeyID != "" {
+		keys = []string{s.KeyID}
 	}
-	if s.KeyID != "" {
-		return []string{s.KeyID}
+	if len(s.Parties) == 0 {
+		return keys
 	}
-	return nil
+	seen := map[string]struct{}{}
+	var all []string
+	for _, key := range keys {
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			all = append(all, key)
+		}
+	}
+	for _, party := range sortedParties(s.Parties) {
+		for _, key := range s.Parties[party] {
+			if _, dup := seen[key]; !dup {
+				seen[key] = struct{}{}
+				all = append(all, key)
+			}
+		}
+	}
+	return all
 }
 
 // Required is how many distinct signers must be present.
@@ -69,28 +95,53 @@ func (s Subscription) Required() int {
 	return 1
 }
 
-// Satisfied reports whether the keys that signed meet this subscription's requirement, and
-// says what was missing when they do not.
-func (s Subscription) Satisfied(signers []string) error {
-	allowed := map[string]struct{}{}
+// partyOf maps every pinned key id to the party it counts as. A key in no party counts
+// as itself.
+func (s Subscription) partyOf() map[string]string {
+	owner := map[string]string{}
 	for _, key := range s.Keys() {
-		allowed[key] = struct{}{}
+		owner[key] = key
 	}
-	matched := 0
-	for _, signer := range signers {
-		if _, ok := allowed[signer]; ok {
-			matched++
+	for party, keys := range s.Parties {
+		for _, key := range keys {
+			owner[key] = party
 		}
 	}
-	if matched >= s.Required() {
+	return owner
+}
+
+// Satisfied reports whether the signers meet this subscription's requirement, and says
+// what was missing when they do not. The threshold counts distinct parties, not distinct
+// keys: two signatures from one signer's rotation pair agree on nothing that one of them
+// did not already assert.
+func (s Subscription) Satisfied(signers []string) error {
+	owner := s.partyOf()
+	matched := map[string]struct{}{}
+	for _, signer := range signers {
+		if party, ok := owner[signer]; ok {
+			matched[party] = struct{}{}
+		}
+	}
+	if len(matched) >= s.Required() {
 		return nil
 	}
-	if matched == 0 {
+	if len(matched) == 0 {
 		return fmt.Errorf("signed by %s, none of which this machine pinned for %s",
 			strings.Join(fingerprints(signers), ", "), s.Name)
 	}
 	return fmt.Errorf("%d of the %d signatures %s requires are present",
-		matched, s.Required(), s.Name)
+		len(matched), s.Required(), s.Name)
+}
+
+// sortedParties keeps every walk over the parties map deterministic, so files and error
+// messages do not shuffle between runs.
+func sortedParties(parties map[string][]string) []string {
+	labels := make([]string, 0, len(parties))
+	for label := range parties {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return labels
 }
 
 func fingerprints(keys []string) []string {

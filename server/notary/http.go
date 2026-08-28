@@ -31,6 +31,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /notary.pub", s.handleNotaryKey)
+	mux.HandleFunc("GET /v1/keys", s.handleKeySet)
 	return mux
 }
 
@@ -45,7 +46,7 @@ func (s *Service) Handler() http.Handler {
 // this server. What the pin then guarantees is that the notary cannot change out from
 // under a machine after it subscribed.
 func (s *Service) handleNotaryKey(w http.ResponseWriter, r *http.Request) {
-	pem, err := attest.EncodePublicKey(s.key.Public().(ed25519.PublicKey))
+	pem, err := attest.EncodePublicKey(s.keys[0].Public().(ed25519.PublicKey))
 	if err != nil {
 		http.Error(w, "the key could not be encoded", http.StatusInternalServerError)
 		return
@@ -53,6 +54,25 @@ func (s *Service) handleNotaryKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("X-Key-Id", s.KeyID())
 	w.Write(pem)
+}
+
+// handleKeySet serves the signed announcement of every current countersigning key.
+//
+// Unlike /notary.pub this is not trust-on-first-use: the envelope is signed by the
+// current keys, so a machine that already pins one verifies the announcement against
+// that pin and learns the incoming key over a chain of trust rather than over a hope
+// about TLS. This is the read side of rotation; `skillctl refresh` and sync are the
+// write side on the consumer's disk.
+func (s *Service) handleKeySet(w http.ResponseWriter, r *http.Request) {
+	envelope, err := s.KeySet(time.Now().UTC())
+	if err != nil {
+		http.Error(w, "the key set could not be signed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(envelope); err != nil {
+		return
+	}
 }
 
 // bearer extracts the token, empty when absent — which never matches, because an empty

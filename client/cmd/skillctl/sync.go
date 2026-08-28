@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
@@ -26,6 +27,34 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 	if len(subscriptions) == 0 {
 		return nil, nil, exitClean
 	}
+
+	// Rotation is picked up in passing: a notary mid-rotation announces its next key
+	// under a signature from the current one, and merging that here — before the trust
+	// store is read — is what lets an unattended fleet keep verifying after the old key
+	// retires. A failed announcement is silent by design: servers that predate the
+	// endpoint answer 404 on every sync, and the machine still verifies against the pins
+	// it has. `skillctl refresh` is the loud version when rotation needs diagnosing.
+	if !offline {
+		refreshed := false
+		for i := range subscriptions {
+			if subscriptions[i].CatalogURL == "" {
+				continue
+			}
+			added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys())
+			if err != nil || len(added) == 0 {
+				continue
+			}
+			refreshed = true
+			fmt.Printf("%-11s %s now also pinned for %s\n",
+				"pinned", strings.Join(fingerprints(added), ", "), subscriptions[i].Name)
+		}
+		if refreshed {
+			if err := saveSubscriptions(subscriptions); err != nil {
+				return nil, nil, fail(err)
+			}
+		}
+	}
+
 	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
 	if err != nil {
 		return nil, nil, fail(err)

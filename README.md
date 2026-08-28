@@ -384,7 +384,7 @@ client/        skillctl — the CLI. One static binary, two dependencies.
 server/        notaryd — the notary. Same story: one binary, files for state.
 internal/      the packages both sides are built from: digest, DSSE, catalog, reporting
 plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
-docs/          the threat model, and running the gate in other CIs
+docs/          the threat model, key rotation, and running the gate in other CIs
 ```
 
 The Go module lives at the root so that the notary service and the client verify with the
