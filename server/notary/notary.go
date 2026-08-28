@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
@@ -106,18 +107,28 @@ func (s *Service) WithBrand(brand string) *Service {
 
 // AuthorizeOIDC accepts a publish when a GitHub Actions token proves the caller is a
 // workflow of the repository this organisation registered.
+//
+// A registration of "owner/repo@refs/heads/main" binds the branch too: without it, a
+// workflow on any branch of the repository can submit. The pinned signature and the
+// monotonic sequence still stand behind this check either way — binding the ref narrows
+// who can knock, it is not what keeps the door shut.
 func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, error) {
 	org, known := s.directory.LookupOrg(orgName)
 	if !known || s.oidc == nil || org.GitHubRepository == "" || org.Publishers == nil {
 		return Org{}, ErrUnknownOrg
 	}
-	repository, err := s.oidc.Verify(token, now)
+	repository, ref, err := s.oidc.Verify(token, now)
 	if err != nil {
 		return Org{}, err
 	}
-	if repository != org.GitHubRepository {
+	registered, requiredRef, _ := strings.Cut(org.GitHubRepository, "@")
+	if repository != registered {
 		return Org{}, fmt.Errorf("%w: the token belongs to %s, which is not %s's registered repository",
 			ErrOIDC, repository, orgName)
+	}
+	if requiredRef != "" && ref != requiredRef {
+		return Org{}, fmt.Errorf("%w: the token was minted on %s, and %s only publishes from %s",
+			ErrOIDC, ref, orgName, requiredRef)
 	}
 	return org, nil
 }

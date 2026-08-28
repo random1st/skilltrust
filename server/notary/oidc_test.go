@@ -44,6 +44,7 @@ type tokenSpec struct {
 	issuer     string
 	audience   any
 	repository string
+	ref        string
 	expiry     time.Time
 }
 
@@ -65,7 +66,7 @@ func (i *issuer) mint(t *testing.T, spec tokenSpec) string {
 	header, _ := json.Marshal(map[string]string{"alg": spec.algorithm, "kid": "test-key"})
 	claims, _ := json.Marshal(map[string]any{
 		"iss": spec.issuer, "aud": spec.audience,
-		"exp": spec.expiry.Unix(), "repository": spec.repository,
+		"exp": spec.expiry.Unix(), "repository": spec.repository, "ref": spec.ref,
 	})
 	signing := base64.RawURLEncoding.EncodeToString(header) + "." +
 		base64.RawURLEncoding.EncodeToString(claims)
@@ -156,5 +157,39 @@ func TestOIDCIsClosedForUnregisteredOrgs(t *testing.T) {
 	token := i.mint(t, tokenSpec{repository: "acme/marketplace"})
 	if response := f.publish(t, token, f.signedCatalog(t, 1)); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a JWT against an unregistered org answered %s, not 401", response.Status)
+	}
+}
+
+// Registering "owner/repo@ref" binds the branch. Without the binding, a workflow on any
+// branch of the repository may submit; with it, a topic branch's token is refused even
+// though the repository matches. Plain "owner/repo" keeps accepting any ref, because
+// every organisation registered before refs existed wrote it that way.
+func TestARegisteredRefIsBinding(t *testing.T) {
+	i := newIssuer(t)
+	f := withOIDC(newFixture(t), i, "acme/marketplace@refs/heads/main")
+
+	main := i.mint(t, tokenSpec{repository: "acme/marketplace", ref: "refs/heads/main"})
+	if response := f.publish(t, main, f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
+		t.Fatalf("the registered ref answered %s", response.Status)
+	}
+
+	branch := i.mint(t, tokenSpec{repository: "acme/marketplace", ref: "refs/heads/topic"})
+	if response := f.publish(t, branch, f.signedCatalog(t, 2)); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a topic branch against a ref-bound registration answered %s, not 401", response.Status)
+	}
+
+	missing := i.mint(t, tokenSpec{repository: "acme/marketplace"})
+	if response := f.publish(t, missing, f.signedCatalog(t, 2)); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a token with no ref against a ref-bound registration answered %s, not 401", response.Status)
+	}
+}
+
+func TestAPlainRegistrationAcceptsAnyRef(t *testing.T) {
+	i := newIssuer(t)
+	f := withOIDC(newFixture(t), i, "acme/marketplace")
+
+	branch := i.mint(t, tokenSpec{repository: "acme/marketplace", ref: "refs/heads/anything"})
+	if response := f.publish(t, branch, f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
+		t.Fatalf("an unbound registration refused a branch: %s", response.Status)
 	}
 }

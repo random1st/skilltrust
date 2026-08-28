@@ -83,19 +83,19 @@ func (a *audience) UnmarshalJSON(raw []byte) error {
 }
 
 // Verify checks the token end to end and returns the repository it was minted for.
-func (v *OIDCVerifier) Verify(token string, now time.Time) (repository string, err error) {
+func (v *OIDCVerifier) Verify(token string, now time.Time) (repository, ref string, err error) {
 	payload, err := v.VerifyToken(token, now)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var claims githubClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
+		return "", "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
 	}
 	if claims.Repository == "" {
-		return "", fmt.Errorf("%w: no repository claim", ErrOIDC)
+		return "", "", fmt.Errorf("%w: no repository claim", ErrOIDC)
 	}
-	return claims.Repository, nil
+	return claims.Repository, claims.Ref, nil
 }
 
 // VerifyToken checks signature, issuer, audience and validity window, and returns the
