@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,6 +27,18 @@ import (
 // reported as "not scanned" — never as a pass.
 const scannerBinary = "skillspector"
 
+// modelBudgets carries token budgets for models the scanner ships no metadata for. It is
+// handed over in a temporary file through the scanner's own override variable rather than
+// patched into its package: an installed tool that this one edits is a tool that breaks on
+// its next upgrade, silently and somewhere else.
+//
+//go:embed models.yaml
+var modelBudgets []byte
+
+// scannerRegistryVar is the scanner's documented override. A caller who sets it has taken
+// the decision, and this tool does not overrule them.
+const scannerRegistryVar = "SKILLSPECTOR_MODEL_REGISTRY"
+
 // ErrScannerMissing is a scanner that is not installed, which is different from a scan
 // that found nothing: one is an unanswered question, the other is an answer.
 var ErrScannerMissing = errors.New("skillspector is not installed")
@@ -42,8 +55,18 @@ type scanVerdict struct {
 	// LLMUsed records whether the semantic pass ran. A static-only scan is a complete
 	// answer to a narrower question, and reporting it as though the deeper one ran would
 	// be the overstatement this project exists to avoid.
+	//
+	// It is read from the model calls the report accounts for, not from the report's own
+	// llm_available flag: against Bedrock that flag reads false while the scanner is
+	// making Bedrock calls and billing for them. Tokens spent are the one claim about
+	// this that cannot be wrong.
 	LLMUsed bool
-	Raw     []byte
+	// InputTokens and OutputTokens are what the semantic pass actually cost. A scan whose
+	// price is invisible is one nobody can budget for, and the question "what does this
+	// cost per skill" should be answerable without an invoice arriving first.
+	InputTokens  int
+	OutputTokens int
+	Raw          []byte
 }
 
 type scanFinding struct {
@@ -87,6 +110,19 @@ func scanSkill(directory string, useLLM bool) (scanVerdict, error) {
 	var diagnostics bytes.Buffer
 	command := exec.Command(binary, args...)
 	command.Stderr = &diagnostics
+	command.Env = os.Environ()
+
+	// Without correct token budgets the semantic pass fails on every call and the scan
+	// still succeeds — reporting our misconfiguration as findings against the skill. So
+	// the budgets go in whenever the caller has not supplied their own.
+	if useLLM && os.Getenv(scannerRegistryVar) == "" {
+		budgets, err := writeModelBudgets()
+		if err != nil {
+			return scanVerdict{}, err
+		}
+		defer os.Remove(budgets)
+		command.Env = append(command.Env, scannerRegistryVar+"="+budgets)
+	}
 	runErr := command.Run()
 
 	body, readErr := os.ReadFile(report.Name())
@@ -115,7 +151,10 @@ func parseScanReport(body []byte) (scanVerdict, error) {
 			Recommendation string `json:"recommendation"`
 		} `json:"risk_assessment"`
 		Metadata struct {
-			LLMAvailable bool `json:"llm_available"`
+			InferenceUsage []struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"inference_usage"`
 		} `json:"metadata"`
 		Issues []struct {
 			Severity    string `json:"severity"`
@@ -139,9 +178,13 @@ func parseScanReport(body []byte) (scanVerdict, error) {
 		Score:          report.RiskAssessment.Score,
 		Recommendation: report.RiskAssessment.Recommendation,
 		Severities:     map[string]int{},
-		LLMUsed:        report.Metadata.LLMAvailable,
 		Raw:            body,
 	}
+	for _, call := range report.Metadata.InferenceUsage {
+		verdict.InputTokens += call.PromptTokens
+		verdict.OutputTokens += call.CompletionTokens
+	}
+	verdict.LLMUsed = len(report.Metadata.InferenceUsage) > 0
 	for _, issue := range report.Issues {
 		verdict.Severities[issue.Severity]++
 		detail := issue.Finding
@@ -155,6 +198,20 @@ func parseScanReport(body []byte) (scanVerdict, error) {
 		})
 	}
 	return verdict, nil
+}
+
+// writeModelBudgets materialises the embedded budgets where the scanner can read them.
+func writeModelBudgets() (string, error) {
+	file, err := os.CreateTemp("", "skillspector-models-*.yaml")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if _, err := file.Write(modelBudgets); err != nil {
+		os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
 }
 
 func firstLine(text string) string {
@@ -173,6 +230,9 @@ func printVerdict(verdict scanVerdict) {
 	}
 	fmt.Printf("%-11s %s\n", "scanned", verdict.Skill)
 	fmt.Printf("%-11s %d — %s (%s)\n", "score", verdict.Score, verdict.Recommendation, depth)
+	if verdict.LLMUsed {
+		fmt.Printf("%-11s %d in, %d out\n", "tokens", verdict.InputTokens, verdict.OutputTokens)
+	}
 
 	if len(verdict.Findings) == 0 {
 		fmt.Printf("%-11s nothing the scanner recognises\n", "findings")

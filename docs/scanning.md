@@ -25,6 +25,37 @@ of this product where the basic check is the paid tier.
 service can run it for you, and that is the metered thing, because those tokens cost real
 money. Own key, own bill, no limit.
 
+## What the semantic pass costs
+
+On Bedrock, two environment variables are the whole setup:
+
+```bash
+export SKILLSPECTOR_PROVIDER=bedrock
+export SKILLSPECTOR_MODEL=us.amazon.nova-lite-v1:0
+skillctl scan ./plugins/deploy-runbook --llm
+```
+
+Every scan prints the tokens it spent, so the bill is knowable before it arrives. Measured
+on one real skill (`systematic-debugging`, 14 files), against AWS on-demand list prices in
+`us-east-1` fetched from the Price List API in August 2026:
+
+| Model | tokens in / out | per skill | per 1000 skills |
+|---|---|---|---|
+| `us.amazon.nova-micro-v1:0` | 10 189 / 632 | $0.00047 | **$0.47** |
+| `us.amazon.nova-lite-v1:0` | 10 189 / 717 | $0.00077 | **$0.77** |
+| `us.amazon.nova-2-lite-v1:0` | 13 392 / 1 131 | $0.0080 | $8.00 |
+
+Nova Lite is the sensible default: a tenth the price of Nova 2 Lite on the same skill. Your
+own numbers will differ with skill size — that is why the tool prints them.
+
+`skillctl` supplies the scanner with token budgets for these models, because it ships with
+none for Nova and derives them from the context window instead. Nova has a very large
+context and a small output cap, so the derived budget is one Nova refuses, and **every
+semantic call then fails while the scan still succeeds** — the failures come back as
+"referenced artifact was not completely inspected" findings, and the skill scores worse for
+a misconfiguration on your side. Uncorrected, that scored this same skill 90 instead of 66.
+Setting `SKILLSPECTOR_MODEL_REGISTRY` yourself takes the decision back.
+
 ## Read the findings; do not obey the score
 
 A static scanner matches patterns, and a skill that *teaches* about a risk contains the

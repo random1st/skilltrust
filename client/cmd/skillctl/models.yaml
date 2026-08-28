@@ -1,0 +1,33 @@
+# Token budgets for models the bundled scanner has no metadata for.
+#
+# SkillSpector derives its output-token budget from a model's context window when its
+# registry does not name the model. Amazon Nova has a very large context and a small
+# output cap, so that derivation asks for far more output than the model accepts and
+# every semantic call fails with a validation error. The scan still finishes, and that is
+# the dangerous part: the failures surface as "referenced artifact was not completely
+# inspected" findings, so a skill scores *worse* for a misconfiguration on our side.
+#
+# These entries make the budget correct. Caps are one step under the documented maximum
+# because Bedrock rejects a request equal to the limit, not merely above it — the API
+# says "lower than 10000", and 10000 is refused.
+#
+# Verified against the AWS Bedrock Converse API and the Amazon Nova user guide, August 2026.
+models:
+  "us.amazon.nova-lite-v1:0":
+    context_length: 300000
+    max_output_tokens: 9500
+  "us.amazon.nova-micro-v1:0":
+    context_length: 128000
+    max_output_tokens: 9500
+  "us.amazon.nova-pro-v1:0":
+    context_length: 300000
+    max_output_tokens: 9500
+  "us.amazon.nova-premier-v1:0":
+    context_length: 1000000
+    max_output_tokens: 9500
+  "us.amazon.nova-2-lite-v1:0":
+    context_length: 1000000
+    max_output_tokens: 65000
+  "global.amazon.nova-2-lite-v1:0":
+    context_length: 1000000
+    max_output_tokens: 65000
