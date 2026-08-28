@@ -32,7 +32,12 @@ type Dashboard struct {
 	Now          time.Time
 	Marketplaces []MarketplaceView
 	Machines     []MachineView
-	Events       []EventView
+	// ActiveMachines counts machines whose latest verified report is within thirty days
+	// of Now. It is the fleet-size number a per-machine plan meters, computed from the
+	// same signed events the table shows — so an operator can always see which machines
+	// make up the count, and a machine that stops reporting ages out on its own.
+	ActiveMachines int
+	Events         []EventView
 	// Unverified counts stored events no configured machine key signed. Shown as a
 	// number rather than as rows: unverifiable prose next to verified evidence invites
 	// reading the wrong one.
@@ -161,6 +166,9 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 		}
 		for _, view := range machines {
 			dashboard.Machines = append(dashboard.Machines, *view)
+			if view.Last.After(dashboard.Now.AddDate(0, 0, -30)) {
+				dashboard.ActiveMachines++
+			}
 		}
 	}
 

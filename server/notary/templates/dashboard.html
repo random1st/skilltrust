@@ -34,6 +34,7 @@ this line the first screen a new organisation sees is three empty sections and n
 
 <h2>Machines</h2>
 {{if .Machines}}
+<p class="hint">{{.ActiveMachines}} active in the last 30 days — the number a per-machine plan counts.</p>
 <table>
   <tr><th>machine</th><th>last report</th><th class="n">restored</th><th class="n">revoked seen</th><th class="n">unverifiable</th><th class="n">catalog unusable</th></tr>
   {{range .Machines}}

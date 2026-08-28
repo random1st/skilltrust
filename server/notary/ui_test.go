@@ -1,6 +1,7 @@
 package notary
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -227,5 +228,58 @@ func TestLandingIsPublicAndSilent(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("an unknown path answered %s, not 404", response.Status)
+	}
+}
+
+// The active-machine count is the number a per-machine plan meters, so it must count
+// fleets honestly: a machine whose last verified report is older than thirty days is
+// not a seat, and a machine reporting today is.
+func TestActiveMachinesCountsOnlyTheLastThirtyDays(t *testing.T) {
+	f := withEventTokens(newFixture(t))
+
+	freshPub, freshKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalePub, staleKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := f.orgs["acme"]
+	org.AdminToken = NewSecret("admin-token")
+	org.Machines = attest.NewTrustedKeys(freshPub, stalePub)
+	f.orgs["acme"] = org
+
+	events := []struct {
+		machine string
+		key     ed25519.PrivateKey
+		at      time.Time
+	}{
+		{"laptop-fresh", freshKey, time.Now().UTC()},
+		{"laptop-stale", staleKey, time.Now().UTC().AddDate(0, 0, -45)},
+	}
+	for _, e := range events {
+		signed, err := report.Sign(report.Event{
+			Kind: report.KindRestored, Machine: e.machine, Marketplace: "acme",
+			Plugin: "deploy-runbook", At: e.at,
+		}, e.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(signed)
+		if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
+			t.Fatalf("ingest: %s", response.Status)
+		}
+	}
+
+	response, page := getDashboard(t, f, "admin-token")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard answered %s", response.Status)
+	}
+	if !strings.Contains(page, "1 active in the last 30 days") {
+		t.Fatal("the dashboard must count exactly the fresh machine as active")
+	}
+	if !strings.Contains(page, "laptop-stale") {
+		t.Fatal("the stale machine still belongs in the table; only the active count excludes it")
 	}
 }
