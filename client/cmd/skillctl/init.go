@@ -64,7 +64,10 @@ func runInit(args []string) int {
 	fmt.Printf("Your key signs approvals and never leaves this machine. Share %s\n",
 		filepath.Base(defaultPublicKey()))
 	fmt.Printf("with anyone who needs to verify what you approved.\n\n")
-	fmt.Printf("Next: skillctl status\n")
+	// Named a command that does not exist for as long as this message has. The next step is
+	// following a catalog, and it needs a key from whoever publishes it — which is the part a
+	// person arrives here not knowing.
+	fmt.Printf("Next: skillctl subscribe <git-url> --key <their-signer.pub>\n")
 	return exitClean
 }
 

@@ -277,6 +277,43 @@ certify prose an agent will follow.
 | `digest` | either | The canonical digest of a skill directory. |
 | `attest` | either | Sign and verify a statement about a digest. |
 
+## For the agent
+
+Setting a machine up is a sequence in which every step succeeds out of order and the wrong
+order fails silently — pinning after subscribing, or two pinned keys with a threshold of one.
+`skilltrust-mcp` serves that sequence over the Model Context Protocol, so an agent follows it
+rather than reconstructing it from this file.
+
+```jsonc
+{
+  "mcpServers": {
+    "skilltrust": { "command": "skilltrust-mcp" }
+  }
+}
+```
+
+It offers three things, and the tools are the least interesting of them:
+
+- **Resources** — `skilltrust://state` says what is already set up and names the single next
+  step, which is the question every setup starts with and no command answers. Alongside it:
+  the machine's public key, the pinned set, the catalogs followed, and a written guide. The
+  private key has no URI.
+- **Prompts** — `set_up_this_machine`, `publish_this_repository`, `investigate_change`. The
+  order and the reasons for it.
+- **Tools** — thin wrappers over the commands below. `skilltrust_check` reports and writes
+  nothing; `skilltrust_sync` is marked destructive because it restores files. Subscribing
+  defaults the threshold to the number of keys pinned, which is where the CLI's default of
+  one is a trap.
+
+It is a separate binary on purpose. `skillctl` decides whether a skill is trusted and runs at
+every session start; the MCP SDK brings nine dependencies, and a verifier whose supply chain
+grows to serve a convenience is arguing against itself. `go version -m` on a built `skillctl`
+still lists two.
+
+Registering an organisation with a hosted notary is not among the tools, because it happens
+in a browser behind a sign-in and returns tokens shown once. The prompt says so and hands
+that step to a person.
+
 ## How identity is computed
 
 A skill's identity is the SHA-256 of a canonical PAX tar of its folder: paths sorted, times

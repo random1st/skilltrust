@@ -1,13 +1,19 @@
 # skillctl — the SkillTrust client
 #
 # Everything here runs offline. `make check` is what CI runs.
-.PHONY: build check fmt lint test snapshot install clean release notarize plugin
+.PHONY: build check fmt lint test snapshot install clean release notarize plugin mcp
 
 GOFLAGS ?=
 VERSION ?= dev
 
 build:
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/skillctl ./cmd/skillctl
+
+# The MCP server is a second binary, not a skillctl subcommand: the SDK brings nine
+# dependencies, and skillctl decides whether a skill is trusted. `go version -m bin/skillctl`
+# still lists two.
+mcp:
+	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/skilltrust-mcp ./cmd/skilltrust-mcp
 
 check: fmt lint test
 

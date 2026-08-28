@@ -96,7 +96,11 @@ func runHookInstall(args []string) int {
 			"Usage: skillctl hook install [flags]\n\n"+
 				"Prints the client configuration for both checks. Nothing is written unless\n"+
 				"--apply is given, and --apply keeps a backup.\n\n"+
-				"Most people want `skillctl setup`, which does this and the rest.\n\nFlags:\n")
+				// `skillctl setup` was never built. What it described is now the
+				// set_up_this_machine prompt in skilltrust-mcp, which does the same steps in
+				// the same order and explains why the order matters.
+				"Install this last: verification that runs when someone remembers is not the\n"+
+				"same claim as verification that runs every session.\n\nFlags:\n")
 		flags.PrintDefaults()
 	}
 
