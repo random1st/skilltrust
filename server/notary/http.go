@@ -124,9 +124,10 @@ func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// dots is not a case worth supporting — it would be indistinguishable on purpose.
 	token := bearer(r)
 	var org Org
+	var where Provenance
 	var err error
 	if strings.Count(token, ".") == 2 {
-		org, err = s.AuthorizeOIDC(r.PathValue("org"), token, time.Now().UTC())
+		org, where, err = s.AuthorizeOIDC(r.PathValue("org"), token, time.Now().UTC())
 	} else {
 		org, err = s.Authorize(r.PathValue("org"), token)
 	}
@@ -146,7 +147,7 @@ func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	countersigned, err := s.Accept(org, r.PathValue("marketplace"), body)
+	countersigned, err := s.AcceptFrom(r.Context(), org, r.PathValue("marketplace"), body, where)
 	switch {
 	case errors.Is(err, ErrRollback):
 		http.Error(w, err.Error(), http.StatusConflict)

@@ -63,6 +63,10 @@ type githubClaims struct {
 	Repository string `json:"repository"`
 	Ref        string `json:"ref"`
 	Workflow   string `json:"workflow"`
+	// SHA is the commit the workflow ran on. GitHub mints it, the publisher does not
+	// supply it, which is what makes it usable as the thing an admission check reads:
+	// a caller cannot point the check at a commit other than the one it published from.
+	SHA string `json:"sha"`
 }
 
 // audience tolerates both the string and the array form the spec allows.
@@ -82,20 +86,20 @@ func (a *audience) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// Verify checks the token end to end and returns the repository it was minted for.
-func (v *OIDCVerifier) Verify(token string, now time.Time) (repository, ref string, err error) {
+// Verify checks the token end to end and returns what it was minted for.
+func (v *OIDCVerifier) Verify(token string, now time.Time) (repository, ref, commit string, err error) {
 	payload, err := v.VerifyToken(token, now)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	var claims githubClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
+		return "", "", "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
 	}
 	if claims.Repository == "" {
-		return "", "", fmt.Errorf("%w: no repository claim", ErrOIDC)
+		return "", "", "", fmt.Errorf("%w: no repository claim", ErrOIDC)
 	}
-	return claims.Repository, claims.Ref, nil
+	return claims.Repository, claims.Ref, claims.SHA, nil
 }
 
 // VerifyToken checks signature, issuer, audience and validity window, and returns the

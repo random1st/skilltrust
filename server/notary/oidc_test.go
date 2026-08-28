@@ -1,17 +1,21 @@
 package notary
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/random1st/skilltrust/catalog"
 	"time"
 )
 
@@ -205,12 +209,12 @@ func TestEveryRegisteredRepositoryPublishes(t *testing.T) {
 		"the first registration":       {repository: "acme/marketplace", ref: "refs/heads/topic"},
 		"the second, on its bound ref": {repository: "acme/curated", ref: "refs/heads/main"},
 	} {
-		if _, err := f.service.AuthorizeOIDC("acme", i.mint(t, spec), time.Now()); err != nil {
+		if _, _, err := f.service.AuthorizeOIDC("acme", i.mint(t, spec), time.Now()); err != nil {
 			t.Errorf("%s must publish: %v", name, err)
 		}
 	}
 
-	_, err := f.service.AuthorizeOIDC("acme",
+	_, _, err := f.service.AuthorizeOIDC("acme",
 		i.mint(t, tokenSpec{repository: "acme/curated", ref: "refs/heads/topic"}), time.Now())
 	if err == nil {
 		t.Fatal("a ref-bound registration must refuse another branch")
@@ -220,5 +224,55 @@ func TestEveryRegisteredRepositoryPublishes(t *testing.T) {
 	// a registration that is already correct.
 	if !strings.Contains(err.Error(), "refs/heads/main") {
 		t.Errorf("the refusal must name the branch that publishes, got: %v", err)
+	}
+}
+
+// refusingGate records what it saw and refuses.
+type refusingGate struct {
+	seen   Provenance
+	skills int
+	err    error
+}
+
+func (g *refusingGate) Admit(_ context.Context, snapshot *catalog.Snapshot, where Provenance) error {
+	g.seen, g.skills = where, len(snapshot.Skills)
+	return g.err
+}
+
+// A gate that refuses must stop the publication, and it must do so before the notary
+// countersigns: a signature exists once it is made, and one made for a catalog the
+// deployment then rejected is a signature on record for something nobody approved.
+func TestARefusingGateStopsThePublishBeforeAnythingIsSigned(t *testing.T) {
+	i := newIssuer(t)
+	gate := &refusingGate{err: fmt.Errorf("%w: the scan found something", ErrRefused)}
+	f := withOIDC(newFixture(t), i, "acme/marketplace")
+	f.service.WithGate(gate)
+
+	token := i.mint(t, tokenSpec{repository: "acme/marketplace"})
+	if response := f.publish(t, token, f.signedCatalog(t, 1)); response.StatusCode == http.StatusOK {
+		t.Fatal("a refused publish must not answer OK")
+	}
+	if _, err := f.service.Serve("acme", "plugins"); err == nil {
+		t.Error("a refused catalog must not have been stored")
+	}
+
+	// The gate must be told where the bytes are, from claims GitHub minted rather than
+	// anything the caller sent — otherwise it checks whatever the publisher preferred.
+	if gate.seen.Repository != "acme/marketplace" {
+		t.Errorf("the gate was not told the repository, got %q", gate.seen.Repository)
+	}
+	if gate.seen.Organisation != "acme" || gate.seen.Marketplace != "plugins" {
+		t.Errorf("the gate was not told what it is admitting: %+v", gate.seen)
+	}
+}
+
+// The seam must be invisible when nothing installs it: a self-hoster running the binary
+// gets the behaviour they had before, with no network call and nothing to configure.
+func TestNoGateMeansNoChange(t *testing.T) {
+	i := newIssuer(t)
+	f := withOIDC(newFixture(t), i, "acme/marketplace")
+	token := i.mint(t, tokenSpec{repository: "acme/marketplace"})
+	if response := f.publish(t, token, f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
+		t.Fatalf("a publish with no gate installed answered %s", response.Status)
 	}
 }

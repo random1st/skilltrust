@@ -9,6 +9,7 @@
 package notary
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,32 @@ type Org struct {
 	Machines *attest.TrustedKeys
 }
 
+// Provenance is what the notary knows about where a catalog came from, beyond the
+// signatures on it. It is empty for a publish made with a static token: that credential
+// says who, and nothing about from where.
+type Provenance struct {
+	Organisation string
+	Marketplace  string
+	// Repository is "owner/repo" and Commit the exact commit, both taken from claims
+	// GitHub minted rather than from anything the caller sent. An admission check that
+	// read a publisher-supplied location would be checking whatever the publisher
+	// preferred it to check.
+	Repository string
+	Commit     string
+}
+
+// Gate is an optional admission check a deployment installs. It runs after a catalog has
+// verified and before this service puts its own name on it, and refusing is how it stops
+// the publication.
+//
+// The interface is here and nothing that implements one is: what a deployment wants to
+// check — a scanner, a licence policy, a quota, a human — differs per deployment and
+// mostly costs money or reaches the network, which is not what a self-hoster running a
+// single binary asked for. A deployment with no gate behaves exactly as before.
+type Gate interface {
+	Admit(ctx context.Context, snapshot *catalog.Snapshot, provenance Provenance) error
+}
+
 // Service accepts, countersigns, stores and serves catalogs.
 type Service struct {
 	storage   Storage
@@ -83,6 +110,7 @@ type Service struct {
 	// the outgoing or the incoming key keeps verifying through the overlap window.
 	keys  []ed25519.PrivateKey
 	oidc  *OIDCVerifier
+	gate  Gate
 	brand string
 }
 
@@ -109,6 +137,12 @@ func (s *Service) WithOIDC(verifier *OIDCVerifier) *Service {
 	return s
 }
 
+// WithGate installs an admission check that every publish must pass.
+func (s *Service) WithGate(gate Gate) *Service {
+	s.gate = gate
+	return s
+}
+
 // WithBrand names the deployment on its web pages. The default is the project name;
 // a hosted service sets its own. Nothing but presentation hangs on it.
 func (s *Service) WithBrand(brand string) *Service {
@@ -125,15 +159,16 @@ func (s *Service) WithBrand(brand string) *Service {
 // workflow on any branch of the repository can submit. The pinned signature and the
 // monotonic sequence still stand behind this check either way — binding the ref narrows
 // who can knock, it is not what keeps the door shut.
-func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, error) {
+func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, Provenance, error) {
 	org, known := s.directory.LookupOrg(orgName)
 	if !known || s.oidc == nil || len(org.GitHubRepositories) == 0 || org.Publishers == nil {
-		return Org{}, ErrUnknownOrg
+		return Org{}, Provenance{}, ErrUnknownOrg
 	}
-	repository, ref, err := s.oidc.Verify(token, now)
+	repository, ref, commit, err := s.oidc.Verify(token, now)
 	if err != nil {
-		return Org{}, err
+		return Org{}, Provenance{}, err
 	}
+	where := Provenance{Organisation: orgName, Repository: repository, Commit: commit}
 	// A repository that matched by name but not by ref is reported as a ref failure, not
 	// as "unregistered": the caller is who they claim to be and got the branch wrong, and
 	// telling them their repository is unknown would send them to fix the wrong thing.
@@ -144,15 +179,16 @@ func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, erro
 			continue
 		}
 		if requiredRef == "" || ref == requiredRef {
-			return org, nil
+			return org, where, nil
 		}
 		refMismatch = fmt.Errorf("%w: the token was minted on %s, and %s publishes %s only from %s",
 			ErrOIDC, ref, orgName, registered, requiredRef)
 	}
 	if refMismatch != nil {
-		return Org{}, refMismatch
+		return Org{}, Provenance{}, refMismatch
 	}
-	return Org{}, fmt.Errorf("%w: the token belongs to %s, which is not among %s's registered repositories (%s)",
+	return Org{}, Provenance{}, fmt.Errorf(
+		"%w: the token belongs to %s, which is not among %s's registered repositories (%s)",
 		ErrOIDC, repository, orgName, strings.Join(org.GitHubRepositories, ", "))
 }
 
@@ -221,6 +257,13 @@ func (s *Service) authorize(orgName, token string, expected func(Org) Secret) (O
 // countersigned envelope — so the pipeline that published it can also commit it back to
 // the repository, keeping the git path and the notary path carrying the same bytes.
 func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, error) {
+	return s.AcceptFrom(context.Background(), org, marketplace, body, Provenance{})
+}
+
+// AcceptFrom is Accept with what is known about where the catalog came from, which is
+// what an installed Gate reads. Accept remains for callers that have nothing to say.
+func (s *Service) AcceptFrom(ctx context.Context, org Org, marketplace string, body []byte,
+	where Provenance) ([]byte, error) {
 	if !name.MatchString(marketplace) {
 		return nil, fmt.Errorf("%w: %q is not usable as a marketplace name", ErrRefused, marketplace)
 	}
@@ -255,6 +298,16 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 	if snapshot.Name != marketplace {
 		return nil, fmt.Errorf("%w: the catalog is signed for %q and was published as %q",
 			ErrRefused, snapshot.Name, marketplace)
+	}
+
+	// The gate runs here: after the catalog has proved it is what it claims, and before
+	// this service's key goes anywhere near it. Refusing after countersigning would be a
+	// signature on record for a catalog the deployment rejected.
+	if s.gate != nil {
+		where.Organisation, where.Marketplace = org.Name, marketplace
+		if err := s.gate.Admit(ctx, snapshot, where); err != nil {
+			return nil, err
+		}
 	}
 
 	// Drop any signature already claiming this notary's key before signing fresh. Two
