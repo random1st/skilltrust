@@ -137,14 +137,6 @@ func reconcileOne(
 	return result
 }
 
-// PluginSource finds the signed bytes for a plugin inside the marketplace checkout. It is
-// exported because a publisher-side gate — scanning what is about to be signed — needs the
-// same answer this reconciler needs, and two ways of locating a plugin's bytes is how one
-// of them ends up checking a directory nobody signed.
-func PluginSource(manifest *Manifest, repository, name string) (string, bool) {
-	return pluginSource(manifest, repository, name)
-}
-
 // pluginSource finds the signed bytes for a plugin inside the marketplace checkout.
 func pluginSource(manifest *Manifest, repository, name string) (string, bool) {
 	if manifest == nil || repository == "" {

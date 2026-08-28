@@ -61,11 +61,6 @@ func runMarketplaceSign(args []string) int {
 	keyPath := flags.String("key", defaultSigningKey(), "signing key")
 	validFor := flags.Duration("valid-for", 7*24*time.Hour,
 		"how long consumers may keep using this signature before refreshing")
-	scanLLM := flags.Bool("scan-llm", false,
-		"also run the scanner's semantic pass, which sends file contents to your model provider")
-	allowFindings := flags.Bool("sign-anyway", false,
-		"sign even plugins the scanner says not to install; the reason belongs in your commit message")
-
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
@@ -89,35 +84,6 @@ func runMarketplaceSign(args []string) int {
 	if len(coverage.Signed) == 0 {
 		fmt.Fprintf(os.Stderr, "skillctl: %s owns no plugins this key can sign\n", manifest.Name)
 		return exitUsage
-	}
-
-	// Scanning before signing, because a signature is the moment a publisher takes
-	// responsibility for bytes. It does not make a skill safe and does not pretend to —
-	// what it removes is the case where nobody looked at all.
-	var directories []string
-	for _, managed := range coverage.Signed {
-		if source, ok := marketplace.PluginSource(manifest, repository, managed.Name); ok {
-			directories = append(directories, source)
-		}
-	}
-	blocked, scanned := scanBeforeSigning(directories, *scanLLM, time.Now().UTC())
-	switch {
-	case !scanned:
-		fmt.Fprintf(os.Stderr, "skillctl: %s is not installed, so nothing was scanned before "+
-			"signing. Install it with:\n  uv tool install git+https://github.com/NVIDIA/skillspector.git\n",
-			scannerBinary)
-	case len(blocked) > 0 && !*allowFindings:
-		fmt.Fprintf(os.Stderr, "skillctl: the scanner says not to install %d of these plugins, "+
-			"so they were not signed:\n", len(blocked))
-		for _, verdict := range blocked {
-			fmt.Fprintf(os.Stderr, "  %-24s score %d\n", verdict.Skill, verdict.Score)
-		}
-		fmt.Fprintf(os.Stderr, "Read them with `skillctl scan <dir>`. Sign anyway with "+
-			"--sign-anyway once you have decided the findings are acceptable.\n")
-		return exitFindings
-	case len(blocked) > 0:
-		fmt.Fprintf(os.Stderr, "skillctl: signing %d plugin(s) the scanner objected to, "+
-			"because --sign-anyway was given\n", len(blocked))
 	}
 
 	key, err := attest.LoadPrivateKey(*keyPath)
