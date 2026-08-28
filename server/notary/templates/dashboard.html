@@ -25,7 +25,12 @@
   </tr>
   {{end}}
 </table>
-{{else}}<p class="empty">nothing published yet</p>{{end}}
+{{else}}
+<p class="empty">nothing published yet</p>
+<p class="hint">Sign one with <span class="mono">skillctl marketplace sign .</span> and PUT the envelope
+to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using your publish token. Without
+this line the first screen a new organisation sees is three empty sections and no next step.</p>
+{{end}}
 
 <h2>Machines</h2>
 {{if .Machines}}
