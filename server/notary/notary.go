@@ -50,12 +50,19 @@ type Org struct {
 	IngestToken Secret
 	// AdminToken lets an administrator read filed events. Disabled closes the endpoint.
 	AdminToken Secret
-	// GitHubRepository, when set, lets that repository's Actions jobs publish with
-	// their OIDC token instead of the static token — no long-lived secret in CI. The
-	// token replaces only the credential: the catalog must still carry a pinned
-	// publisher's signature, so Actions of the right repository with the wrong key
-	// still publish nothing.
-	GitHubRepository string
+	// GitHubRepositories are the repositories whose Actions jobs may publish with their
+	// OIDC token instead of the static token — no long-lived secret in CI. The token
+	// replaces only the credential: the catalog must still carry a pinned publisher's
+	// signature, so Actions of the right repository with the wrong key still publish
+	// nothing.
+	//
+	// It is a list because an organisation publishes more than one catalog, and those
+	// catalogs live in different repositories — its own skills in one, a curated
+	// marketplace in another. A single registration made the second one unpublishable
+	// except by handing a static token to CI, which is the secret this path exists to
+	// avoid. Each entry is "owner/repo", optionally "owner/repo@refs/heads/main" to bind
+	// the branch as well.
+	GitHubRepositories []string
 	// Publishers are the keys allowed to sign this organisation's catalogs. The notary
 	// pins them from its own configuration, never from an uploaded catalog — the same
 	// rule the client applies, for the same reason: a catalog that could introduce its
@@ -120,23 +127,33 @@ func (s *Service) WithBrand(brand string) *Service {
 // who can knock, it is not what keeps the door shut.
 func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, error) {
 	org, known := s.directory.LookupOrg(orgName)
-	if !known || s.oidc == nil || org.GitHubRepository == "" || org.Publishers == nil {
+	if !known || s.oidc == nil || len(org.GitHubRepositories) == 0 || org.Publishers == nil {
 		return Org{}, ErrUnknownOrg
 	}
 	repository, ref, err := s.oidc.Verify(token, now)
 	if err != nil {
 		return Org{}, err
 	}
-	registered, requiredRef, _ := strings.Cut(org.GitHubRepository, "@")
-	if repository != registered {
-		return Org{}, fmt.Errorf("%w: the token belongs to %s, which is not %s's registered repository",
-			ErrOIDC, repository, orgName)
+	// A repository that matched by name but not by ref is reported as a ref failure, not
+	// as "unregistered": the caller is who they claim to be and got the branch wrong, and
+	// telling them their repository is unknown would send them to fix the wrong thing.
+	var refMismatch error
+	for _, registration := range org.GitHubRepositories {
+		registered, requiredRef, _ := strings.Cut(registration, "@")
+		if repository != registered {
+			continue
+		}
+		if requiredRef == "" || ref == requiredRef {
+			return org, nil
+		}
+		refMismatch = fmt.Errorf("%w: the token was minted on %s, and %s publishes %s only from %s",
+			ErrOIDC, ref, orgName, registered, requiredRef)
 	}
-	if requiredRef != "" && ref != requiredRef {
-		return Org{}, fmt.Errorf("%w: the token was minted on %s, and %s only publishes from %s",
-			ErrOIDC, ref, orgName, requiredRef)
+	if refMismatch != nil {
+		return Org{}, refMismatch
 	}
-	return org, nil
+	return Org{}, fmt.Errorf("%w: the token belongs to %s, which is not among %s's registered repositories (%s)",
+		ErrOIDC, repository, orgName, strings.Join(org.GitHubRepositories, ", "))
 }
 
 // KeyID identifies the notary's primary countersigning key, which consumers pin.

@@ -78,9 +78,9 @@ func (i *issuer) mint(t *testing.T, spec tokenSpec) string {
 	return signing + "." + base64.RawURLEncoding.EncodeToString(signature)
 }
 
-func withOIDC(f *fixture, i *issuer, repository string) *fixture {
+func withOIDC(f *fixture, i *issuer, repositories ...string) *fixture {
 	org := f.orgs["acme"]
-	org.GitHubRepository = repository
+	org.GitHubRepositories = repositories
 	f.orgs["acme"] = org
 	f.service.WithOIDC(&OIDCVerifier{JWKSURL: i.server.URL})
 	return f
@@ -191,5 +191,34 @@ func TestAPlainRegistrationAcceptsAnyRef(t *testing.T) {
 	branch := i.mint(t, tokenSpec{repository: "acme/marketplace", ref: "refs/heads/anything"})
 	if response := f.publish(t, branch, f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
 		t.Fatalf("an unbound registration refused a branch: %s", response.Status)
+	}
+}
+
+// An organisation publishes more than one catalog, and those catalogs live in different
+// repositories. Every registered one publishes; the ref binding stays attached to the
+// registration that carries it rather than leaking onto its neighbours.
+func TestEveryRegisteredRepositoryPublishes(t *testing.T) {
+	i := newIssuer(t)
+	f := withOIDC(newFixture(t), i, "acme/marketplace", "acme/curated@refs/heads/main")
+
+	for name, spec := range map[string]tokenSpec{
+		"the first registration":       {repository: "acme/marketplace", ref: "refs/heads/topic"},
+		"the second, on its bound ref": {repository: "acme/curated", ref: "refs/heads/main"},
+	} {
+		if _, err := f.service.AuthorizeOIDC("acme", i.mint(t, spec), time.Now()); err != nil {
+			t.Errorf("%s must publish: %v", name, err)
+		}
+	}
+
+	_, err := f.service.AuthorizeOIDC("acme",
+		i.mint(t, tokenSpec{repository: "acme/curated", ref: "refs/heads/topic"}), time.Now())
+	if err == nil {
+		t.Fatal("a ref-bound registration must refuse another branch")
+	}
+	// The message decides where the operator looks next: they are who they said they are
+	// and got the branch wrong, so naming the repository unregistered sends them to fix
+	// a registration that is already correct.
+	if !strings.Contains(err.Error(), "refs/heads/main") {
+		t.Errorf("the refusal must name the branch that publishes, got: %v", err)
 	}
 }

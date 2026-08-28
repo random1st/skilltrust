@@ -30,9 +30,13 @@ type orgConfig struct {
 	// organisation rather than opening it.
 	IngestToken string `json:"ingest_token"`
 	AdminToken  string `json:"admin_token"`
-	// GitHubRepository lets that repository's Actions publish with their OIDC token
-	// instead of a static secret. Empty keeps OIDC closed for this organisation.
-	GitHubRepository string `json:"github_repository"`
+	// GitHubRepository and GitHubRepositories let those repositories' Actions publish
+	// with their OIDC token instead of a static secret. Both are read and merged: the
+	// singular form came first and configs in the field still use it, and silently
+	// ignoring a key an operator wrote is how a deployment loses OIDC without a message.
+	// Neither set keeps OIDC closed for this organisation.
+	GitHubRepository   string   `json:"github_repository"`
+	GitHubRepositories []string `json:"github_repositories"`
 	// MachineKeys are paths to PEM public keys of machines whose events the console
 	// shows as verified — the same keys `skillctl trust` pins for the CLI.
 	MachineKeys []string `json:"machine_keys"`
@@ -40,6 +44,22 @@ type orgConfig struct {
 	// catalogs — pinned here, in configuration an operator deploys, never learned from
 	// an upload.
 	PublisherKeys []string `json:"publisher_keys"`
+}
+
+// repositories merges both spellings of the OIDC registration, in the order an operator
+// wrote them and without duplicates.
+func (o orgConfig) repositories() []string {
+	var merged []string
+	seen := map[string]bool{}
+	for _, entry := range append([]string{o.GitHubRepository}, o.GitHubRepositories...) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		merged = append(merged, entry)
+	}
+	return merged
 }
 
 type config struct {
@@ -116,17 +136,17 @@ func run(configPath string) error {
 		}
 		orgs = append(orgs, notary.Org{
 			Name: entry.Name, Token: notary.NewSecret(entry.Token),
-			IngestToken:      notary.NewSecret(entry.IngestToken),
-			AdminToken:       notary.NewSecret(entry.AdminToken),
-			GitHubRepository: entry.GitHubRepository,
-			Publishers:       attest.NewTrustedKeys(publishers...),
-			Machines:         machines,
+			IngestToken:        notary.NewSecret(entry.IngestToken),
+			AdminToken:         notary.NewSecret(entry.AdminToken),
+			GitHubRepositories: entry.repositories(),
+			Publishers:         attest.NewTrustedKeys(publishers...),
+			Machines:           machines,
 		})
 	}
 
 	service := notary.New(conf.Data, key, orgs).WithBrand(conf.Brand)
 	for _, org := range orgs {
-		if org.GitHubRepository != "" {
+		if len(org.GitHubRepositories) > 0 {
 			service.WithOIDC(&notary.OIDCVerifier{Audience: conf.OIDCAudience})
 			log.Printf("notaryd: OIDC publishing enabled for repositories registered in the config")
 			break

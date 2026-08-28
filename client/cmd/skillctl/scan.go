@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -80,12 +81,17 @@ func scanSkill(directory string, useLLM bool) (scanVerdict, error) {
 	if !useLLM {
 		args = append(args, "--no-llm")
 	}
+	// The scanner logs a line per skipped analyzer, so signing eleven plugins buries the
+	// verdict under a hundred warnings and the one line that matters goes unread. Hold its
+	// diagnostics and print them only when there is no report to explain what went wrong.
+	var diagnostics bytes.Buffer
 	command := exec.Command(binary, args...)
-	command.Stderr = os.Stderr
+	command.Stderr = &diagnostics
 	runErr := command.Run()
 
 	body, readErr := os.ReadFile(report.Name())
 	if readErr != nil || len(body) == 0 {
+		os.Stderr.Write(diagnostics.Bytes())
 		if runErr != nil {
 			return scanVerdict{}, fmt.Errorf("%s wrote no report: %w", scannerBinary, runErr)
 		}
