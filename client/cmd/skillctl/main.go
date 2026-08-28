@@ -51,6 +51,7 @@ Publishing a catalog (in a repository of skills):
 
 Looking at skills:
   skillctl lint [path]           inventory a tree and report risk indicators
+  skillctl scan <dir>            what a scanner finds in a skill, before you trust it
   skillctl digest <dir>          the canonical digest of a skill directory
   skillctl attest <subcommand>   sign and verify a statement about a digest
   skillctl version               print version information
@@ -92,6 +93,8 @@ func main() {
 		os.Exit(runRefresh(os.Args[2:]))
 	case "lint":
 		os.Exit(runLint(os.Args[2:]))
+	case "scan":
+		os.Exit(runScan(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
 		os.Exit(exitClean)
