@@ -276,15 +276,16 @@ func WritePrivateKey(path string, key ed25519.PrivateKey) error {
 
 // WritePublicKey stores the verifying half, which is safe to publish.
 func WritePublicKey(path string, key ed25519.PublicKey) error {
-	block, err := encodePublicKey(key)
+	block, err := EncodePublicKey(key)
 	if err != nil {
 		return err
 	}
 	return writeFile(path, block, 0o644)
 }
 
-// encodePublicKey renders a key as PEM, the one form this project stores keys in.
-func encodePublicKey(key ed25519.PublicKey) ([]byte, error) {
+// EncodePublicKey renders a key as PEM, the one form this project stores keys in.
+// Exported for the notary, which serves its countersigning key at /notary.pub.
+func EncodePublicKey(key ed25519.PublicKey) ([]byte, error) {
 	encoded, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		return nil, err
@@ -541,7 +542,7 @@ func PinKey(path, label string, public ed25519.PublicKey) error {
 		return err
 	}
 
-	encoded, err := encodePublicKey(public)
+	encoded, err := EncodePublicKey(public)
 	if err != nil {
 		return err
 	}

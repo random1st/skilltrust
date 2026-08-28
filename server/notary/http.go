@@ -1,6 +1,7 @@
 package notary
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/source"
 )
 
@@ -28,7 +30,29 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
+	mux.HandleFunc("GET /notary.pub", s.handleNotaryKey)
 	return mux
+}
+
+// handleNotaryKey serves the countersigning public key as PEM, named the way the
+// subscribe instructions name it, so `curl -O` produces the file they mention.
+//
+// Every consumer instruction ends "--key notary.pub --threshold 2", and until this route
+// existed nothing served that file: the instruction was not executable by a stranger.
+// Serving the key from the notary itself is trust-on-first-use — someone who can forge
+// this response can hand out a key they hold. That is inherent in any first fetch, is
+// mitigated by TLS, and is why the fingerprint is worth publishing somewhere that is not
+// this server. What the pin then guarantees is that the notary cannot change out from
+// under a machine after it subscribed.
+func (s *Service) handleNotaryKey(w http.ResponseWriter, r *http.Request) {
+	pem, err := attest.EncodePublicKey(s.key.Public().(ed25519.PublicKey))
+	if err != nil {
+		http.Error(w, "the key could not be encoded", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("X-Key-Id", s.KeyID())
+	w.Write(pem)
 }
 
 // bearer extracts the token, empty when absent — which never matches, because an empty

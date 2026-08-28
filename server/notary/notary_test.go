@@ -261,3 +261,32 @@ func TestFetchingTheUnpublishedIsNotFound(t *testing.T) {
 		}
 	}
 }
+
+// The subscribe instructions every consumer sees end "--key notary.pub --threshold 2".
+// This pins that the file those instructions name is actually served, that it parses as
+// a key, and that it is the countersigning key rather than some other one.
+func TestNotaryKeyIsServedAsInstructed(t *testing.T) {
+	f := newFixture(t)
+	response, err := http.Get(f.server.URL + "/notary.pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET /notary.pub answered %s", response.Status)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, err := attest.ParsePublicKey(body)
+	if err != nil {
+		t.Fatalf("what was served does not parse as a public key: %v", err)
+	}
+	if !served.Equal(f.notaryPub) {
+		t.Fatal("the key served is not the countersigning key")
+	}
+	if got := response.Header.Get("X-Key-Id"); got != f.service.KeyID() {
+		t.Fatalf("X-Key-Id says %q, the service says %q", got, f.service.KeyID())
+	}
+}
