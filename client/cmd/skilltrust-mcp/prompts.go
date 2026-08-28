@@ -66,10 +66,13 @@ Then, in this order, and not another:
    With a hosted notary there are two keys: the publisher's and the notary's. Both are
    pinned, and the point of the pair is that neither alone is enough.
 
-3. skilltrust_subscribe with every key you pinned. Leave threshold unset — this server
-   defaults it to the number of keys you passed. If you set it to 1 with two keys pinned,
-   either key alone publishes, which is the situation the second key was pinned to prevent,
-   and nothing will ever report it as wrong.
+3. skilltrust_subscribe with every key you pinned — the publisher's in public_keys, the
+   notary's in notary_keys. The split matters: a notary that is rotating has two keys, and
+   passed as ordinary public keys they would count as two separate signers, so the notary's
+   own two signatures would satisfy a threshold of two with no publisher at all. Leave
+   threshold unset; this server defaults it to every signer you passed. Setting it to 1
+   with two signers pinned means either alone publishes — the situation the second key was
+   pinned to prevent, and nothing will ever report it as wrong.
 
 4. skilltrust_check. It writes nothing. Read what it says before restoring anything: a
    difference is not necessarily an attack, and the copy on disk may be work someone has

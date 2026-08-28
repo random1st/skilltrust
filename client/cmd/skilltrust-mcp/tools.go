@@ -111,18 +111,19 @@ func (s *server) trustKey(ctx context.Context, _ *mcp.CallToolRequest, in trustK
 
 type subscribeInput struct {
 	Repository string   `json:"repository" jsonschema:"the git URL of the repository holding the skills"`
-	PublicKeys []string `json:"public_keys" jsonschema:"the PEM public keys allowed to sign this catalog; for a hosted notary this is the publisher's key and the notary's"`
+	PublicKeys []string `json:"public_keys" jsonschema:"the PEM public keys of the publishers allowed to sign this catalog"`
+	NotaryKeys []string `json:"notary_keys,omitempty" jsonschema:"the PEM public keys of the notary countersigning this catalog; several keys mid-rotation belong to one signer and count once, so pass them here rather than in public_keys"`
 	CatalogURL string   `json:"catalog_url,omitempty" jsonschema:"HTTPS URL of the signed index, when a notary serves it instead of the repository"`
 	Name       string   `json:"name,omitempty" jsonschema:"short name for this catalog; defaults to the repository name"`
 	Ref        string   `json:"ref,omitempty" jsonschema:"branch or tag to follow; defaults to the repository HEAD"`
-	Threshold  int      `json:"threshold,omitempty" jsonschema:"how many distinct pinned keys must have signed; defaults to the number of keys given"`
+	Threshold  int      `json:"threshold,omitempty" jsonschema:"how many distinct signers must have signed; defaults to every signer given, which is what makes one stolen key insufficient"`
 }
 
 func (s *server) subscribe(ctx context.Context, _ *mcp.CallToolRequest, in subscribeInput) (*mcp.CallToolResult, result, error) {
 	if in.Repository == "" {
 		return nil, result{}, fmt.Errorf("a repository is required")
 	}
-	if len(in.PublicKeys) == 0 {
+	if len(in.PublicKeys)+len(in.NotaryKeys) == 0 {
 		return nil, result{}, fmt.Errorf("at least one public key is required: a subscription with no pinned key would accept any signature")
 	}
 
@@ -135,13 +136,28 @@ func (s *server) subscribe(ctx context.Context, _ *mcp.CallToolRequest, in subsc
 		defer cleanup()
 		args = append(args, "-key", path)
 	}
+	// A notary's keys go in as one signer. Several exist only while it rotates, and
+	// counted separately they would satisfy a threshold of two between themselves — the
+	// exact "a compromised notary publishes nothing alone" property the second key is
+	// pinned to buy.
+	for index, key := range in.NotaryKeys {
+		path, cleanup, err := writeTemp(fmt.Sprintf("notary-%d.pub", index), key)
+		if err != nil {
+			return nil, result{}, err
+		}
+		defer cleanup()
+		args = append(args, "-notary-key", path)
+	}
 
-	// Defaulting to the number of keys given, rather than to skillctl's 1. Someone who pins
-	// two keys is asking for two signatures; accepting one of them is the failure the second
-	// key was pinned to prevent, and it fails silently — everything verifies, forever.
+	// Defaulting to every signer given, rather than to one. Someone who pins a publisher
+	// and a notary is asking for both signatures; accepting one of them is the failure the
+	// second key was pinned to prevent, and it fails silently — everything verifies, forever.
 	threshold := in.Threshold
 	if threshold < 1 {
 		threshold = len(in.PublicKeys)
+		if len(in.NotaryKeys) > 0 {
+			threshold++
+		}
 	}
 	args = append(args, "-threshold", strconv.Itoa(threshold))
 

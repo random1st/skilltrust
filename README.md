@@ -171,7 +171,7 @@ CI signs the marketplace ──PUT──▶ notaryd ──countersigns──▶ 
 ```bash
 skillctl subscribe git@github.com:acme/marketplace.git \
   --catalog https://notary.acme.com/v1/catalogs/acme/plugins \
-  --key acme.pub --key notary.pub --threshold 2
+  --key acme.pub --notary-key notary.pub
 ```
 
 What it buys, concretely: a revocation reaches machines on the next `sync` rather than on
