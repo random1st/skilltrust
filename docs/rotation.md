@@ -44,6 +44,28 @@ about TLS. A stranger who pins nothing learns nothing they can use.
 5. **Retire the outgoing pin** (optional, operator's call):
    `skillctl trust --remove <label>`. Machines that skip this lose nothing but tidiness.
 
+## What an announcement must prove
+
+`/v1/keys` is not believed on the strength of arriving from the right host. Three rules
+are enforced before a single key is pinned, and each closes a way trust could be handed
+out that the announcer cannot back:
+
+- **A pinned key must have signed it.** The anchor is looked up in *this subscription's*
+  pins, not the machine's whole trust store — a notary for one catalog rotates nothing
+  for another.
+- **Every announced key must itself have signed it**, verified against the very bytes
+  announced. Without this rule, whoever holds one current key could announce any public
+  key at all: the victim's own publisher key (collapsing two parties into one, making the
+  threshold unsatisfiable) or a pile of strangers'.
+- **It must be newer than the last one this machine acted on**, and no older than 24
+  hours. Announcements stay valid under whichever key survives a rotation, so without a
+  monotonic floor a replayed document would re-pin a key the operator retired on purpose
+  — undoing the one recovery step the design offers against a stolen key.
+
+`subscribe --notary-key` groups a notary's keys into one party at pin time, and a
+re-subscribe carries forward both the parties and the replay floor. Pinning a rotation
+pair as two bare `--key`s would make one signer count twice.
+
 ## Failure semantics — explicit, because they are the design
 
 - **A machine that never synced during the window** fails **closed** after step 4: the

@@ -229,6 +229,17 @@ func (s *Service) Accept(org Org, marketplace string, body []byte) ([]byte, erro
 		return nil, fmt.Errorf("%w: %v", ErrRefused, err)
 	}
 
+	// The signed name must be the marketplace it is being published as. Without this the
+	// URL decides where a catalog lands while the signature says nothing about it, so an
+	// organisation's own valid catalog for one marketplace can be served as another — a
+	// substitution its publisher never approved, carried out with signatures that all
+	// verify. The publisher signs which marketplace it is talking about; this is where
+	// that claim gets checked.
+	if snapshot.Name != marketplace {
+		return nil, fmt.Errorf("%w: the catalog is signed for %q and was published as %q",
+			ErrRefused, snapshot.Name, marketplace)
+	}
+
 	// Drop any signature already claiming this notary's key before signing fresh. Two
 	// real cases land here: a CI job re-run submits the countersigned output of its
 	// previous run, which should be idempotent rather than a refusal; and an uploader

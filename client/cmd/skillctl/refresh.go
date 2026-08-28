@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/source"
@@ -47,6 +48,8 @@ func runRefresh(args []string) int {
 	}
 	changed := false
 	found := false
+	failed := 0
+	now := time.Now().UTC()
 	for i := range subscriptions {
 		if only != "" && subscriptions[i].Name != only {
 			continue
@@ -58,8 +61,12 @@ func runRefresh(args []string) int {
 			}
 			continue
 		}
-		added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys())
+		added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys(), now)
 		if err != nil {
+			// A refresh that could not reach or verify an announcement is a failure, not
+			// a quiet no-op: rotation automation that reports success while machines never
+			// learned the incoming key turns retiring the old one into an outage.
+			failed++
 			fmt.Fprintf(os.Stderr, "skillctl: %s: %v\n", subscriptions[i].Name, err)
 			continue
 		}
@@ -80,13 +87,17 @@ func runRefresh(args []string) int {
 			return fail(err)
 		}
 	}
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "skillctl: %d catalog(s) could not be refreshed\n", failed)
+		return exitFindings
+	}
 	return exitClean
 }
 
 // refreshSubscription fetches the signed key set from this subscription's notary, checks
 // it against the keys the subscription already pins, and merges newly announced keys into
 // the announcing key's party. It reports the added key ids, empty when nothing changed.
-func refreshSubscription(subscription *Subscription, keysPath string) ([]string, error) {
+func refreshSubscription(subscription *Subscription, keysPath string, now time.Time) ([]string, error) {
 	address, err := keySetURL(subscription.CatalogURL)
 	if err != nil {
 		return nil, err
@@ -104,9 +115,18 @@ func refreshSubscription(subscription *Subscription, keysPath string) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	set, signers, err := attest.VerifyKeySet(&envelope, trusted)
+	set, signers, err := attest.VerifyKeySet(&envelope, trusted, now)
 	if err != nil {
 		return nil, fmt.Errorf("the key set at %s does not verify: %w", address, err)
+	}
+	// Monotonic in the announcement's own issue time. An announcement stays valid under
+	// whichever key survives a rotation, so replaying an old one would re-pin a key the
+	// operator retired on purpose — the single recovery step the design offers against a
+	// stolen key, undone by a document the thief already has.
+	if !set.IssuedAt.After(subscription.KeysSeen) {
+		return nil, fmt.Errorf("the key set at %s was issued %s, not after the %s one this "+
+			"machine already acted on", address, set.IssuedAt.Format(time.RFC3339),
+			subscription.KeysSeen.Format(time.RFC3339))
 	}
 
 	// The chain of trust is anchored in this subscription's own pins, not the machine's
@@ -128,6 +148,10 @@ func refreshSubscription(subscription *Subscription, keysPath string) ([]string,
 			subscription.Name)
 	}
 
+	// Seen even when nothing is added: the floor must rise on every accepted announcement,
+	// or a replay stays useful for as long as no rotation happens.
+	subscription.KeysSeen = set.IssuedAt
+
 	var added []string
 	for _, announced := range set.Keys {
 		if _, already := pinned[announced.ID]; already {
@@ -146,12 +170,15 @@ func refreshSubscription(subscription *Subscription, keysPath string) ([]string,
 	if len(added) == 0 {
 		return nil, nil
 	}
+	if subscription.Parties == nil {
+		subscription.Parties = map[string][]string{}
+	}
 
 	// The new keys join the anchor's party, so the rotation pair counts once toward the
 	// threshold. An anchor in no party gets one now, seeded with itself.
 	party := ""
-	for label, members := range subscription.Parties {
-		for _, member := range members {
+	for _, label := range sortedParties(subscription.Parties) {
+		for _, member := range subscription.Parties[label] {
 			if member == anchor {
 				party = label
 				break
@@ -162,9 +189,12 @@ func refreshSubscription(subscription *Subscription, keysPath string) ([]string,
 		}
 	}
 	if party == "" {
-		party = attest.Fingerprint(anchor)
-		if subscription.Parties == nil {
-			subscription.Parties = map[string][]string{}
+		// An anchor pinned with a bare --key, before parties existed or before
+		// --notary-key did. It becomes a party of its own, so the keys it vouches for
+		// join it instead of arriving as additional independent signers.
+		party = notaryParty
+		if _, taken := subscription.Parties[party]; taken {
+			party = attest.Fingerprint(anchor)
 		}
 		subscription.Parties[party] = []string{anchor}
 	}

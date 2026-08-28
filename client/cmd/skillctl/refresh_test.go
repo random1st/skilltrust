@@ -99,7 +99,7 @@ func TestRefreshPinsTheAnnouncedKeyIntoTheSameParty(t *testing.T) {
 		Threshold:  2,
 	}
 
-	added, err := refreshSubscription(&subscription, defaultTrustedKeys())
+	added, err := refreshSubscription(&subscription, defaultTrustedKeys(), time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestRefreshPinsTheAnnouncedKeyIntoTheSameParty(t *testing.T) {
 	}
 
 	// Refreshing again changes nothing: the announcement is already reflected.
-	again, err := refreshSubscription(&subscription, defaultTrustedKeys())
+	again, err := refreshSubscription(&subscription, defaultTrustedKeys(), time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,10 +172,78 @@ func TestRefreshRefusesAnAnnouncementFromAForeignNotary(t *testing.T) {
 		CatalogURL: server.URL + "/v1/catalogs/acme/plugins",
 		KeyIDs:     []string{attest.KeyID(minePub)},
 	}
-	if _, err := refreshSubscription(&subscription, defaultTrustedKeys()); err == nil {
+	if _, err := refreshSubscription(&subscription, defaultTrustedKeys(), time.Now().UTC()); err == nil {
 		t.Fatal("an announcement from a key this subscription never pinned must be refused")
 	}
 	if len(subscription.Parties) != 0 {
 		t.Fatal("a refused announcement must not touch the subscription")
+	}
+}
+
+// The replay the monotonic floor exists to stop: an operator retires a compromised key,
+// and the announcement that first introduced it — still valid under the surviving key —
+// is served again. Add-only merging would silently re-pin what was deliberately removed.
+func TestRefreshRefusesAnAnnouncementItAlreadyActedOn(t *testing.T) {
+	t.Setenv("SKILLTRUST_HOME", t.TempDir())
+
+	oldPub, oldKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPub, newKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attest.PinKey(defaultTrustedKeys(), "notary", oldPub); err != nil {
+		t.Fatal(err)
+	}
+
+	// One fixed announcement, served over and over: the replayed document.
+	issued := time.Now().UTC().Add(-time.Minute)
+	envelope, err := attest.SignKeySet([]ed25519.PrivateKey{oldKey, newKey}, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(envelope)
+	}))
+	defer server.Close()
+
+	subscription := Subscription{
+		Name:       "acme",
+		CatalogURL: server.URL + "/v1/catalogs/acme/plugins",
+		KeyIDs:     []string{attest.KeyID(oldPub)},
+	}
+	if _, err := refreshSubscription(&subscription, defaultTrustedKeys(), time.Now().UTC()); err != nil {
+		t.Fatalf("the first sight of an announcement must be accepted: %v", err)
+	}
+	if !subscription.KeysSeen.Equal(issued) {
+		t.Fatalf("the floor must record the announcement acted on, got %s", subscription.KeysSeen)
+	}
+	if _, err := refreshSubscription(&subscription, defaultTrustedKeys(), time.Now().UTC()); err == nil {
+		t.Fatal("the same announcement served again must be refused, not merged again")
+	}
+	_ = newPub
+}
+
+// Re-subscribing is how people change a URL or add a key. Before parties were carried
+// over, it silently split a rotation pair back into two signers — handing a mid-rotation
+// notary the two votes a threshold of two exists to demand of two different people.
+func TestResubscribingKeepsPartiesAndTheReplayFloor(t *testing.T) {
+	previous := map[string][]string{"notary": {"old", "new"}}
+	merged := mergeParties(previous, nil, []string{"publisher", "old", "new"})
+	if len(merged["notary"]) != 2 {
+		t.Fatalf("the rotation pair must survive a re-subscribe, got %v", merged)
+	}
+
+	// A key no longer pinned drops out rather than lingering as a phantom member.
+	pruned := mergeParties(previous, nil, []string{"publisher", "old"})
+	if len(pruned["notary"]) != 1 || pruned["notary"][0] != "old" {
+		t.Fatalf("an unpinned key must not stay in a party, got %v", pruned)
+	}
+
+	// A subscription with nothing grouped stays nil rather than growing an empty map.
+	if mergeParties(nil, nil, []string{"publisher"}) != nil {
+		t.Fatal("no parties in, no parties out")
 	}
 }

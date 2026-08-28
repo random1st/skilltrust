@@ -51,7 +51,7 @@ func (f *fixture) signedCatalog(t *testing.T, sequence int64) []byte {
 	t.Helper()
 	now := time.Now().UTC()
 	envelope, err := catalog.Sign(catalog.Snapshot{
-		Name: "acme", Sequence: sequence,
+		Name: "plugins", Sequence: sequence,
 		IssuedAt: now, ValidUntil: now.Add(7 * 24 * time.Hour),
 		Skills: []catalog.Managed{{Name: "deploy-runbook", Digest: "sha256:aa", Version: "1.0.0"}},
 	}, f.publisher)
@@ -179,7 +179,7 @@ func TestACatalogFromAStrangerIsRefused(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	envelope, err := catalog.Sign(catalog.Snapshot{
-		Name: "acme", Sequence: 1, IssuedAt: now, ValidUntil: now.Add(time.Hour),
+		Name: "plugins", Sequence: 1, IssuedAt: now, ValidUntil: now.Add(time.Hour),
 	}, strangerKey)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestAnExpiredCatalogIsNotCountersigned(t *testing.T) {
 	f := newFixture(t)
 	stale := time.Now().UTC().Add(-48 * time.Hour)
 	envelope, err := catalog.Sign(catalog.Snapshot{
-		Name: "acme", Sequence: 1, IssuedAt: stale, ValidUntil: stale.Add(time.Hour),
+		Name: "plugins", Sequence: 1, IssuedAt: stale, ValidUntil: stale.Add(time.Hour),
 	}, f.publisher)
 	if err != nil {
 		t.Fatal(err)

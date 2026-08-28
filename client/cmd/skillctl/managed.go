@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -57,6 +58,12 @@ type Subscription struct {
 	// label to the ids it covers, and an id listed here is pinned whether or not it also
 	// appears in KeyIDs.
 	Parties map[string][]string `json:"parties,omitempty"`
+	// KeysSeen is the issue time of the newest key-set announcement this subscription has
+	// acted on. An announcement no newer than this is refused: announcements stay valid
+	// under whichever key survives a rotation, so without a monotonic floor an attacker —
+	// or a stale cache — could replay an old overlap document and re-pin a key the
+	// operator deliberately retired, undoing the one recovery the design offers.
+	KeysSeen time.Time `json:"keys_seen,omitempty"`
 }
 
 // Keys returns every key allowed to sign for this subscription.
@@ -133,6 +140,65 @@ func (s Subscription) Satisfied(signers []string) error {
 		len(matched), s.Required(), s.Name)
 }
 
+// notaryParty is the label a notary's keys are grouped under at subscribe time. One label
+// rather than one per notary: a subscription follows exactly one catalog URL, so its
+// countersigner is one signer whatever number of keys a rotation has it holding.
+const notaryParty = "notary"
+
+// catalogNameOK is the notary's own name allowlist, applied on this side too. The name
+// becomes a directory and a git checkout path here, so accepting a traversal would let a
+// catalog name reach outside the managed tree.
+var catalogNameOK = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// signerCount is how many distinct signers this subscription pins: each party once, plus
+// every ungrouped key. It is the ceiling a threshold can ask for.
+func (s Subscription) signerCount() int {
+	distinct := map[string]struct{}{}
+	for _, party := range s.partyOf() {
+		distinct[party] = struct{}{}
+	}
+	return len(distinct)
+}
+
+// mergeParties keeps groupings a previous subscription had learned, drops any key the new
+// subscription no longer pins, and lets the new grouping win where both name a key.
+//
+// Re-subscribing is how people change a URL or add a key, and before this it silently
+// discarded the parties `refresh` had built during a rotation — turning one mid-rotation
+// notary back into two signers, which is precisely the count a threshold of two exists to
+// require of two different people.
+func mergeParties(previous, current map[string][]string, pinned []string) map[string][]string {
+	if len(previous) == 0 && len(current) == 0 {
+		return nil
+	}
+	stillPinned := map[string]struct{}{}
+	for _, key := range pinned {
+		stillPinned[key] = struct{}{}
+	}
+	claimed := map[string]struct{}{}
+	merged := map[string][]string{}
+	add := func(source map[string][]string) {
+		for _, party := range sortedParties(source) {
+			for _, key := range source[party] {
+				if _, keep := stillPinned[key]; !keep {
+					continue
+				}
+				if _, taken := claimed[key]; taken {
+					continue
+				}
+				claimed[key] = struct{}{}
+				merged[party] = append(merged[party], key)
+			}
+		}
+	}
+	add(current)
+	add(previous)
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
 // sortedParties keeps every walk over the parties map deterministic, so files and error
 // messages do not shuffle between runs.
 func sortedParties(parties map[string][]string) []string {
@@ -198,20 +264,19 @@ func runSubscribe(args []string) int {
 	var keyPaths repeatedString
 	flags.Var(&keyPaths, "key",
 		"PEM public key allowed to sign this marketplace (repeatable)")
-	threshold := flags.Int("threshold", 1,
-		"how many distinct pinned keys must have signed; more than one makes a single stolen key insufficient")
+	var notaryKeyPaths repeatedString
+	flags.Var(&notaryKeyPaths, "notary-key",
+		"PEM public key of the notary countersigning this catalog (repeatable; several keys "+
+			"mid-rotation are one signer and count once toward the threshold)")
+	threshold := flags.Int("threshold", 0,
+		"how many distinct signers must have signed; the default is every signer pinned here, "+
+			"which is what makes a single stolen key insufficient")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
-	if flags.NArg() != 1 || len(keyPaths) == 0 {
+	if flags.NArg() != 1 || len(keyPaths)+len(notaryKeyPaths) == 0 {
 		flags.Usage()
-		return exitUsage
-	}
-	if *threshold > len(keyPaths) {
-		fmt.Fprintf(os.Stderr, "skillctl: --threshold %d needs at least that many --key "+
-			"arguments; a requirement no set of keys can meet would refuse every index\n",
-			*threshold)
 		return exitUsage
 	}
 
@@ -220,21 +285,76 @@ func runSubscribe(args []string) int {
 	if catalogName == "" {
 		catalogName = source.NameFor(repository)
 	}
+	// The name becomes a directory under the catalog root and a checkout git writes into,
+	// so it is checked against the same allowlist the notary applies to the names it
+	// stores. A tool that runs under an agent's instruction must not accept "../.." as a
+	// short name for anything.
+	if !catalogNameOK.MatchString(catalogName) {
+		fmt.Fprintf(os.Stderr, "skillctl: %q is not usable as a catalog name; letters, "+
+			"digits, dashes and underscores only\n", catalogName)
+		return exitUsage
+	}
+
+	pin := func(path, label string) (string, error) {
+		public, err := attest.LoadPublicKey(path)
+		if err != nil {
+			return "", err
+		}
+		if err := attest.PinKey(defaultTrustedKeys(), label, public); err != nil {
+			return "", err
+		}
+		return attest.KeyID(public), nil
+	}
 
 	var keyIDs []string
 	for index, path := range keyPaths {
-		public, err := attest.LoadPublicKey(path)
-		if err != nil {
-			return fail(err)
-		}
 		label := "catalog:" + catalogName
 		if len(keyPaths) > 1 {
 			label = fmt.Sprintf("%s:%d", label, index+1)
 		}
-		if err := attest.PinKey(defaultTrustedKeys(), label, public); err != nil {
+		id, err := pin(path, label)
+		if err != nil {
 			return fail(err)
 		}
-		keyIDs = append(keyIDs, attest.KeyID(public))
+		keyIDs = append(keyIDs, id)
+	}
+
+	// Notary keys are pinned into one party. Several of them exist only mid-rotation and
+	// belong to one signer; counted separately they would satisfy a threshold of two on
+	// their own, which is exactly the "a compromised notary publishes nothing alone"
+	// property the threshold is sold on.
+	var parties map[string][]string
+	for index, path := range notaryKeyPaths {
+		label := fmt.Sprintf("notary:%s", catalogName)
+		if len(notaryKeyPaths) > 1 {
+			label = fmt.Sprintf("%s:%d", label, index+1)
+		}
+		id, err := pin(path, label)
+		if err != nil {
+			return fail(err)
+		}
+		if parties == nil {
+			parties = map[string][]string{}
+		}
+		parties[notaryParty] = append(parties[notaryParty], id)
+		keyIDs = append(keyIDs, id)
+	}
+
+	signers := len(keyPaths)
+	if len(notaryKeyPaths) > 0 {
+		signers++
+	}
+	if *threshold == 0 {
+		// Every signer pinned here must sign. Defaulting to one would make the second
+		// signature — the whole reason a notary exists — optional on the machine that
+		// decides, and a consumer who pinned two signers plainly meant to require both.
+		*threshold = signers
+	}
+	if *threshold > signers {
+		fmt.Fprintf(os.Stderr, "skillctl: --threshold %d needs at least that many distinct "+
+			"signers pinned (%d here); a requirement no set of keys can meet would refuse "+
+			"every index\n", *threshold, signers)
+		return exitUsage
 	}
 
 	// A machine that follows a marketplace will file reports about it, and a key it does not
@@ -252,7 +372,7 @@ func runSubscribe(args []string) int {
 
 	entry := Subscription{
 		Name: catalogName, Repository: repository, Ref: *ref, CatalogURL: *catalogURL,
-		KeyIDs: keyIDs, Threshold: *threshold,
+		KeyIDs: keyIDs, Threshold: *threshold, Parties: parties,
 	}
 	// Fetch the index now rather than at the first sync: a subscription to an unreachable
 	// or misspelled notary should fail while the person who typed the URL is still looking
@@ -270,6 +390,12 @@ func runSubscribe(args []string) int {
 	replaced := false
 	for index, existing := range subscriptions {
 		if existing.Name == catalogName {
+			// Carrying these forward is what stops a re-subscribe from being a silent
+			// trust reset. Parties grouped by an earlier rotation would otherwise split
+			// back into one-key signers — handing a mid-rotation notary two votes — and a
+			// reset KeysSeen would re-open the replay window on key-set announcements.
+			entry.Parties = mergeParties(existing.Parties, entry.Parties, entry.Keys())
+			entry.KeysSeen = existing.KeysSeen
 			subscriptions[index] = entry
 			replaced = true
 		}
@@ -287,7 +413,13 @@ func runSubscribe(args []string) int {
 		fmt.Printf("index from  %s\n", entry.CatalogURL)
 	}
 	fmt.Printf("pinned keys %s\n", strings.Join(fingerprints(keyIDs), ", "))
-	fmt.Printf("threshold   %d of %d must sign\n\n", *threshold, len(keyIDs))
+	if len(entry.Parties) > 0 {
+		for _, party := range sortedParties(entry.Parties) {
+			fmt.Printf("%-11s %s counts as one signer\n", party,
+				strings.Join(fingerprints(entry.Parties[party]), " + "))
+		}
+	}
+	fmt.Printf("threshold   %d of %d signers must sign\n\n", entry.Threshold, entry.signerCount())
 	fmt.Printf("Next: skillctl sync -report-only   — see what this catalog would change\n")
 	return exitClean
 }

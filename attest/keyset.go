@@ -2,7 +2,9 @@ package attest
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -11,6 +13,14 @@ import (
 // distinct payload type so a key-set signature can never be replayed as an attestation or
 // a catalog, and vice versa.
 const KeySetPayloadType = "application/vnd.skilltrust.keyset.v1+json"
+
+// Errors a caller distinguishes when an announcement is refused. A stale announcement is
+// an operational fact — a cache, or a notary that has been down — while an unproven key is
+// an attempt to hand out trust the announcer cannot back.
+var (
+	ErrStaleKeySet = errors.New("the key set is too old to act on")
+	ErrUnprovenKey = errors.New("an announced key did not prove it holds its private half")
+)
 
 // KeySetKey is one key in the announcement: its id and the PEM anyone can pin.
 type KeySetKey struct {
@@ -35,9 +45,18 @@ type KeySet struct {
 	IssuedAt time.Time   `json:"issued_at"`
 }
 
+// MaxKeySetAge bounds how old an announcement a consumer will act on. The notary signs
+// one per request, so a fresh fetch is seconds old; anything near this bound arrived from
+// a cache or a replay. It is a backstop for the machine that has never refreshed before
+// and therefore has no previous announcement to compare against.
+const MaxKeySetAge = 24 * time.Hour
+
 // SignKeySet announces the public halves of the given keys, signed by every one of them.
-// Signing with all keys — not just the newest — is what lets a consumer pinning any single
-// current key verify the announcement.
+//
+// Signing with all keys — not just the newest — does two things. It lets a consumer
+// pinning any single current key verify the announcement; and it makes every announced
+// key prove it holds its own private half, which is what stops an announcement from
+// naming a key the announcer does not control. Verification enforces that.
 func SignKeySet(keys []ed25519.PrivateKey, now time.Time) (*Envelope, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("a key set needs at least one key")
@@ -71,10 +90,19 @@ func SignKeySet(keys []ed25519.PrivateKey, now time.Time) (*Envelope, error) {
 // trust is per subscription, not per machine: a key pinned for one catalog must not rotate
 // another catalog's pins.
 //
-// Every announced id is recomputed from the announced key bytes. An announcement that
-// labels key bytes with someone else's id is refused outright — accepting it would let one
-// signer impersonate another in every store that indexes by id.
-func VerifyKeySet(envelope *Envelope, trusted *TrustedKeys) (*KeySet, []string, error) {
+// Three rules, each closing a way an announcement could hand out trust it should not:
+//
+//   - Every announced id is recomputed from the announced key bytes. An announcement that
+//     labels key bytes with someone else's id would let one signer impersonate another in
+//     every store that indexes by id.
+//   - Every announced key must itself have signed the announcement, checked against the
+//     bytes it announces. Without this, whoever holds one current key could announce any
+//     public key at all — the victim's own publisher key, collapsing two parties into one
+//     and making the threshold unsatisfiable, or a pile of strangers' keys.
+//   - The announcement must be no older than MaxKeySetAge relative to now. Freshness is
+//     the floor under the caller's own monotonicity check: a machine with no previous
+//     announcement to compare against would otherwise act on a replayed one.
+func VerifyKeySet(envelope *Envelope, trusted *TrustedKeys, now time.Time) (*KeySet, []string, error) {
 	payload, signers, err := VerifyPayloadSigners(envelope, KeySetPayloadType, trusted)
 	if err != nil {
 		return nil, nil, err
@@ -89,6 +117,16 @@ func VerifyKeySet(envelope *Envelope, trusted *TrustedKeys) (*KeySet, []string, 
 	if len(set.Keys) == 0 {
 		return nil, nil, fmt.Errorf("%w: key set announces no keys", ErrMalformedEnvelope)
 	}
+	if age := now.Sub(set.IssuedAt); age > MaxKeySetAge {
+		return nil, nil, fmt.Errorf("%w: the key set was issued %s ago, older than %s",
+			ErrStaleKeySet, age.Round(time.Second), MaxKeySetAge)
+	}
+
+	announcedSignatures := map[string]string{}
+	for _, signature := range envelope.Signatures {
+		announcedSignatures[signature.KeyID] = signature.Sig
+	}
+	signed := pae(envelope.PayloadType, payload)
 	for _, announced := range set.Keys {
 		public, err := ParsePublicKey([]byte(announced.PublicKey))
 		if err != nil {
@@ -98,6 +136,16 @@ func VerifyKeySet(envelope *Envelope, trusted *TrustedKeys) (*KeySet, []string, 
 		if KeyID(public) != announced.ID {
 			return nil, nil, fmt.Errorf("%w: announced id %s does not match its key bytes",
 				ErrMalformedEnvelope, Fingerprint(announced.ID))
+		}
+		raw, present := announcedSignatures[announced.ID]
+		if !present {
+			return nil, nil, fmt.Errorf("%w: announced key %s did not sign the announcement",
+				ErrUnprovenKey, Fingerprint(announced.ID))
+		}
+		signature, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || !ed25519.Verify(public, signed, signature) {
+			return nil, nil, fmt.Errorf("%w: announced key %s does not hold the key it claims",
+				ErrUnprovenKey, Fingerprint(announced.ID))
 		}
 	}
 	return &set, signers, nil

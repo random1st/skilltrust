@@ -40,7 +40,7 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 			if subscriptions[i].CatalogURL == "" {
 				continue
 			}
-			added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys())
+			added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys(), time.Now().UTC())
 			if err != nil || len(added) == 0 {
 				continue
 			}

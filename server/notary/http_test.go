@@ -97,7 +97,7 @@ func TestKeySetEndpointExtendsTrustFromEitherKey(t *testing.T) {
 		"outgoing": f.oldPub,
 		"incoming": f.newPub,
 	} {
-		set, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(pinned))
+		set, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(pinned), time.Now())
 		if err != nil {
 			t.Fatalf("pinning the %s key must verify the announcement: %v", name, err)
 		}
@@ -110,7 +110,7 @@ func TestKeySetEndpointExtendsTrustFromEitherKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(strangerPub)); !errors.Is(err, attest.ErrUntrustedKey) {
+	if _, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(strangerPub), time.Now()); !errors.Is(err, attest.ErrUntrustedKey) {
 		t.Fatalf("a machine pinning neither key must refuse the announcement, got %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestKeySetIsSignedAtRequestTime(t *testing.T) {
 		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
 			t.Fatal(err)
 		}
-		set, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(f.oldPub))
+		set, _, err := attest.VerifyKeySet(&envelope, attest.NewTrustedKeys(f.oldPub), time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
