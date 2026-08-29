@@ -74,7 +74,6 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"plugins",        // the marketplace table rendered
-		"sequence",       // with its sequence column
 		"laptop-roman",   // the trusted machine appears
 		"deploy-runbook", // with its incident
 		"publisher",      // signer roles are named
@@ -276,10 +275,66 @@ func TestActiveMachinesCountsOnlyTheLastThirtyDays(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("dashboard answered %s", response.Status)
 	}
-	if !strings.Contains(page, "1 active in the last 30 days") {
+	if !strings.Contains(page, "1 reported in the last 30 days") {
 		t.Fatal("the dashboard must count exactly the fresh machine as active")
 	}
 	if !strings.Contains(page, "laptop-stale") {
 		t.Fatal("the stale machine still belongs in the table; only the active count excludes it")
+	}
+}
+
+// The page answers the question people open it to ask, instead of leaving them to work it
+// out from three tables and six columns of zeros. Both halves matter: a quiet fleet has to
+// say so, or silence reads as "nothing loaded".
+func TestTheDashboardSaysWhetherAnythingNeedsLookingAt(t *testing.T) {
+	now := time.Now().UTC()
+
+	quiet := whatNeedsLookingAt(Dashboard{Now: now, Machines: []MachineView{
+		{Name: "laptop", Last: now.Add(-time.Hour)},
+	}})
+	if len(quiet) != 0 {
+		t.Errorf("a fleet with nothing wrong must raise nothing, got %v", quiet)
+	}
+
+	busy := whatNeedsLookingAt(Dashboard{
+		Now: now,
+		Marketplaces: []MarketplaceView{
+			{Name: "plugins", Expired: true, ValidUntil: now.AddDate(0, 0, -1)},
+		},
+		Machines: []MachineView{
+			{Name: "a", Last: now, Revoked: 1},
+			{Name: "b", Last: now, Restored: 2},
+			{Name: "c", Last: now, Unverifiable: 1},
+			{Name: "d", Last: now.AddDate(0, 0, -40)},
+		},
+	})
+	joined := strings.Join(busy, " | ")
+	for _, expected := range []string{
+		"plugins expired",   // the catalog nobody accepts any more
+		"revoked",           // the one that means something withdrawn was found
+		"put the published", // a skill was changed and restored
+		"went unchecked",    // and the state that must never read as fine
+		"has not reported",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("nothing says %q; the page reads: %s", expected, joined)
+		}
+	}
+
+	// Revocation is the only line meaning a machine ran into something you withdrew. It
+	// must not be third in a list of counters.
+	if !strings.HasPrefix(busy[1], "1 machine found a skill you revoked") {
+		t.Errorf("revocation must come before the softer counts, got %q", busy[1])
+	}
+}
+
+// Counting reads as English or it does not get read. "1 machines" is the kind of thing that
+// makes a reader stop trusting the rest of the number.
+func TestCountsReadAsEnglish(t *testing.T) {
+	if got := plural(1, "machine"); got != "1 machine" {
+		t.Errorf("plural(1) = %q", got)
+	}
+	if got := plural(3, "machine"); got != "3 machines" {
+		t.Errorf("plural(3) = %q", got)
 	}
 }

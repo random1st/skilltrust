@@ -10,14 +10,22 @@
 
 <h1>{{.Org}} <small class="muted">· {{.Now.Format "2006-01-02 15:04"}} UTC</small></h1>
 
+{{if .Attention}}
+<div class="notice bad">
+  <b>Worth a look</b>
+  <ul>{{range .Attention}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{else}}
+<p class="ok">Nothing needs looking at. Every machine that reported found what you published.</p>
+{{end}}
+
 <h2>Marketplaces</h2>
 {{if .Marketplaces}}
 <table>
-  <tr><th>name</th><th class="n">sequence</th><th class="n">plugins</th><th class="n">revoked</th><th>valid until</th><th>signed by</th></tr>
+  <tr><th>name</th><th class="n">plugins</th><th class="n">revoked</th><th>valid until</th><th>signed by</th></tr>
   {{range .Marketplaces}}
   <tr>
     <td>{{.Name}}</td>
-    <td class="n">{{.Sequence}}</td>
     <td class="n">{{.Skills}}</td>
     <td class="n">{{if .Revoked}}<span class="bad">{{.Revoked}}</span>{{else}}0{{end}}</td>
     <td>{{if .Expired}}<span class="bad">expired {{.ValidUntil.Format "2006-01-02 15:04"}}</span>{{else}}{{.ValidUntil.Format "2006-01-02 15:04"}}{{end}}</td>
@@ -28,24 +36,21 @@
 {{else}}
 <p class="empty">nothing published yet</p>
 <p class="hint">Sign one with <span class="mono">skillctl marketplace sign .</span> and PUT the envelope
-to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using your publish token. Without
-this line the first screen a new organisation sees is three empty sections and no next step.</p>
+to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using your publish token.</p>
 {{end}}
 
 <h2>Machines</h2>
 {{if .Machines}}
-<p class="hint">{{.ActiveMachines}} active in the last 30 days — the number a per-machine plan counts.</p>
+<p class="hint">{{.ActiveMachines}} reported in the last 30 days.</p>
 <table>
-  <tr><th>machine</th><th>last report</th><th class="n">restored</th><th class="n">revoked seen</th><th class="n">adapted</th><th class="n">unverifiable</th><th class="n">catalog unusable</th></tr>
+  <tr><th>machine</th><th>last report</th><th class="n">put back</th><th class="n">your own copies</th><th class="n">could not check</th></tr>
   {{range .Machines}}
   <tr>
     <td>{{.Name}}</td>
     <td>{{.Last.Format "2006-01-02 15:04"}}</td>
     <td class="n">{{if .Restored}}<span class="bad">{{.Restored}}</span>{{else}}0{{end}}</td>
-    <td class="n">{{if .Revoked}}<span class="bad">{{.Revoked}}</span>{{else}}0{{end}}</td>
     <td class="n">{{if .Adapted}}{{.Adapted}}{{else}}0{{end}}</td>
-    <td class="n">{{.Unverifiable}}</td>
-    <td class="n">{{.CatalogUnusable}}</td>
+    <td class="n">{{if .Unchecked}}<span class="bad">{{.Unchecked}}</span>{{else}}0{{end}}</td>
   </tr>
   {{end}}
 </table>

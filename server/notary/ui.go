@@ -3,6 +3,7 @@ package notary
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -42,6 +43,11 @@ type Dashboard struct {
 	// number rather than as rows: unverifiable prose next to verified evidence invites
 	// reading the wrong one.
 	Unverified int
+	// Attention is what a person came here to find out, in the words they would use. A
+	// dashboard of three tables asks the reader to work out whether anything is wrong by
+	// scanning six columns of zeros, which is a question the page can answer itself.
+	// Empty means nothing needs looking at, and that is worth saying out loud too.
+	Attention []string
 	// Session is true when the viewer arrived through the login form rather than
 	// HTTP Basic; it decides whether a sign-out button makes sense.
 	Session bool
@@ -77,6 +83,12 @@ type MachineView struct {
 	// fleet is running.
 	Adapted int
 }
+
+// Unchecked is how many times this machine could not answer the question at all — an
+// unreadable plugin or a marketplace it could not verify. They are one column because they
+// are one thing to a reader: something went unchecked, and "we could not check" is the only
+// state that must never be mistaken for "nothing had changed".
+func (m MachineView) Unchecked() int { return m.Unverifiable + m.CatalogUnusable }
 
 type EventView struct {
 	At      time.Time
@@ -191,7 +203,67 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 	sort.Slice(dashboard.Marketplaces, func(i, j int) bool {
 		return dashboard.Marketplaces[i].Name < dashboard.Marketplaces[j].Name
 	})
+	dashboard.Attention = whatNeedsLookingAt(dashboard)
 	return dashboard
+}
+
+// whatNeedsLookingAt turns the tables into the sentences a person would say. Each line
+// names the thing and how many, because "3 machines" is actionable and "something is
+// wrong" is not.
+func whatNeedsLookingAt(dashboard Dashboard) []string {
+	var lines []string
+
+	for _, view := range dashboard.Marketplaces {
+		if view.Expired {
+			lines = append(lines, fmt.Sprintf(
+				"%s expired on %s, so machines following it have stopped accepting it — publish again",
+				view.Name, view.ValidUntil.Format("2 January")))
+		}
+	}
+
+	restored, revoked, unreadable, stale := 0, 0, 0, 0
+	for _, machine := range dashboard.Machines {
+		if machine.Restored > 0 {
+			restored++
+		}
+		if machine.Revoked > 0 {
+			revoked++
+		}
+		if machine.Unchecked() > 0 {
+			unreadable++
+		}
+		if machine.Last.Before(dashboard.Now.AddDate(0, 0, -30)) {
+			stale++
+		}
+	}
+	// Revocation first: it is the only line that means a machine ran into something you
+	// withdrew, and burying it under three counters is how it gets read last.
+	if revoked > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s found a skill you revoked and refused to load it", plural(revoked, "machine")))
+	}
+	if restored > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s had a skill changed and put the published copy back", plural(restored, "machine")))
+	}
+	if unreadable > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s could not check something, so it went unchecked", plural(unreadable, "machine")))
+	}
+	if stale > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s has not reported in over a month", plural(stale, "machine")))
+	}
+	return lines
+}
+
+// plural keeps a count reading as English. "1 machines" is the kind of thing that makes a
+// reader stop trusting the rest of the number.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // sessionCookie carries "org:admin-token" — exactly the credential HTTP Basic resends on
