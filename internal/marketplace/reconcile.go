@@ -34,9 +34,21 @@ const (
 	OutcomeOtherVersion Outcome = "other version"
 	// OutcomeUnverifiable means no claim can be made: unreadable, or nothing to restore from.
 	OutcomeUnverifiable Outcome = "unverifiable"
+	// OutcomeAdapted means the copy differs from the signature and the person at this
+	// machine said so on purpose.
+	//
+	// Without this, editing a skill to fit your setup — the most ordinary thing anyone does
+	// with one — put the file in quarantine and the published version back, every session,
+	// silently. A tool that undoes your work every morning is a tool you uninstall, and an
+	// uninstalled checker protects nothing at all.
+	//
+	// It is never quiet. An adapted plugin is reported like any other finding, so an
+	// organisation can see which machines run bytes nobody signed.
+	OutcomeAdapted Outcome = "adapted"
 )
 
-// Settled reports whether an outcome needs no attention and no words.
+// Settled reports whether an outcome needs no attention and no words. Adapted is not
+// settled: it is a normal state, not an invisible one.
 func (o Outcome) Settled() bool { return o == OutcomeVerified || o == OutcomeAbsent }
 
 // Result is one line of a reconciliation.
@@ -50,6 +62,8 @@ type Result struct {
 	Installed   string  `json:"installed_version,omitempty"`
 	Detail      string  `json:"detail,omitempty"`
 	Quarantine  string  `json:"quarantine,omitempty"`
+	// Adapted carries the reason the person gave when they adopted these bytes.
+	Adapted string `json:"adapted,omitempty"`
 }
 
 // Options configures a reconciliation.
@@ -63,6 +77,9 @@ type Options struct {
 	QuarantineRoot string
 	// Restore turns reporting into repair.
 	Restore bool
+	// Adopted are the differences this machine's owner accepted on purpose. Empty means
+	// every difference is a finding, which is the behaviour every machine had before.
+	Adopted Adoptions
 	Now     time.Time
 }
 
@@ -115,6 +132,23 @@ func reconcileOne(
 	if digest == managed.Digest {
 		result.Outcome = OutcomeVerified
 		return result
+	}
+
+	// An adoption is a claim about exact bytes, not a licence to diverge. It applies only
+	// while the local copy is still the copy that was adopted AND the catalog still
+	// publishes the digest it was adopted away from. Anything else — someone editing the
+	// file again, or upstream shipping a new version — falls back to being a difference
+	// that needs a decision, which is the property that keeps this from being an off switch.
+	if adoption, ok := options.Adopted.Find(snapshot.Name, managed.Name); ok {
+		switch {
+		case adoption.Local != digest:
+			result.Detail = "these are not the bytes that were adopted; they changed again since"
+		case adoption.From != managed.Digest:
+			result.Detail = "adopted from a version the catalog no longer publishes; adopt again to keep it"
+		default:
+			result.Outcome, result.Adapted = OutcomeAdapted, adoption.Reason
+			return result
+		}
 	}
 
 	result.Outcome = OutcomeChanged

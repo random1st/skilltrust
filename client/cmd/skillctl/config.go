@@ -32,6 +32,7 @@ func defaultSigningKey() string  { return homePath("signer.key") }
 func defaultPublicKey() string   { return homePath("signer.pub") }
 func defaultTrustedKeys() string { return homePath("trusted-keys.json") }
 func defaultCatalog() string     { return homePath("catalog.json") }
+func defaultAdoptions() string   { return homePath("adopted.json") }
 
 // skillRoots are the conventional locations, project before user. A client looks in all of
 // them, so a tool that reports on one and stays quiet about the others is describing a

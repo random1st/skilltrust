@@ -36,6 +36,7 @@ Following a catalog (on a machine):
   skillctl subscribe <git-url> --key <pub>
                                  follow an organisation's signed skill catalog
   skillctl sync                  fetch, verify, and reconcile signed plugins
+  skillctl adopt <plugin>        keep a change you made, instead of having it put back
   skillctl refresh [catalog]     pin a rotating notary's next key from its signed announcement
   skillctl hook <subcommand>     run or install the session-start reconciler
 
@@ -88,6 +89,8 @@ func main() {
 		os.Exit(runCatalog(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
+	case "adopt":
+		os.Exit(runAdopt(os.Args[2:]))
 	case "refresh":
 		os.Exit(runRefresh(os.Args[2:]))
 	case "lint":

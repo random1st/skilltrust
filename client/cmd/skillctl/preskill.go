@@ -76,6 +76,16 @@ func runHookPreSkill(args []string) int {
 		return exitClean
 	}
 
+	// The hook is the only check most machines ever run, so an adoption the hook does not
+	// read is an adoption that does not exist: sync would honour it and then every session
+	// would quietly put the published bytes back. An unreadable file adopts nothing here
+	// too — it must not become "accept everything" on the path that runs unattended.
+	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		adopted = marketplace.Adoptions{}
+	}
+
 	now := time.Now().UTC()
 	for _, subscription := range subscriptions {
 		snapshot, err := readSnapshotOnly(subscription, trusted, now)
@@ -99,6 +109,7 @@ func runHookPreSkill(args []string) int {
 
 		for _, result := range marketplace.Reconcile(snapshot, marketplace.Options{
 			ClaudeHome:     home,
+			Adopted:        adopted,
 			Source:         source.Path(catalogRoot(), subscription.Name),
 			QuarantineRoot: quarantineRoot(),
 			Restore:        true,
@@ -122,6 +133,15 @@ func decide(result marketplace.Result, permissive bool) int {
 			fmt.Fprintf(os.Stderr, "  %s\n", result.Detail)
 		}
 		return exitDeny
+
+	case marketplace.OutcomeAdapted:
+		// Said once per session, quietly, and it loads. A person who chose to keep their
+		// own copy should be reminded that they did — silence here would let an adoption
+		// made months ago be mistaken for the published skill — but this is not a warning
+		// and must not read like one.
+		fmt.Fprintf(os.Stderr, "skillctl: %q is your own modified copy (%s)\n",
+			result.Plugin, result.Adapted)
+		return exitClean
 
 	case marketplace.OutcomeRestored:
 		fmt.Fprintf(os.Stderr, "skillctl: %q had been changed on this machine and was "+

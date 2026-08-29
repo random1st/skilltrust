@@ -71,6 +71,11 @@ type MachineView struct {
 	Revoked         int
 	Unverifiable    int
 	CatalogUnusable int
+	// Adapted counts plugins someone at that machine deliberately keeps modified. Not an
+	// incident, and shown anyway: it is the one case where a machine knowingly runs bytes
+	// no publisher signed, and an organisation that cannot see it does not know what its
+	// fleet is running.
+	Adapted int
 }
 
 type EventView struct {
@@ -158,6 +163,8 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 				view.Unverifiable++
 			case report.KindCatalogUnusable:
 				view.CatalogUnusable++
+			case report.KindAdapted:
+				view.Adapted++
 			}
 			dashboard.Events = append(dashboard.Events, EventView{
 				At: event.At, Machine: event.Machine,

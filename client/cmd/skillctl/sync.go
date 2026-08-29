@@ -61,6 +61,15 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 	}
 
 	now := time.Now().UTC()
+
+	// A file this machine's owner wrote deliberately. An unreadable one adopts nothing and
+	// is reported: the alternative direction — a corrupt file quietly meaning "accept every
+	// difference here" — turns a local mistake into a silent hole.
+	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
+	if err != nil {
+		return nil, []string{err.Error()}, exitFindings
+	}
+
 	var results []marketplace.Result
 	var unusable []string
 
@@ -90,6 +99,7 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 		}
 		results = append(results, marketplace.Reconcile(snapshot, marketplace.Options{
 			ClaudeHome:     claudeHome,
+			Adopted:        adopted,
 			Source:         source.Path(catalogRoot(), subscription.Name),
 			QuarantineRoot: quarantineRoot(),
 			Restore:        restore,

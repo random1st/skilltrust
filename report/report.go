@@ -43,6 +43,11 @@ const (
 	// KindCatalogUnusable means a marketplace could not be verified, so its plugins went
 	// unchecked. Silence about that would be indistinguishable from everything being fine.
 	KindCatalogUnusable Kind = "catalog-unusable"
+	// KindAdapted means someone at that machine deliberately kept a change to a signed
+	// skill. It is not an incident and nobody should be woken for it, but it is the one
+	// case where a machine knowingly runs bytes no publisher signed — so an organisation
+	// that cannot see it does not know what its fleet is running.
+	KindAdapted Kind = "adapted"
 )
 
 // Severity lets a receiver route without parsing the whole event.
@@ -52,6 +57,10 @@ func (k Kind) Severity() string {
 		return "high"
 	case KindRestored, KindUnverifiable:
 		return "medium"
+	case KindAdapted:
+		// Deliberately low. A person chose this, and paging anyone for a choice they made
+		// is how a stream stops being read - including the lines that are not choices.
+		return "low"
 	default:
 		return "low"
 	}
@@ -86,6 +95,17 @@ func (e Event) Summary() string {
 			e.Plugin, e.Marketplace, e.displayHost())
 	case KindUnverifiable:
 		return fmt.Sprintf("%s on %s could not be verified: %s",
+			e.Plugin, e.displayHost(), e.Detail)
+	case KindAdapted:
+		// The reason travels with the event. An organisation reading "runs a modified copy"
+		// learns only that it should go and ask; reading why the person changed it usually
+		// ends the question there, which is the difference between a useful line and a
+		// line that generates work.
+		if e.Detail == "" {
+			return fmt.Sprintf("%s on %s is a modified copy its owner chose to keep",
+				e.Plugin, e.displayHost())
+		}
+		return fmt.Sprintf("%s on %s is a modified copy its owner chose to keep: %s",
 			e.Plugin, e.displayHost(), e.Detail)
 	case KindCatalogUnusable:
 		if e.Marketplace == "" {

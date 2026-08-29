@@ -90,11 +90,17 @@ func collectEvents(results []marketplace.Result, unusable []string, now time.Tim
 		if !ok {
 			continue
 		}
+		// An adoption's reason is the whole value of reporting it, so it travels as the
+		// event's detail rather than being left behind in a field the report does not carry.
+		detail := result.Detail
+		if result.Outcome == marketplace.OutcomeAdapted {
+			detail = result.Adapted
+		}
 		events = append(events, report.Event{
 			Kind: kind, At: now,
 			Marketplace: result.Marketplace, Plugin: result.Plugin, PluginVer: result.Version,
 			Signed: result.Signed, Found: result.OnDisk,
-			Quarantine: result.Quarantine, Detail: result.Detail,
+			Quarantine: result.Quarantine, Detail: detail,
 		})
 	}
 	for _, failure := range unusable {
@@ -113,6 +119,8 @@ func kindFor(outcome marketplace.Outcome) (report.Kind, bool) {
 		return report.KindRevoked, true
 	case marketplace.OutcomeChanged, marketplace.OutcomeUnverifiable:
 		return report.KindUnverifiable, true
+	case marketplace.OutcomeAdapted:
+		return report.KindAdapted, true
 	default:
 		return "", false
 	}
