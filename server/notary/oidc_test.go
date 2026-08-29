@@ -21,10 +21,15 @@ import (
 
 type issuer struct {
 	key    *rsa.PrivateKey
+	keyID  string
 	server *httptest.Server
 }
 
-func newIssuer(t *testing.T) *issuer {
+func newIssuer(t *testing.T) *issuer { return newIssuerNamed(t, "test-key") }
+
+// newIssuerNamed is the same fixture with its own key id, which is what a second issuer
+// needs: two fixtures sharing one kid cannot show a key being withdrawn or kept.
+func newIssuerNamed(t *testing.T, keyID string) *issuer {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -33,14 +38,14 @@ func newIssuer(t *testing.T) *issuer {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"keys": []map[string]string{{
-				"kty": "RSA", "kid": "test-key",
+				"kty": "RSA", "kid": keyID,
 				"n": base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()),
 				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
 			}},
 		})
 	}))
 	t.Cleanup(server.Close)
-	return &issuer{key: key, server: server}
+	return &issuer{key: key, keyID: keyID, server: server}
 }
 
 type tokenSpec struct {
@@ -274,5 +279,97 @@ func TestNoGateMeansNoChange(t *testing.T) {
 	token := i.mint(t, tokenSpec{repository: "acme/marketplace"})
 	if response := f.publish(t, token, f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
 		t.Fatalf("a publish with no gate installed answered %s", response.Status)
+	}
+}
+
+// The cache merges rather than replaces. A JWKS answer that transiently omits a key — a
+// partial response, one server mid-rotation, a degraded CDN — used to evict a key that was
+// working, and every token signed with it was then rejected as unknown.
+func TestAPartialJWKSAnswerDoesNotWithdrawAWorkingKey(t *testing.T) {
+	i := newIssuer(t)
+	verifier := &OIDCVerifier{JWKSURL: i.server.URL}
+	now := time.Now()
+
+	key, err := verifier.keyFor(i.keyID, now)
+	if err != nil || key == nil {
+		t.Fatalf("the issuer's key must be learned: %v", err)
+	}
+
+	// The issuer now answers with a different key and no longer mentions the first.
+	other := newIssuerNamed(t, "second-key")
+	verifier.JWKSURL = other.server.URL
+	if _, err := verifier.keyFor(other.keyID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("the new key must be learned: %v", err)
+	}
+	if _, ok := verifier.cached(i.keyID, now.Add(2*time.Minute)); !ok {
+		t.Error("a key missing from one answer was withdrawn; tokens signed with it now fail")
+	}
+}
+
+// Merging forever would mean a key the issuer deliberately withdrew stays trusted for as
+// long as the process lives. The age bound is what makes merging safe.
+func TestAKeyThatStopsBeingPublishedEventuallyExpires(t *testing.T) {
+	i := newIssuer(t)
+	verifier := &OIDCVerifier{JWKSURL: i.server.URL}
+	now := time.Now()
+	if _, err := verifier.keyFor(i.keyID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := verifier.cached(i.keyID, now.Add(MaxKeyAge-time.Minute)); !ok {
+		t.Error("a key must stay usable inside its age; a shorter life would reject good tokens")
+	}
+	if _, ok := verifier.cached(i.keyID, now.Add(MaxKeyAge+time.Minute)); ok {
+		t.Error("a key unseen past MaxKeyAge must stop being accepted")
+	}
+}
+
+// The fetch must not run under the lock. Holding it across a ten-second HTTP call queued
+// every concurrent verification behind one slow issuer, which behind a gateway that cuts
+// connections at thirty seconds turns a slow JWKS endpoint into an outage.
+func TestVerificationDoesNotQueueBehindOneSlowFetch(t *testing.T) {
+	slow := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-slow
+		w.Write([]byte(`{"keys":[]}`))
+	}))
+	defer server.Close()
+	defer close(slow)
+
+	verifier := &OIDCVerifier{JWKSURL: server.URL}
+	verifier.mu.Lock()
+	verifier.keys = map[string]cachedKey{"known": {key: &rsa.PublicKey{}, seen: time.Now()}}
+	verifier.mu.Unlock()
+
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		verifier.keyFor("unknown", time.Now()) // blocks in the slow fetch
+	}()
+	<-started
+	time.Sleep(150 * time.Millisecond) // let it reach the fetch
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := verifier.keyFor("known", time.Now()); err != nil {
+			t.Errorf("a cached key must answer while another fetch is in flight: %v", err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cached lookup blocked behind an in-flight JWKS fetch")
+	}
+}
+
+// An issuer that answers with nothing usable is a failure, not a successful refresh with
+// zero keys — those look identical to the caller and only one of them is worth retrying.
+func TestAnEmptyJWKSIsAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"keys":[]}`))
+	}))
+	defer server.Close()
+	if _, err := (&OIDCVerifier{JWKSURL: server.URL}).fetch(); err == nil {
+		t.Error("an issuer publishing no usable key must be an error")
 	}
 }

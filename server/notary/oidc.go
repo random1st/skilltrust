@@ -46,9 +46,27 @@ type OIDCVerifier struct {
 	JWKSURL string
 
 	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey
+	keys    map[string]cachedKey
 	fetched time.Time
 }
+
+// cachedKey is one of the issuer's signing keys and when it was last seen published.
+//
+// The age matters because the cache merges rather than replaces. A JWKS response that
+// transiently omits a key - a partial answer, one server in a rotation, a degraded CDN -
+// used to evict a key that was working and reject every token signed with it. Merging fixes
+// that and creates the opposite problem: a key the issuer has deliberately withdrawn would
+// stay trusted forever. The age bounds it, so a withdrawn key stops being accepted once it
+// has gone unseen for MaxKeyAge.
+type cachedKey struct {
+	key  *rsa.PublicKey
+	seen time.Time
+}
+
+// MaxKeyAge is how long a signing key stays usable after it was last seen in the issuer's
+// JWKS. Long enough to ride out a bad fetch, short enough that a withdrawn key does not
+// outlive the day it was withdrawn.
+const MaxKeyAge = 24 * time.Hour
 
 // registeredClaims are the ones every issuer sets and VerifyToken decides on.
 type registeredClaims struct {
@@ -184,26 +202,64 @@ const clockSkew = 5 * time.Minute
 // exactly what key rotation looks like — but at most once a minute, so a flood of bad
 // key ids cannot turn this endpoint into a JWKS-fetching amplifier.
 func (v *OIDCVerifier) keyFor(keyID string, now time.Time) (*rsa.PublicKey, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if key, ok := v.keys[keyID]; ok {
+	if key, ok := v.cached(keyID, now); ok {
 		return key, nil
 	}
-	if now.Sub(v.fetched) < time.Minute {
+
+	v.mu.Lock()
+	tooSoon := now.Sub(v.fetched) < time.Minute
+	if !tooSoon {
+		v.fetched = now
+	}
+	v.mu.Unlock()
+	if tooSoon {
 		return nil, fmt.Errorf("%w: unknown signing key %q", ErrOIDC, keyID)
 	}
-	if err := v.refresh(); err != nil {
+
+	// Fetched outside the lock. Holding it across a ten-second HTTP call meant every
+	// concurrent verification queued behind one slow issuer, which behind a gateway that
+	// cuts connections at thirty seconds turns a slow JWKS endpoint into an outage.
+	fetched, err := v.fetch()
+	if err != nil {
 		return nil, err
 	}
-	v.fetched = now
-	if key, ok := v.keys[keyID]; ok {
-		return key, nil
+
+	v.mu.Lock()
+	if v.keys == nil {
+		v.keys = map[string]cachedKey{}
+	}
+	// Merged, not replaced: see cachedKey. A response missing a key must not withdraw it.
+	for id, key := range fetched {
+		v.keys[id] = cachedKey{key: key, seen: now}
+	}
+	for id, entry := range v.keys {
+		if now.Sub(entry.seen) > MaxKeyAge {
+			delete(v.keys, id)
+		}
+	}
+	entry, ok := v.keys[keyID]
+	v.mu.Unlock()
+
+	if ok {
+		return entry.key, nil
 	}
 	return nil, fmt.Errorf("%w: unknown signing key %q", ErrOIDC, keyID)
 }
 
-func (v *OIDCVerifier) refresh() error {
+// cached returns a key that is both known and not stale.
+func (v *OIDCVerifier) cached(keyID string, now time.Time) (*rsa.PublicKey, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	entry, ok := v.keys[keyID]
+	if !ok || now.Sub(entry.seen) > MaxKeyAge {
+		return nil, false
+	}
+	return entry.key, true
+}
+
+// fetch reads the issuer's JWKS. It touches no shared state, so it can run without the
+// lock held.
+func (v *OIDCVerifier) fetch() (map[string]*rsa.PublicKey, error) {
 	address := v.JWKSURL
 	if address == "" {
 		issuer := v.Issuer
@@ -216,11 +272,11 @@ func (v *OIDCVerifier) refresh() error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	response, err := client.Get(address)
 	if err != nil {
-		return fmt.Errorf("%w: the issuer's keys are unreachable: %v", ErrOIDC, err)
+		return nil, fmt.Errorf("%w: the issuer's keys are unreachable: %v", ErrOIDC, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: the issuer's keys answered %s", ErrOIDC, response.Status)
+		return nil, fmt.Errorf("%w: the issuer's keys answered %s", ErrOIDC, response.Status)
 	}
 
 	var document struct {
@@ -232,7 +288,7 @@ func (v *OIDCVerifier) refresh() error {
 		} `json:"keys"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
-		return fmt.Errorf("%w: the issuer's keys are unreadable: %v", ErrOIDC, err)
+		return nil, fmt.Errorf("%w: the issuer's keys are unreadable: %v", ErrOIDC, err)
 	}
 
 	keys := map[string]*rsa.PublicKey{}
@@ -257,8 +313,13 @@ func (v *OIDCVerifier) refresh() error {
 		}
 		keys[entry.KeyID] = &rsa.PublicKey{N: new(big.Int).SetBytes(modulus), E: exponent}
 	}
-	v.keys = keys
-	return nil
+	if len(keys) == 0 {
+		// An answer with no usable key is not an answer. Returning it would merge nothing
+		// and look identical to a successful refresh, so the caller would report "unknown
+		// key" for a reachable issuer that simply said nothing.
+		return nil, fmt.Errorf("%w: the issuer published no usable RSA keys", ErrOIDC)
+	}
+	return keys, nil
 }
 
 func decodeSegment(segment string, into any) error {
