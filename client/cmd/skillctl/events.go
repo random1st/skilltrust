@@ -95,6 +95,9 @@ func collectEvents(results []marketplace.Result, unusable []string, now time.Tim
 		detail := result.Detail
 		if result.Outcome == marketplace.OutcomeAdapted {
 			detail = result.Adapted
+			if !result.AdaptedSince.IsZero() {
+				detail = fmt.Sprintf("%s (adopted %s)", result.Adapted, age(result.AdaptedSince, now))
+			}
 		}
 		events = append(events, report.Event{
 			Kind: kind, At: now,

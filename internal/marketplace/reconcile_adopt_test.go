@@ -178,3 +178,28 @@ func TestEveryRestoringPathMustHonourAdoptions(t *testing.T) {
 		t.Fatal("the adopted copy was overwritten with the published one")
 	}
 }
+
+// An adoption's age is reported and never enforced. A record that expired on a timer would
+// ask for a re-approval carrying no new information — nothing about the bytes changed —
+// and a re-approval that says nothing is one people learn to click through. What the date
+// is for is letting somebody see that a temporary workaround has been temporary for a year.
+func TestAnAdoptionIsDatedButDoesNotExpire(t *testing.T) {
+	home := t.TempDir()
+	published := "sha256:published"
+	mine := install(t, home, "acme", "runbook", "1.0.0", "ours\n")
+	longAgo := time.Now().AddDate(-2, 0, 0).UTC()
+
+	adopted := Adoptions{}.Record(Adoption{
+		Marketplace: "acme", Plugin: "runbook",
+		From: published, Local: mine, Reason: "temporary workaround", Since: longAgo,
+	})
+	results := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published),
+		Options{ClaudeHome: home, Adopted: adopted, Restore: true})
+
+	if results[0].Outcome != OutcomeAdapted {
+		t.Fatalf("a two-year-old adoption must still hold, got %s", results[0].Outcome)
+	}
+	if !results[0].AdaptedSince.Equal(longAgo) {
+		t.Errorf("the date must survive so staleness can be seen, got %v", results[0].AdaptedSince)
+	}
+}

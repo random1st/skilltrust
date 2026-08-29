@@ -62,8 +62,14 @@ type Result struct {
 	Installed   string  `json:"installed_version,omitempty"`
 	Detail      string  `json:"detail,omitempty"`
 	Quarantine  string  `json:"quarantine,omitempty"`
-	// Adapted carries the reason the person gave when they adopted these bytes.
-	Adapted string `json:"adapted,omitempty"`
+	// Adapted carries the reason the person gave when they adopted these bytes, and
+	// AdaptedSince when they did. The date is reported, never enforced: an adoption that
+	// expired on a timer would ask for a re-approval carrying no new information, and a
+	// re-approval that says nothing is one people learn to click through. What it is for
+	// is letting an organisation see a temporary workaround that has been temporary for
+	// fourteen months.
+	Adapted      string    `json:"adapted,omitempty"`
+	AdaptedSince time.Time `json:"adapted_since,omitempty"`
 }
 
 // Options configures a reconciliation.
@@ -146,7 +152,8 @@ func reconcileOne(
 		case adoption.From != managed.Digest:
 			result.Detail = "adopted from a version the catalog no longer publishes; adopt again to keep it"
 		default:
-			result.Outcome, result.Adapted = OutcomeAdapted, adoption.Reason
+			result.Outcome = OutcomeAdapted
+			result.Adapted, result.AdaptedSince = adoption.Reason, adoption.Since
 			return result
 		}
 	}

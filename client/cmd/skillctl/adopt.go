@@ -168,10 +168,14 @@ func printAdoptions(adoptions marketplace.Adoptions) int {
 		fmt.Println("nothing is adopted on this machine; every signed skill is checked as published")
 		return exitClean
 	}
-	fmt.Printf("%-28s %-16s %s\n", "PLUGIN", "MARKETPLACE", "BECAUSE")
+	fmt.Printf("%-26s %-14s %-10s %s\n", "PLUGIN", "MARKETPLACE", "ADOPTED", "BECAUSE")
 	for _, entry := range adoptions.Entries {
-		fmt.Printf("%-28s %-16s %s\n", entry.Plugin, entry.Marketplace, entry.Reason)
+		fmt.Printf("%-26s %-14s %-10s %s\n",
+			entry.Plugin, entry.Marketplace, age(entry.Since, time.Now().UTC()), entry.Reason)
 	}
+	fmt.Println("\nNothing here expires. An adoption ends when the bytes change or the " +
+		"publisher\nships a new version — a date would only ask you to re-approve something " +
+		"that had not\nchanged, which is how re-approving stops meaning anything.")
 	return exitClean
 }
 
@@ -186,6 +190,23 @@ func resolveMarketplace(adoptions marketplace.Adoptions, given, plugin string) s
 		}
 	}
 	return ""
+}
+
+// age is how long ago a decision was made, in the roughest units that still answer the
+// question a reader is actually asking: is this recent, or did somebody leave it here?
+func age(since, now time.Time) string {
+	if since.IsZero() {
+		return "unknown"
+	}
+	days := int(now.Sub(since).Hours() / 24)
+	switch {
+	case days < 1:
+		return "today"
+	case days < 60:
+		return fmt.Sprintf("%dd ago", days)
+	default:
+		return fmt.Sprintf("%dmo ago", days/30)
+	}
 }
 
 func short(digest string) string {
