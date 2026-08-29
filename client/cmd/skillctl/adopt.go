@@ -173,9 +173,8 @@ func printAdoptions(adoptions marketplace.Adoptions) int {
 		fmt.Printf("%-26s %-14s %-10s %s\n",
 			entry.Plugin, entry.Marketplace, age(entry.Since, time.Now().UTC()), entry.Reason)
 	}
-	fmt.Println("\nNothing here expires. An adoption ends when the bytes change or the " +
-		"publisher\nships a new version — a date would only ask you to re-approve something " +
-		"that had not\nchanged, which is how re-approving stops meaning anything.")
+	fmt.Println("\nThese never expire. One ends when you edit the file again, or the " +
+		"publisher ships a new version.")
 	return exitClean
 }
 

@@ -149,6 +149,8 @@ func decide(result marketplace.Result, permissive bool) int {
 		if result.Quarantine != "" {
 			fmt.Fprintf(os.Stderr, "  what was there: %s\n", result.Quarantine)
 		}
+		fmt.Fprintf(os.Stderr, "  to keep your version instead: skillctl adopt %s --because \"...\"\n",
+			result.Plugin)
 		return exitClean
 
 	case marketplace.OutcomeUnverifiable, marketplace.OutcomeChanged:

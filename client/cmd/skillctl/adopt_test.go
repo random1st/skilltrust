@@ -80,3 +80,31 @@ func TestAdoptionIsRefusedForWhatItCannotDescribe(t *testing.T) {
 		t.Errorf("an ambiguous name must be refused with a way to disambiguate, got %v", err)
 	}
 }
+
+// Nobody reads documentation to find out why their file keeps changing back. The one
+// moment a person will read anything is the moment their work is undone, so that is where
+// the command that keeps it has to be — in every message that reports an undo, not in help
+// text they would have had to find before they knew they needed it.
+func TestLosingYourWorkTellsYouHowToKeepIt(t *testing.T) {
+	for surface, file := range map[string]string{
+		"the sync report":        "sync.go",
+		"the session-start hook": "sessionhook.go",
+		"the pre-skill hook":     "preskill.go",
+	} {
+		body, err := os.ReadFile("cmd/skillctl/" + file)
+		if err != nil {
+			body, err = os.ReadFile(file)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", surface, err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "OutcomeRestored") {
+			continue // this surface does not report an undo
+		}
+		if !strings.Contains(text, "skillctl adopt %s") {
+			t.Errorf("%s (%s) undoes someone's work without telling them how to keep it",
+				surface, file)
+		}
+	}
+}

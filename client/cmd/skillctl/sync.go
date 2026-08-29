@@ -187,6 +187,8 @@ func writeReconcileReport(
 		case marketplace.OutcomeRestored:
 			fmt.Printf("                this copy had been changed here and was put back\n")
 			fmt.Printf("                was     %s\n", result.OnDisk)
+			fmt.Printf("                to keep your version instead: "+
+				"skillctl adopt %s --because \"...\"\n", result.Plugin)
 		case marketplace.OutcomeAdapted:
 			// The reason is the whole reason to print this line. Without it a person
 			// reading their own machine six months on sees a divergence and no account

@@ -94,6 +94,8 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 		}
 		if result.Outcome == marketplace.OutcomeRestored {
 			fmt.Printf("                this copy had been changed here and was put back\n")
+			fmt.Printf("                to keep your version instead: "+
+				"skillctl adopt %s --because \"...\"\n", result.Plugin)
 		}
 		// The reason lives in Adapted, not Detail, so a surface that only prints Detail
 		// shows a divergence with no account of it — which is the state adopting exists to
