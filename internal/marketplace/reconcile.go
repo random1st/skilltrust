@@ -150,7 +150,14 @@ func reconcileOne(
 		case adoption.Local != digest:
 			result.Detail = "these are not the bytes that were adopted; they changed again since"
 		case adoption.From != managed.Digest:
-			result.Detail = "adopted from a version the catalog no longer publishes; adopt again to keep it"
+			// The published bytes win, because they are the ones that were signed and a
+			// stale patch kept forever means running an old skill while believing you are
+			// current. But "adopt again to keep it" was a lie: by the time anyone reads
+			// it, their copy has already been moved and the file on disk is upstream's.
+			// Say what happened and what it costs to get back.
+			result.Detail = "the publisher shipped a new version, so your copy was replaced " +
+				"by theirs and kept in quarantine. Re-apply your change to the new version " +
+				"and adopt that, if you still want it"
 		default:
 			result.Outcome = OutcomeAdapted
 			result.Adapted, result.AdaptedSince = adoption.Reason, adoption.Since

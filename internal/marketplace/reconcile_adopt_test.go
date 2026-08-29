@@ -3,6 +3,7 @@ package marketplace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,4 +203,122 @@ func TestAnAdoptionIsDatedButDoesNotExpire(t *testing.T) {
 	if !results[0].AdaptedSince.Equal(longAgo) {
 		t.Errorf("the date must survive so staleness can be seen, got %v", results[0].AdaptedSince)
 	}
+}
+
+// When the publisher ships a new version over an adopted patch, the published bytes win:
+// they are what was signed, and a stale patch kept forever means running an old skill while
+// believing you are current. What must not happen is the tool describing that badly. It
+// used to say "adopt again to keep it", which was untrue by the time anyone read it — the
+// copy had already been moved and the file on disk was the publisher's.
+func TestWhenUpstreamMovesThePersonIsToldWhatActuallyHappened(t *testing.T) {
+	home := t.TempDir()
+	repository := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repository, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repository, ".claude-plugin", "marketplace.json"),
+		[]byte(`{"name":"acme","plugins":[{"name":"runbook","source":"./plugins/runbook","version":"1.0.0"}]}`), 0o644)
+	os.MkdirAll(filepath.Join(repository, "plugins", "runbook"), 0o755)
+	os.WriteFile(filepath.Join(repository, "plugins", "runbook", "SKILL.md"),
+		[]byte("---\nname: runbook\n---\nupstream v2\n"), 0o644)
+	newSigned, _, err := DigestPlugin(filepath.Join(repository, "plugins", "runbook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mine := install(t, home, "acme", "runbook", "1.0.0", "---\nname: runbook\n---\nmy patch\n")
+	adopted := Adoptions{}.Record(Adoption{
+		Marketplace: "acme", Plugin: "runbook",
+		From: "sha256:the-version-i-patched", Local: mine, Reason: "ours", Since: time.Now(),
+	})
+
+	results := Reconcile(snapshotOf("acme", "runbook", "1.0.0", newSigned), Options{
+		ClaudeHome: home, Adopted: adopted, Restore: true,
+		Source: repository, QuarantineRoot: t.TempDir(),
+	})
+
+	if results[0].Outcome != OutcomeRestored {
+		t.Fatalf("the published version must win, got %s", results[0].Outcome)
+	}
+	if results[0].Quarantine == "" {
+		t.Fatal("the person's copy must be kept somewhere they can reach it")
+	}
+	if strings.Contains(results[0].Detail, "adopt again to keep it") {
+		t.Error("the message still promises something that is already too late")
+	}
+	for _, expected := range []string{"shipped a new version", "quarantine", "Re-apply"} {
+		if !strings.Contains(results[0].Detail, expected) {
+			t.Errorf("the message does not say %q; it reads %q", expected, results[0].Detail)
+		}
+	}
+}
+
+// An adoption has to survive contact with every other mechanism, and the ways it must NOT
+// survive matter more than the ways it must. Each case here is one interaction that was
+// never reviewed, because the review panel that was supposed to trace them never ran.
+func TestAdoptionAgainstEveryOtherMechanism(t *testing.T) {
+	published := "sha256:published"
+
+	t.Run("offline still honours it", func(t *testing.T) {
+		// Adoptions are a local file, so nothing about them needs the network. A machine
+		// that could only honour a person's choice while online would revert their work
+		// on a plane.
+		home := t.TempDir()
+		mine := install(t, home, "acme", "runbook", "1.0.0", "ours\n")
+		adopted := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+			From: published, Local: mine, Reason: "ours", Since: time.Now()})
+		// Restore false is the report-only shape; Source empty is the offline shape.
+		for name, options := range map[string]Options{
+			"report only": {ClaudeHome: home, Adopted: adopted},
+			"no checkout": {ClaudeHome: home, Adopted: adopted, Restore: true},
+		} {
+			got := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published), options)
+			if got[0].Outcome != OutcomeAdapted {
+				t.Errorf("%s: got %s, want adapted", name, got[0].Outcome)
+			}
+		}
+	})
+
+	t.Run("a different installed version is not covered", func(t *testing.T) {
+		// The adoption names no version, so this is the case where it could wrongly leak
+		// across one. It must not: a patch approved for 1.0.0 says nothing about 2.0.0.
+		home := t.TempDir()
+		mine := install(t, home, "acme", "runbook", "1.0.0", "ours\n")
+		adopted := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+			From: published, Local: mine, Reason: "ours", Since: time.Now()})
+		got := Reconcile(snapshotOf("acme", "runbook", "2.0.0", published),
+			Options{ClaudeHome: home, Adopted: adopted})
+		if got[0].Outcome != OutcomeOtherVersion {
+			t.Errorf("an adoption must not cover a version it was not made for, got %s",
+				got[0].Outcome)
+		}
+	})
+
+	t.Run("a plugin that was uninstalled is simply absent", func(t *testing.T) {
+		// A leftover record for something no longer on disk must not invent a state. This
+		// is the ordinary end of an adoption's life and produces no finding.
+		home := t.TempDir()
+		adopted := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+			From: published, Local: "sha256:whatever", Reason: "ours", Since: time.Now()})
+		got := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published),
+			Options{ClaudeHome: home, Adopted: adopted})
+		if got[0].Outcome != OutcomeAbsent {
+			t.Errorf("a stale record must not manufacture a state, got %s", got[0].Outcome)
+		}
+	})
+
+	t.Run("another organisation's catalog is untouched", func(t *testing.T) {
+		// Adoptions key on marketplace as well as plugin. Without that, adopting a skill
+		// from one publisher would quiet a same-named skill from another - which is how a
+		// person ends up trusting bytes they never looked at.
+		home := t.TempDir()
+		mine := install(t, home, "other", "runbook", "1.0.0", "ours\n")
+		adopted := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+			From: published, Local: mine, Reason: "ours", Since: time.Now()})
+		got := Reconcile(snapshotOf("other", "runbook", "1.0.0", published),
+			Options{ClaudeHome: home, Adopted: adopted})
+		if got[0].Outcome != OutcomeChanged {
+			t.Errorf("an adoption must not cross catalogs, got %s", got[0].Outcome)
+		}
+	})
 }
