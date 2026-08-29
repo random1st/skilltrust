@@ -126,6 +126,14 @@ func (e Entry) ResolveVersion(repository string) string {
 
 // CacheRoot is where Claude Code keeps installed plugins.
 func CacheRoot(claudeHome string) string {
+	// An empty home used to produce the relative path ./plugins/cache, so a caller that
+	// forgot to default it searched the working directory, found nothing, and reported
+	// every plugin as not installed — a wrong answer indistinguishable from a right one.
+	// One caller had already forgotten. Defaulting here removes the trap rather than
+	// asking every future call site to remember it.
+	if claudeHome == "" {
+		claudeHome = DefaultClaudeHome()
+	}
 	return filepath.Join(claudeHome, "plugins", "cache")
 }
 

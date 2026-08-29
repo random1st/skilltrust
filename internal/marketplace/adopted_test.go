@@ -58,3 +58,22 @@ func TestRecordReplacesAndForgetRemoves(t *testing.T) {
 		t.Error("forgetting must remove the record so the published copy returns")
 	}
 }
+
+// An empty Claude home once meant the relative path ./plugins/cache, so a caller that
+// forgot to default it looked in the working directory, found nothing, and reported every
+// plugin as not installed. That is the worst shape a bug can take here: a wrong answer that
+// reads exactly like a right one, on the command whose whole job is to answer correctly.
+func TestAnEmptyClaudeHomeDoesNotSearchTheWorkingDirectory(t *testing.T) {
+	root := CacheRoot("")
+	if !filepath.IsAbs(root) {
+		t.Fatalf("an unset home must not resolve to a relative path, got %q", root)
+	}
+	if root != CacheRoot(DefaultClaudeHome()) {
+		t.Errorf("an unset home must mean the default one, got %q", root)
+	}
+	// An explicit home still wins, or every test that points at a temporary directory
+	// would silently be reading the real machine instead.
+	if got := CacheRoot("/tmp/somewhere"); got != filepath.Join("/tmp/somewhere", "plugins", "cache") {
+		t.Errorf("an explicit home must be honoured, got %q", got)
+	}
+}

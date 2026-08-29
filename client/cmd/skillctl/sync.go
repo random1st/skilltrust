@@ -20,6 +20,13 @@ import (
 // how one of them ends up trusted and the other ignored. The cache won because it is where
 // the bytes that run live; the invented directory was deleted.
 func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Result, []string, int) {
+	// Defaulted here rather than at each call site. CacheRoot("") is the relative path
+	// ./plugins/cache, so a caller that forgets looks in the working directory, finds
+	// nothing, and reports every plugin as not installed — a wrong answer that reads
+	// exactly like a correct one. One caller had already forgotten.
+	if claudeHome == "" {
+		claudeHome = marketplace.DefaultClaudeHome()
+	}
 	subscriptions, err := loadSubscriptions()
 	if err != nil {
 		return nil, nil, fail(err)
@@ -61,17 +68,22 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 	}
 
 	now := time.Now().UTC()
+	var results []marketplace.Result
+	var unusable []string
 
 	// A file this machine's owner wrote deliberately. An unreadable one adopts nothing and
 	// is reported: the alternative direction — a corrupt file quietly meaning "accept every
 	// difference here" — turns a local mistake into a silent hole.
 	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
 	if err != nil {
-		return nil, []string{err.Error()}, exitFindings
+		// Said here rather than added to the unusable list: that list is about
+		// marketplaces that could not be checked, and this file has no bearing on any of
+		// them. Everything is still checked; refusing to reconcile at all would let one
+		// damaged local file stop every marketplace from being verified.
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n"+
+			"  Nothing is adopted this run, so every signed skill is checked as published.\n", err)
+		adopted = marketplace.Adoptions{}
 	}
-
-	var results []marketplace.Result
-	var unusable []string
 
 	for _, subscription := range subscriptions {
 		if !offline {
@@ -163,7 +175,7 @@ func writeReconcileReport(
 			continue
 		}
 		acted++
-		if result.Outcome != marketplace.OutcomeRestored {
+		if result.Outcome != marketplace.OutcomeRestored && result.Outcome != marketplace.OutcomeAdapted {
 			unresolved++
 		}
 
@@ -175,6 +187,11 @@ func writeReconcileReport(
 		case marketplace.OutcomeRestored:
 			fmt.Printf("                this copy had been changed here and was put back\n")
 			fmt.Printf("                was     %s\n", result.OnDisk)
+		case marketplace.OutcomeAdapted:
+			// The reason is the whole reason to print this line. Without it a person
+			// reading their own machine six months on sees a divergence and no account
+			// of it, which is the state adopting was supposed to replace.
+			fmt.Printf("                your own copy, kept on purpose: %s\n", result.Adapted)
 		case marketplace.OutcomeChanged:
 			fmt.Printf("                signed  %s\n", result.Signed)
 			fmt.Printf("                on disk %s\n", result.OnDisk)
