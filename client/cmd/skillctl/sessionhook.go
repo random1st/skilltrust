@@ -95,6 +95,13 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 		if result.Outcome == marketplace.OutcomeRestored {
 			fmt.Printf("                this copy had been changed here and was put back\n")
 		}
+		// The reason lives in Adapted, not Detail, so a surface that only prints Detail
+		// shows a divergence with no account of it — which is the state adopting exists to
+		// replace. This is the third place that renders an outcome; the fix belongs in all
+		// of them, not in whichever one was open at the time.
+		if result.Outcome == marketplace.OutcomeAdapted && result.Adapted != "" {
+			fmt.Printf("                your own copy, kept on purpose: %s\n", result.Adapted)
+		}
 		if result.Quarantine != "" {
 			fmt.Printf("                what was there: %s\n", result.Quarantine)
 		}
