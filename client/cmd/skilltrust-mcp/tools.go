@@ -57,9 +57,15 @@ func (s *server) addTools(m *mcp.Server) {
 	}, s.sync)
 
 	mcp.AddTool(m, &mcp.Tool{
-		Name:        "skilltrust_install_hook",
-		Title:       "Check at the start of every session",
-		Description: "Installs the SessionStart and PreToolUse hooks into the client's settings, so verification happens without anyone remembering. Call with apply=false first to show the change; nothing is written until apply=true, and a backup is kept.",
+		Name:  "skilltrust_install_hook",
+		Title: "Check at the start of every session",
+		Description: "Installs the SessionStart hook into the client's settings, so the check " +
+			"runs without anyone remembering: it puts back any centrally managed plugin changed " +
+			"here and reports skills that no longer match their approval. It does not install " +
+			"the per-skill PreToolUse check — that one ships with the SkillTrust plugin, because " +
+			"a hook firing on every skill invocation should arrive with something installed on " +
+			"purpose. Call with apply=false first to show the change; nothing is written until " +
+			"apply=true, and a backup is kept.",
 		Annotations: writes,
 	}, s.installHook)
 
