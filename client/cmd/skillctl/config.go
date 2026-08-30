@@ -224,9 +224,14 @@ func resolveSkillRoot(explicit string) (string, error) {
 	}
 
 	fmt.Fprintf(os.Stderr, "skillctl: scanning %s\n", roots[0])
-	if len(roots) > 1 {
-		fmt.Fprintf(os.Stderr, "skillctl: %d other skills director%s exist; pass a path "+
-			"to scan one of them\n", len(roots)-1, plural(len(roots)-1, "y", "ies"))
+	if others := len(roots) - 1; others > 0 {
+		// The verb agrees too. "1 other skills directory exist" is the same class of thing
+		// as "1 machines", which the plural helper below exists to avoid: a number rendered
+		// carelessly is a number the reader stops trusting, in a report whose only value is
+		// being trusted about numbers.
+		fmt.Fprintf(os.Stderr, "skillctl: %d other skills director%s %s not scanned; pass a "+
+			"path to scan one of them\n",
+			others, plural(others, "y", "ies"), plural(others, "was", "were"))
 	}
 	return roots[0], nil
 }

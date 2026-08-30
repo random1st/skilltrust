@@ -268,19 +268,37 @@ func writeReconcileReport(
 		}
 	}
 
-	verified := 0
+	verified, absent := 0, 0
 	for _, result := range results {
-		if result.Outcome == marketplace.OutcomeVerified {
+		switch result.Outcome {
+		case marketplace.OutcomeVerified:
 			verified++
+		case marketplace.OutcomeAbsent:
+			absent++
 		}
 	}
 	if acted > 0 {
 		fmt.Println()
 	}
-	fmt.Printf("%d signed plugin%s · %d verified · %d needing attention\n",
-		len(results), plural(len(results), "", "s"), verified, acted)
+	// Absent is counted out loud so the three numbers add up to the first one. They did not
+	// before: a machine following catalogs that sign sixteen plugins, none of them installed
+	// here, was told "16 signed plugins · 0 verified · 0 needing attention" — every figure
+	// correct, and the whole line read as a clean verification of sixteen things.
+	fmt.Printf("%d signed plugin%s · %d verified · %d not installed here · %d needing attention\n",
+		len(results), plural(len(results), "", "s"), verified, absent, acted)
 	fmt.Printf("checked in %s; anything unsigned there is not this tool's business.\n",
 		marketplace.CacheRoot(claudeHome))
+
+	// And said in words when the count alone would still be read as reassurance. This is the
+	// same failure the note below describes for an unreadable marketplace — a run that
+	// verified nothing looking exactly like a run where nothing was wrong — and it was fixed
+	// there and missed here.
+	if verified == 0 && acted == 0 && absent > 0 {
+		fmt.Printf("\nNothing was verified: none of these is installed on this machine. "+
+			"That is fine if you did not expect them here, and is the whole finding if you did.\n"+
+			"Install one from its marketplace, or check you are following the right catalog: "+
+			"%s\n", subscriptionsPath())
+	}
 
 	// A marketplace that could not be read contributes zero to every count above, so the
 	// summary of a failed run reads exactly like the summary of a clean one — and it is
