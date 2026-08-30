@@ -43,6 +43,17 @@ type Dashboard struct {
 	// number rather than as rows: unverifiable prose next to verified evidence invites
 	// reading the wrong one.
 	Unverified int
+	// NoMachineKeys is true when the organisation pins no machine keys at all, which is a
+	// different situation from an event signed by a key that is not among them and used to
+	// print the same sentence as one.
+	//
+	// The two need different words because they need different actions. An unpinned key is
+	// something to investigate: somebody's machine is filing reports under an identity this
+	// organisation never registered. No keys at all is a setup step nobody has done, and
+	// the reader is not looking at evidence of anything — they are looking at every report
+	// they have ever filed, uncounted, with no hint that registering a key is what turns
+	// the number into a fleet.
+	NoMachineKeys bool
 	// Attention is what a person came here to find out, in the words they would use. A
 	// dashboard of three tables asks the reader to work out whether anything is wrong by
 	// scanning six columns of zeros, which is a question the page can answer itself.
@@ -225,6 +236,10 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 	sort.Slice(dashboard.Marketplaces, func(i, j int) bool {
 		return dashboard.Marketplaces[i].Name < dashboard.Marketplaces[j].Name
 	})
+	// Only worth saying once something has arrived. An organisation with no machines and no
+	// events is not misconfigured, it is new, and greeting it with a warning about a
+	// situation it is not in teaches people to ignore the panel.
+	dashboard.NoMachineKeys = org.Machines == nil && dashboard.Unverified > 0
 	dashboard.Attention = whatNeedsLookingAt(dashboard)
 
 	adaptedPlugins, adaptedMachines := 0, 0
@@ -252,6 +267,16 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 // wrong" is not.
 func whatNeedsLookingAt(dashboard Dashboard) []string {
 	var lines []string
+
+	// First, because every other line on this panel is derived from machines and there are
+	// none: with no key registered, no report can be attributed and the tables below are
+	// empty for a reason that has nothing to do with the fleet being healthy.
+	if dashboard.NoMachineKeys {
+		lines = append(lines, fmt.Sprintf(
+			"%s arrived but this organisation registers no machine keys, so none of them "+
+				"could be attributed — register the key each machine signs with",
+			plural(dashboard.Unverified, "report")))
+	}
 
 	for _, view := range dashboard.Marketplaces {
 		if view.Expired {

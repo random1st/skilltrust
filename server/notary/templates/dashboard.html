@@ -69,7 +69,11 @@ to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using you
 </table>
 {{else}}<p class="empty">no events</p>{{end}}
 
-{{if .Unverified}}
+{{if .NoMachineKeys}}
+<p class="bad">{{.Unverified}} stored event(s) are not shown above, because this
+organisation registers no machine keys at all — so nothing here can say which machine filed
+them. Register the public key each machine signs with, and its reports start counting.</p>
+{{else if .Unverified}}
 <p class="bad">{{.Unverified}} stored event(s) are not signed by any machine key this
 notary's configuration pins, and are not shown above.</p>
 {{end}}
