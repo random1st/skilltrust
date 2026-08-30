@@ -416,8 +416,16 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 				// copy of an approved skill — it is a second skill wearing the same name,
 				// which is a thing to resolve rather than a thing to re-approve.
 				fmt.Printf("  same name  %-28s %s\n", name, one.directory)
-				fmt.Printf("             a different skill is approved under this name; " +
-					"rename one of them\n")
+				// Not "rename one of them", which is what this said until it was pointed at
+				// ~/.codex/skills/.system/skill-creator — a skill Codex ships, sitting
+				// beside imagegen and openai-docs. Telling somebody to rename a file their
+				// client installed is advice that is undone by the next update at best.
+				// Which copy is theirs to move is not a question this tool can answer, so
+				// it names the path and leaves the choice where it belongs.
+				fmt.Printf("             another skill is approved under this name. If this "+
+					"copy is yours, rename it; if your client shipped it, give it a name of "+
+					"its own and approve that:\n             skillctl attest sign %s --store\n",
+					one.directory)
 				ambiguous++
 			default:
 				fmt.Printf("  changed    %-28s approved by %s\n", name, approval.ApprovedBy)
