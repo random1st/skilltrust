@@ -3,6 +3,13 @@
 **Keep the skills your organisation publishes the ones your people actually run — and put
 them back when they change.**
 
+> **SkillTrust and Axela are two things.** This repository is SkillTrust: the client that
+> checks your machines and the notary you can run yourself, Apache-2.0, no key of yours
+> anywhere near us. [Axela](https://axela.app) is a hosted notary built on it — somewhere
+> to point the client if you would rather not run one. You never need it: everything here
+> works against your own server, and the split is
+> spelled out under [Status](#status).
+
 An [Agent Skill](https://agentskills.io/specification) is a folder whose `SKILL.md` an agent
 reads and follows, with your credentials. In a company that means prose nobody reviews,
 spreading by `git clone` and copy-paste, executing with production access.
