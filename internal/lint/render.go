@@ -48,10 +48,78 @@ func (p palette) forSeverity(severity Severity) string {
 }
 
 // RenderText writes the human-facing report.
+// RenderText writes one root's report with its own summary. Kept for a caller that has a
+// single Report in hand; a whole run goes through RenderTextAll.
 func RenderText(out io.Writer, report *Report) error {
+	return RenderTextAll(out, Reports{Reports: []*Report{report}})
+}
+
+// RenderTextAll writes every root that was scanned, then one summary for the run.
+//
+// One summary, not one per root: the question is "is anything wrong on this machine", and
+// four totals to add up by hand is how a reader picks the first one and stops.
+func RenderTextAll(out io.Writer, reports Reports) error {
 	colors := newPalette(out)
 	buffer := &strings.Builder{}
 
+	for _, report := range reports.Reports {
+		writeReportBody(buffer, colors, report, reports.ShownAtOrAbove)
+	}
+
+	counts := reports.Counts()
+	fmt.Fprintf(buffer, "%s%d skills · %d high · %d medium · %d low · %d info%s",
+		colors.bold, reports.SkillCount(),
+		counts[SeverityHigh], counts[SeverityMedium], counts[SeverityLow], counts[SeverityInfo],
+		colors.reset)
+	if roots := len(reports.Reports); roots > 1 {
+		fmt.Fprintf(buffer, "%s  across %d directories%s", colors.dim, roots, colors.reset)
+	}
+	buffer.WriteString("\n")
+
+	// Said whenever a filter is on, because the counts above are of everything found and the
+	// list is not. Without this line the two disagree and the reader trusts the shorter one.
+	if hidden := hiddenCount(reports); hidden > 0 {
+		fmt.Fprintf(buffer, "%s%d finding(s) below %s were counted but not listed; "+
+			"pass --min-severity info to see them%s\n",
+			colors.dim, hidden, reports.ShownAtOrAbove, colors.reset)
+	}
+	fmt.Fprintf(buffer, "%s%s%s\n", colors.dim, Disclaimer, colors.reset)
+
+	_, err := io.WriteString(out, buffer.String())
+	return err
+}
+
+func hiddenCount(reports Reports) int {
+	if reports.ShownAtOrAbove == "" {
+		return 0
+	}
+	hidden := 0
+	for _, report := range reports.Reports {
+		for _, finding := range report.AllFindings() {
+			if finding.Severity.Rank() < reports.ShownAtOrAbove.Rank() {
+				hidden++
+			}
+		}
+	}
+	return hidden
+}
+
+// keep returns the findings at or above the floor, in display order.
+func keep(findings []Finding, floor Severity) []Finding {
+	sorted := sortedFindings(findings)
+	if floor == "" {
+		return sorted
+	}
+	kept := make([]Finding, 0, len(sorted))
+	for _, finding := range sorted {
+		if finding.Severity.Rank() >= floor.Rank() {
+			kept = append(kept, finding)
+		}
+	}
+	return kept
+}
+
+func writeReportBody(buffer *strings.Builder, colors palette, report *Report, floor Severity) {
 	fmt.Fprintf(buffer, "%sskillctl lint%s  %s\n\n", colors.bold, colors.reset, report.Root)
 
 	if len(report.Skills) == 0 {
@@ -72,35 +140,28 @@ func RenderText(out io.Writer, report *Report) error {
 			colors.bold, name, colors.reset,
 			colors.dim, skill.Directory, skill.FileCount, humanBytes(skill.TotalBytes), colors.reset)
 
-		for _, finding := range sortedFindings(skill.Findings) {
+		shown := keep(skill.Findings, floor)
+		for _, finding := range shown {
 			writeFinding(buffer, colors, finding)
 		}
-		if len(skill.Findings) > 0 {
+		if len(shown) > 0 {
 			buffer.WriteString("\n")
 		}
 	}
 
-	if len(report.Findings) > 0 {
+	if shown := keep(report.Findings, floor); len(shown) > 0 {
 		fmt.Fprintf(buffer, "  %sacross the tree%s\n", colors.bold, colors.reset)
-		for _, finding := range sortedFindings(report.Findings) {
+		for _, finding := range shown {
 			writeFinding(buffer, colors, finding)
 		}
 		buffer.WriteString("\n")
 	}
 
+	// Notes survive the filter. They are not findings — they are what the walk could not do,
+	// and a scan that hit a permission error must say so however quiet you asked it to be.
 	for _, note := range report.Notes {
 		fmt.Fprintf(buffer, "  %snote: %s%s\n", colors.dim, note, colors.reset)
 	}
-
-	counts := report.Counts()
-	fmt.Fprintf(buffer, "%s%d skills · %d high · %d medium · %d low · %d info%s\n",
-		colors.bold, len(report.Skills),
-		counts[SeverityHigh], counts[SeverityMedium], counts[SeverityLow], counts[SeverityInfo],
-		colors.reset)
-	fmt.Fprintf(buffer, "%s%s%s\n", colors.dim, Disclaimer, colors.reset)
-
-	_, err := io.WriteString(out, buffer.String())
-	return err
 }
 
 func writeFinding(buffer *strings.Builder, colors palette, finding Finding) {
@@ -157,14 +218,25 @@ func humanBytes(size int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGT"[exp])
 }
 
-// RenderJSON writes the machine-readable report.
+// RenderJSON writes one root, for a caller holding a single Report.
 func RenderJSON(out io.Writer, report *Report) error {
+	return RenderJSONAll(out, Reports{Reports: []*Report{report}})
+}
+
+// RenderJSONAll writes the whole run.
+//
+// The shape is an object with a reports array rather than a bare report, and that is a
+// change consumers see. It is the honest one: a machine has several skill directories, and
+// the old shape could name only one root while implying it was the whole answer. The
+// alternative — merging roots into a single Report — would have put a Root in the document
+// that half the paths inside it are not relative to.
+func RenderJSONAll(out io.Writer, reports Reports) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(struct {
-		*Report
+		Reports
 		Disclaimer string `json:"disclaimer"`
-	}{Report: report, Disclaimer: Disclaimer})
+	}{Reports: reports, Disclaimer: Disclaimer})
 }
 
 // SARIF types, limited to the subset GitHub code scanning consumes.
@@ -224,9 +296,23 @@ type sarifRegion struct {
 	StartLine int `json:"startLine"`
 }
 
-// RenderSARIF writes SARIF 2.1.0 so findings land in GitHub code scanning natively.
+// RenderSARIF writes SARIF 2.1.0 for one root.
 func RenderSARIF(out io.Writer, report *Report, version string) error {
-	findings := sortedFindings(report.AllFindings())
+	return RenderSARIFAll(out, Reports{Reports: []*Report{report}}, version)
+}
+
+// RenderSARIFAll writes every root as one run.
+//
+// SARIF carries a runs array natively, so several roots need no invented wrapper here. The
+// display filter is deliberately not applied: this file is read by code scanning, not by a
+// person with a context window, and quietly dropping findings from the artefact an audit
+// reads would be the worst place in this tool to save space.
+func RenderSARIFAll(out io.Writer, reports Reports, version string) error {
+	var all []Finding
+	for _, report := range reports.Reports {
+		all = append(all, report.AllFindings()...)
+	}
+	findings := sortedFindings(all)
 
 	ruleIndex := map[string]sarifRule{}
 	results := make([]sarifResult, 0, len(findings))

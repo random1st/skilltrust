@@ -113,6 +113,52 @@ func (r *Report) Counts() map[Severity]int {
 	return counts
 }
 
+// Reports is one run: every root that was scanned, and the floor applied to what was
+// printed.
+//
+// It exists because a machine has several skill directories and a check that covers one of
+// them describes somewhere the agent is not. The single-Report shape could not express that
+// — Root is one string and skill paths are relative to it, so merging roots would mean lying
+// in the field a consumer parses to know where a finding lives.
+type Reports struct {
+	Reports []*Report `json:"reports"`
+	// ShownAtOrAbove is the severity floor applied to the findings rendered. The counts are
+	// always of everything found: a summary that shrank with the filter would let somebody
+	// hide findings from a report by asking to see fewer of them.
+	ShownAtOrAbove Severity `json:"shown_at_or_above,omitempty"`
+}
+
+// SkillCount is how many skills the run covered, across every root.
+func (r Reports) SkillCount() int {
+	total := 0
+	for _, report := range r.Reports {
+		total += len(report.Skills)
+	}
+	return total
+}
+
+// Counts totals every finding in the run, before any display filter.
+func (r Reports) Counts() map[Severity]int {
+	counts := map[Severity]int{SeverityHigh: 0, SeverityMedium: 0, SeverityLow: 0, SeverityInfo: 0}
+	for _, report := range r.Reports {
+		for severity, count := range report.Counts() {
+			counts[severity] += count
+		}
+	}
+	return counts
+}
+
+// AtOrAbove counts findings at or above a severity across the run. This is what --fail-on
+// reads, so it must never see the display filter: a tool whose exit code could be quieted by
+// asking for less output is one that reports what you asked to hear.
+func (r Reports) AtOrAbove(threshold Severity) int {
+	total := 0
+	for _, report := range r.Reports {
+		total += report.AtOrAbove(threshold)
+	}
+	return total
+}
+
 // AtOrAbove counts findings at or above the given severity.
 func (r *Report) AtOrAbove(threshold Severity) int {
 	count := 0

@@ -211,8 +211,9 @@ func (s *server) installHook(ctx context.Context, _ *mcp.CallToolRequest, in ins
 }
 
 type lintInput struct {
-	Path   string `json:"path,omitempty" jsonschema:"directory to scan; defaults to the conventional skills directories"`
-	Format string `json:"format,omitempty" jsonschema:"text, json or sarif; defaults to json so the findings can be read as data"`
+	Path        string `json:"path,omitempty" jsonschema:"directory to scan; defaults to every conventional skills directory"`
+	Format      string `json:"format,omitempty" jsonschema:"text, json or sarif; defaults to json so the findings can be read as data"`
+	MinSeverity string `json:"min_severity,omitempty" jsonschema:"only list findings at this level or above: high, medium, low, info. Defaults to medium, which keeps the reply readable; the counts are always of everything found. Pass info for the full list"`
 }
 
 func (s *server) lint(ctx context.Context, _ *mcp.CallToolRequest, in lintInput) (*mcp.CallToolResult, result, error) {
@@ -222,7 +223,17 @@ func (s *server) lint(ctx context.Context, _ *mcp.CallToolRequest, in lintInput)
 	}
 	// never, so a tree with findings is reported rather than returned as a failed tool: the
 	// findings are the answer.
-	args := []string{"lint", "-format", format, "-fail-on", "never"}
+	// A real machine is a hundred skills and a couple of hundred findings, most of them the
+	// two shapes every skill carrying a script has. Returned in full that is tens of
+	// kilobytes into the context of whoever asked, which is a cost the caller pays without
+	// being offered the choice — so the default is medium and the summary still counts
+	// everything. This differs from the CLI default deliberately: a terminal scrolls and a
+	// context window does not.
+	minSeverity := in.MinSeverity
+	if minSeverity == "" {
+		minSeverity = "medium"
+	}
+	args := []string{"lint", "-format", format, "-fail-on", "never", "-min-severity", minSeverity}
 	if in.Path != "" {
 		args = append(args, in.Path)
 	}

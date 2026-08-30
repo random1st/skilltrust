@@ -125,15 +125,35 @@ func runLint(args []string) int {
 	maxDepth := flags.Int("max-depth", lint.DefaultMaxDepth, "maximum directory depth to scan")
 	maxDirs := flags.Int("max-dirs", lint.DefaultMaxDirectories,
 		"maximum number of directories to visit")
+	// Findings below this are counted and not listed. Added because the MCP surface returns
+	// this output straight into an agent's context, and one run of a real machine was 99
+	// skills and 167 findings — most of them the two shapes every skill with a script has.
+	// The exit code still reads --fail-on over everything, so quietening the output cannot
+	// quieten the verdict.
+	minSeverity := flags.String("min-severity", "",
+		"only list findings at this severity or above: high, medium, low, info")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
 
-	absolute, err := resolveSkillRoot(flags.Arg(0))
+	// Every root, not the first one. A machine keeps skills in several directories and the
+	// agent reads all of them, so a report on one of them describes somewhere else — which
+	// is what this did, mentioning the rest in a line on stderr that read as a footnote.
+	roots, err := resolveSkillRoots(flags.Arg(0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
+	}
+
+	var floor lint.Severity
+	if *minSeverity != "" {
+		parsed, ok := lint.ParseSeverity(*minSeverity)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "skillctl: unknown --min-severity value %q\n", *minSeverity)
+			return exitUsage
+		}
+		floor = parsed
 	}
 
 	var threshold lint.Severity
@@ -146,7 +166,11 @@ func runLint(args []string) int {
 		threshold = parsed
 	}
 
-	report := lint.Run(absolute, lint.Options{MaxDepth: *maxDepth, MaxDirectories: *maxDirs})
+	run := lint.Reports{ShownAtOrAbove: floor}
+	for _, root := range roots {
+		run.Reports = append(run.Reports,
+			lint.Run(root, lint.Options{MaxDepth: *maxDepth, MaxDirectories: *maxDirs}))
+	}
 
 	writer := io.Writer(os.Stdout)
 	if *output != "" {
@@ -159,25 +183,25 @@ func runLint(args []string) int {
 		writer = file
 	}
 
-	if err := render(writer, report, *format); err != nil {
+	if err := render(writer, run, *format); err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
 	}
 
-	if threshold != "" && report.AtOrAbove(threshold) > 0 {
+	if threshold != "" && run.AtOrAbove(threshold) > 0 {
 		return exitFindings
 	}
 	return exitClean
 }
 
-func render(writer io.Writer, report *lint.Report, format string) error {
+func render(writer io.Writer, run lint.Reports, format string) error {
 	switch strings.ToLower(format) {
 	case "text":
-		return lint.RenderText(writer, report)
+		return lint.RenderTextAll(writer, run)
 	case "json":
-		return lint.RenderJSON(writer, report)
+		return lint.RenderJSONAll(writer, run)
 	case "sarif":
-		return lint.RenderSARIF(writer, report, versionString())
+		return lint.RenderSARIFAll(writer, run, versionString())
 	default:
 		return fmt.Errorf("unknown --format %q; use text, json or sarif", format)
 	}

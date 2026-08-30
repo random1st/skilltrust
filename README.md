@@ -370,7 +370,7 @@ certify prose an agent will follow.
 | `catalog revoke` | publisher | Revoke digests in that index. |
 | `catalog verify` | publisher | Check the index still names what the repository holds. Use in CI. |
 | `catalog show` | either | Verify an index and print it. |
-| `lint` | either | Inventory a tree and report risk indicators. |
+| `lint` | either | Inventory every skills directory and report risk indicators. |
 | `digest` | either | The canonical digest of a skill directory. |
 | `attest` | either | Sign and verify a statement about a digest. |
 
