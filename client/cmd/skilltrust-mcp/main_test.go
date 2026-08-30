@@ -253,3 +253,44 @@ func TestSetupGuideKeepsTheHonestLimit(t *testing.T) {
 		}
 	}
 }
+
+// The MCP surface promised, in the server's own instructions, that SkillTrust "proves who
+// published a skill's bytes and that they have not changed" — while offering an agent no
+// way to ask that about a skill outside a signed marketplace. Three of the four clients
+// supported install nothing from a marketplace, so for most of them the promise had no tool
+// behind it. lint was the nearest thing and says of itself that it is not a safety verdict.
+func TestSkillsOutsideAMarketplaceCanBeVerified(t *testing.T) {
+	session, _ := connect(t)
+
+	body := callText(t, session, "skilltrust_verify_skills", nil)
+	if !strings.Contains(body, "attest") || !strings.Contains(body, "verify") {
+		t.Fatalf("the tool must check skills against their approvals, got: %s", body)
+	}
+	// No directory argument: the whole machine, not whatever the agent happened to name.
+	// A verification of one directory reported as a verification is how a clean answer gets
+	// given about somewhere nobody asked about.
+	if strings.Contains(body, "-attestation") {
+		t.Fatalf("verification must cover every root, got: %s", body)
+	}
+}
+
+// It writes nothing, which is what lets an agent reach for it while thinking. sync is the
+// one that changes files and it is a different tool on purpose.
+func TestVerifySkillsIsReadOnly(t *testing.T) {
+	session, _ := connect(t)
+
+	tools, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "skilltrust_verify_skills" {
+			continue
+		}
+		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint != true {
+			t.Fatal("a tool an agent calls while thinking must be annotated read-only")
+		}
+		return
+	}
+	t.Fatal("skilltrust_verify_skills is not offered at all")
+}

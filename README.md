@@ -432,7 +432,9 @@ It offers three things, and the tools are the least interesting of them:
 - **Tools** — thin wrappers over the commands below. `skilltrust_check` reports and writes
   nothing; `skilltrust_sync` is marked destructive because it restores files. Subscribing
   defaults the threshold to the number of keys pinned, which is where the CLI's default of
-  one is a trap.
+  one is a trap. `skilltrust_verify_skills` covers everything a marketplace does not: it is
+  the only tool here that answers "are these the approved bytes?" for a skill that arrived
+  from a repository or a copy, which on Cursor and Antigravity is all of them.
 
 It is a separate binary on purpose. `skillctl` decides whether a skill is trusted and runs at
 every session start; the MCP SDK brings nine dependencies, and a verifier whose supply chain

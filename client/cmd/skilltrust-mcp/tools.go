@@ -71,6 +71,18 @@ func (s *server) addTools(m *mcp.Server) {
 	}, s.lint)
 
 	mcp.AddTool(m, &mcp.Tool{
+		Name:  "skilltrust_verify_skills",
+		Title: "Check skills against the approvals this machine holds",
+		Description: "Recomputes every skill's digest and checks it against the signed approvals in " +
+			"this machine's attestation store, and against any attestation beside a skill. Writes nothing. " +
+			"Use this for skills that came from anywhere other than a signed marketplace — a repository, " +
+			"a copy, a colleague — which is most of them on Cursor and Antigravity, where nothing is " +
+			"installed from a marketplace at all. Unlike skilltrust_lint this is a statement about bytes, " +
+			"not about what a skill looks like. Exit code 1 means a skill no longer matches its approval.",
+		Annotations: safe,
+	}, s.verifySkills)
+
+	mcp.AddTool(m, &mcp.Tool{
 		Name:        "skilltrust_sign_marketplace",
 		Title:       "Sign the skills a repository publishes",
 		Description: "Signs the plugins a Claude Code marketplace owns, writing the signed index into the repository. Run in the repository that publishes the skills, with this machine's key.",
@@ -238,6 +250,17 @@ func (s *server) lint(ctx context.Context, _ *mcp.CallToolRequest, in lintInput)
 		args = append(args, in.Path)
 	}
 	return s.call(ctx, "", args...)
+}
+
+// verifySkills answers the question the marketplace tools cannot: whether skills that
+// nobody published still match what somebody approved.
+//
+// It was missing while the CLI could already do it, which left the MCP surface promising in
+// its own instructions that SkillTrust "proves who published a skill's bytes and that they
+// have not changed" while offering an agent no way to ask that about three of the four
+// clients it supports.
+func (s *server) verifySkills(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, result, error) {
+	return s.call(ctx, "", "attest", "verify")
 }
 
 type signMarketplaceInput struct {

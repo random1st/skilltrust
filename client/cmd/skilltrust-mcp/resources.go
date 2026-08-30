@@ -66,14 +66,22 @@ func (s *server) addResources(m *mcp.Server) {
 // state is the answer to "what is already done here", which is the question every setup
 // starts with and the one no single command answers.
 type state struct {
-	Home            string              `json:"home"`
-	HasSigningKey   bool                `json:"has_signing_key"`
-	PublicKey       string              `json:"public_key,omitempty"`
-	PinnedLabels    []string            `json:"pinned_labels"`
-	Subscriptions   []stateSubscription `json:"subscriptions"`
-	SkillctlPath    string              `json:"skillctl_path"`
-	SkillctlVersion string              `json:"skillctl_version"`
-	NextStep        string              `json:"next_step"`
+	Home          string              `json:"home"`
+	HasSigningKey bool                `json:"has_signing_key"`
+	PublicKey     string              `json:"public_key,omitempty"`
+	PinnedLabels  []string            `json:"pinned_labels"`
+	Subscriptions []stateSubscription `json:"subscriptions"`
+	// Approvals is how many signed approvals for individual skills this machine holds.
+	//
+	// Reported because the state was silent about half the product: a machine following no
+	// marketplace but holding fifty approvals looked, in this document, exactly like a
+	// machine that had been set up and then abandoned. Most skills on most machines come
+	// from a repository or a copy rather than a marketplace, and on Cursor and Antigravity
+	// there is no marketplace to come from at all.
+	Approvals       int    `json:"skill_approvals"`
+	SkillctlPath    string `json:"skillctl_path"`
+	SkillctlVersion string `json:"skillctl_version"`
+	NextStep        string `json:"next_step"`
 }
 
 type stateSubscription struct {
@@ -90,6 +98,18 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 	if key, err := os.ReadFile(filepath.Join(s.home, "signer.pub")); err == nil {
 		current.HasSigningKey = true
 		current.PublicKey = string(key)
+	}
+
+	// Counted from the directory rather than verified here: this resource reports what is
+	// on the machine, and whether each approval verifies is skilltrust_verify_skills'
+	// answer to give. A count that quietly dropped the unverifiable ones would make the
+	// most interesting file in the store invisible from the place people look first.
+	if entries, err := os.ReadDir(filepath.Join(s.home, "attestations")); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+				current.Approvals++
+			}
+		}
 	}
 
 	// The file is {"version": 1, "keys": {...}}, not a flat map. Reading the top level
@@ -167,9 +187,9 @@ func nextStep(current state) string {
 			"from somewhere you already trust: a catalog that supplied its own key could replace " +
 			"itself, so pinning is what makes the signature mean anything."
 	default:
-		return "Run skilltrust_check to see whether anything on disk differs from what was " +
-			"signed, then skilltrust_install_hook so it is checked at the start of every session " +
-			"rather than only when someone remembers."
+		return "Run skilltrust_check for the plugins your marketplaces sign and " +
+			"skilltrust_verify_skills for everything else, then skilltrust_install_hook so it " +
+			"happens at the start of every session rather than only when someone remembers."
 	}
 }
 
