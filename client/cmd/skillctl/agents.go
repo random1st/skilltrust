@@ -189,8 +189,8 @@ func antigravityRoots(base string) []string {
 //
 // Inheritance is followed rather than skipped: a shared config is how an organisation
 // distributes the paths, so stopping at the first file would miss exactly the machines with
-// the most skills on them. depth and seen bound it — a config that inherits itself is a
-// hang in a command that runs at session start, and a malformed file must cost nothing.
+// the most skills on them. depth and seen bound it — a config that inherits itself would
+// otherwise hang `skillctl lint`, and a malformed file must cost nothing.
 func readSkillsConfig(path, base string, seen map[string]bool, depth int) []string {
 	const maxDepth = 8
 	resolved, err := filepath.Abs(path)

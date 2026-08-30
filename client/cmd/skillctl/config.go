@@ -90,9 +90,8 @@ func baseDirectories() []string {
 	return bases
 }
 
-// maxAncestors bounds the climb. Nothing legitimate is a hundred directories deep, and a
-// command that runs at session start must not walk an unbounded path because a mount went
-// strange.
+// maxAncestors bounds the climb. Nothing legitimate is sixty directories deep, and a scan
+// must not walk an unbounded path because a mount went strange or a symlink loops.
 const maxAncestors = 64
 
 // workingAncestors returns the working directory and everything above it up to and including
