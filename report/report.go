@@ -43,6 +43,15 @@ const (
 	// KindCatalogUnusable means a marketplace could not be verified, so its plugins went
 	// unchecked. Silence about that would be indistinguishable from everything being fine.
 	KindCatalogUnusable Kind = "catalog-unusable"
+	// KindSkillChanged means a skill no longer matches the approval it was given.
+	//
+	// It is the loose-skill counterpart of KindRestored and reports something weaker on
+	// purpose: nothing was put back. A skill outside a marketplace has no published copy to
+	// restore from, so the bytes the agent will read are the changed ones, and all this can
+	// do is say so. That is also why it exists at all — for a fleet on Cursor or Antigravity,
+	// which install nothing from a marketplace, it is the only event an organisation will
+	// ever see about the skills its people actually run.
+	KindSkillChanged Kind = "skill-changed"
 	// KindAdapted means someone at that machine deliberately kept a change to a signed
 	// skill. It is not an incident and nobody should be woken for it, but it is the one
 	// case where a machine knowingly runs bytes no publisher signed — so an organisation
@@ -56,6 +65,13 @@ func (k Kind) Severity() string {
 	case KindRevoked:
 		return "high"
 	case KindRestored, KindUnverifiable:
+		return "medium"
+	case KindSkillChanged:
+		// Medium, not high. The common cause is the person who approved it editing it
+		// again, and high is what a revocation gets — something an organisation withdrew
+		// on purpose. Ranking an ordinary edit alongside that is how high stops meaning
+		// anything. It is not low either: nothing was put back, so whatever the change
+		// was, the agent is reading it.
 		return "medium"
 	case KindAdapted:
 		// Deliberately low. A person chose this, and paging anyone for a choice they made
@@ -76,12 +92,17 @@ type Event struct {
 	Host        string    `json:"host,omitempty"`
 	Marketplace string    `json:"marketplace,omitempty"`
 	Plugin      string    `json:"plugin,omitempty"`
-	PluginVer   string    `json:"plugin_version,omitempty"`
-	Sequence    int64     `json:"catalog_sequence,omitempty"`
-	Signed      string    `json:"signed_digest,omitempty"`
-	Found       string    `json:"found_digest,omitempty"`
-	Quarantine  string    `json:"quarantine,omitempty"`
-	Detail      string    `json:"detail,omitempty"`
+	// Skill names a skill that came from no marketplace. Separate from Plugin because they
+	// are answerable to different things: a plugin is measured against what a publisher
+	// signed, a skill against what somebody on this machine approved, and a console that
+	// merged them would be adding up two different claims.
+	Skill      string `json:"skill,omitempty"`
+	PluginVer  string `json:"plugin_version,omitempty"`
+	Sequence   int64  `json:"catalog_sequence,omitempty"`
+	Signed     string `json:"signed_digest,omitempty"`
+	Found      string `json:"found_digest,omitempty"`
+	Quarantine string `json:"quarantine,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 }
 
 // Summary is the one line a human reads first, in an alert or a console row.
@@ -107,6 +128,9 @@ func (e Event) Summary() string {
 		}
 		return fmt.Sprintf("%s on %s is a modified copy its owner chose to keep: %s",
 			e.Plugin, e.displayHost(), e.Detail)
+	case KindSkillChanged:
+		return fmt.Sprintf("%s on %s no longer matches what %s approved",
+			e.Skill, e.displayHost(), e.Detail)
 	case KindCatalogUnusable:
 		if e.Marketplace == "" {
 			return fmt.Sprintf("a signed marketplace could not be used on %s, so its "+

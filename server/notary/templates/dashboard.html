@@ -43,12 +43,13 @@ to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using you
 {{if .Machines}}
 <p class="hint">{{.ActiveMachines}} reported in the last 30 days.</p>
 <table>
-  <tr><th>machine</th><th>last report</th><th class="n">put back</th><th class="n">your own copies</th><th class="n">could not check</th></tr>
+  <tr><th>machine</th><th>last report</th><th class="n">put back</th><th class="n">still changed</th><th class="n">your own copies</th><th class="n">could not check</th></tr>
   {{range .Machines}}
   <tr>
     <td>{{.Name}}</td>
     <td>{{.Last.Format "2006-01-02 15:04"}}</td>
     <td class="n">{{if .Restored}}<span class="bad">{{.Restored}}</span>{{else}}0{{end}}</td>
+    <td class="n">{{if .SkillsChanged}}<span class="bad">{{.SkillsChanged}}</span>{{else}}0{{end}}</td>
     <td class="n">{{if .Adapted}}{{.Adapted}}{{else}}0{{end}}</td>
     <td class="n">{{if .Unchecked}}<span class="bad">{{.Unchecked}}</span>{{else}}0{{end}}</td>
   </tr>

@@ -321,14 +321,29 @@ func runAttestVerify(args []string) int {
 // sibling is honoured anyway, because it is what `attest sign` writes by default and
 // stranding those would make the two halves of one command disagree.
 func verifyEverySkill(trusted *attest.TrustedKeys) int {
+	_, code := verifyEverySkillReporting(trusted, false)
+	return code
+}
+
+// verifyEverySkillReporting is verifyEverySkill plus the drift it found, for the caller that
+// files it. Split rather than given a flag: the reporting decision belongs to the session
+// hook, and `attest verify` run by hand must stay the read-only thing its annotation claims.
+// quiet keeps the session hook to the news. A hook that prints "107 verified" before every
+// session is one people stop reading, and this one has to be read on the day a skill changed.
+// What survives quiet is a skill that drifted and an attestation that will not verify; what
+// does not is the tally and the advice about names, which are answers to a question somebody
+// asked rather than something that just happened.
+func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skillDrift, int) {
+	var drift []skillDrift
+
 	roots, err := resolveSkillRoots("")
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 
 	approvals, notes, err := attest.LoadStore(homePath(attest.StoreDirectory), trusted)
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 	// First, and on stderr. An attestation that does not verify is the single most
 	// interesting file in the store — corrupt or forged — and burying it under a list of
@@ -415,6 +430,10 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 				// Another directory holds the approved bytes, so this one is not a changed
 				// copy of an approved skill — it is a second skill wearing the same name,
 				// which is a thing to resolve rather than a thing to re-approve.
+				if quiet {
+					ambiguous++
+					continue
+				}
 				fmt.Printf("  same name  %-28s %s\n", name, one.directory)
 				// Not "rename one of them", which is what this said until it was pointed at
 				// ~/.codex/skills/.system/skill-creator — a skill Codex ships, sitting
@@ -434,6 +453,10 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 				if len(copies) > 1 {
 					fmt.Printf("             %s\n", one.directory)
 				}
+				drift = append(drift, skillDrift{
+					Name: name, ApprovedBy: approval.ApprovedBy,
+					Approved: approval.Digest, OnDisk: one.digest,
+				})
 				changed++
 			}
 		}
@@ -443,16 +466,18 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 	// somebody's own, and a check that treats every personal skill as a finding is one that
 	// gets run once. Saying nothing at all would be the other error: silence about a skill
 	// nobody signed reads as a skill that was approved.
-	fmt.Printf("%d verified · %d changed · %d with no approval on this machine",
-		verified, changed, unapproved)
-	if ambiguous > 0 {
-		fmt.Printf(" · %d sharing a name with an approved skill", ambiguous)
+	if !quiet {
+		fmt.Printf("%d verified · %d changed · %d with no approval on this machine",
+			verified, changed, unapproved)
+		if ambiguous > 0 {
+			fmt.Printf(" · %d sharing a name with an approved skill", ambiguous)
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 	if changed > 0 {
-		return exitFindings
+		return drift, exitFindings
 	}
-	return exitClean
+	return drift, exitClean
 }
 
 func fail(err error) int {

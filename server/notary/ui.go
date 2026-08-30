@@ -99,6 +99,15 @@ type MachineView struct {
 	// no publisher signed, and an organisation that cannot see it does not know what its
 	// fleet is running.
 	Adapted int
+	// SkillsChanged counts skills that no longer match the approval they were given —
+	// distinct skills, not events, for the same reason Adapted counts copies. A machine
+	// files the same drift every session until somebody acts on it, and counting events
+	// would report one edited skill as fifty.
+	//
+	// Kept apart from Restored because the two say different things. A restored plugin is
+	// back to what the publisher signed; a changed skill is still changed, because nothing
+	// outside a marketplace has a published copy to put back.
+	SkillsChanged int
 }
 
 // Unchecked is how many times this machine could not answer the question at all — an
@@ -163,6 +172,8 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 		// table of one reason repeated fifty times informs nobody about anything else.
 		type adoptionKey struct{ machine, marketplace, plugin string }
 		adoptions := map[adoptionKey]report.Event{}
+		type skillKey struct{ machine, skill string }
+		drifted := map[skillKey]report.Event{}
 		for _, raw := range stored {
 			var envelope attest.Envelope
 			if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -187,6 +198,13 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 			if event.At.After(view.Last) {
 				view.Last = event.At
 			}
+			if event.Kind == report.KindSkillChanged {
+				key := skillKey{event.Machine, event.Skill}
+				if previous, seen := drifted[key]; !seen || event.At.After(previous.At) {
+					drifted[key] = *event
+				}
+				continue
+			}
 			if event.Kind == report.KindAdapted {
 				key := adoptionKey{event.Machine, event.Marketplace, event.Plugin}
 				if previous, seen := adoptions[key]; !seen || event.At.After(previous.At) {
@@ -204,6 +222,13 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 			case report.KindCatalogUnusable:
 				view.CatalogUnusable++
 			}
+			dashboard.Events = append(dashboard.Events, EventView{
+				At: event.At, Machine: event.Machine,
+				Summary: event.Summary(), Kind: string(event.Kind),
+			})
+		}
+		for key, event := range drifted {
+			machines[key.machine].SkillsChanged++
 			dashboard.Events = append(dashboard.Events, EventView{
 				At: event.At, Machine: event.Machine,
 				Summary: event.Summary(), Kind: string(event.Kind),
@@ -286,8 +311,11 @@ func whatNeedsLookingAt(dashboard Dashboard) []string {
 		}
 	}
 
-	restored, revoked, unreadable, stale := 0, 0, 0, 0
+	restored, revoked, unreadable, stale, drifted := 0, 0, 0, 0, 0
 	for _, machine := range dashboard.Machines {
+		if machine.SkillsChanged > 0 {
+			drifted++
+		}
 		if machine.Restored > 0 {
 			restored++
 		}
@@ -310,6 +338,15 @@ func whatNeedsLookingAt(dashboard Dashboard) []string {
 	if restored > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"%s had a skill changed and put the published copy back", plural(restored, "machine")))
+	}
+	// After restored and before the softer lines. Nothing was put back here, so unlike a
+	// restore this is still true of the machine right now — but it is not a revocation, and
+	// putting it above one would push the only line that means "you withdrew this and
+	// somebody has it" further down the page.
+	if drifted > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s is running a skill that no longer matches what was approved for it, and "+
+				"nothing put it back", plural(drifted, "machine")))
 	}
 	if unreadable > 0 {
 		lines = append(lines, fmt.Sprintf(

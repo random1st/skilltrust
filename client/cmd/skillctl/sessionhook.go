@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/marketplace"
 )
 
@@ -63,6 +64,17 @@ func runHookSessionStart(args []string) int {
 		return exitClean
 	}
 
+	// Before the marketplace half, and deliberately not behind it. A machine following no
+	// signed marketplace used to return here — which is every machine running Cursor or
+	// Antigravity, since those install from no marketplace at all. The skills those people
+	// actually run would have been checked by nothing, on the one path that runs without
+	// anybody remembering.
+	now := time.Now().UTC()
+	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
+		drift, _ := verifyEverySkillReporting(trusted, true)
+		recordSkillDrift(drift, now)
+	}
+
 	subscriptions, err := loadSubscriptions()
 	if err != nil || len(subscriptions) == 0 {
 		return exitClean // this machine follows no signed marketplace
@@ -78,7 +90,7 @@ func runHookSessionStart(args []string) int {
 	if code != exitClean {
 		return exitClean
 	}
-	recordEvents(results, unusable, time.Now().UTC())
+	recordEvents(results, unusable, now)
 	for _, line := range pruneDeadAdoptions(results) {
 		fmt.Printf("skillctl: %s\n", line)
 	}

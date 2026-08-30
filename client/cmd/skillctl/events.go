@@ -32,7 +32,39 @@ func machineName(config *report.Config) string {
 // change what was done. That ordering is why reporting can be best-effort without the check
 // becoming best-effort too.
 func recordEvents(results []marketplace.Result, unusable []string, now time.Time) {
-	events := collectEvents(results, unusable, now)
+	fileEvents(collectEvents(results, unusable, now))
+}
+
+// recordSkillDrift reports skills that no longer match the approval they were given.
+//
+// Separate from recordEvents because it answers a separate question and for a separate set
+// of machines. Everything else here is about plugins a marketplace signed; three of the four
+// clients supported install nothing from a marketplace, so for a fleet on Cursor or
+// Antigravity this is the only event their organisation will ever receive about the skills
+// its people actually run.
+func recordSkillDrift(drift []skillDrift, now time.Time) {
+	events := make([]report.Event, 0, len(drift))
+	for _, one := range drift {
+		events = append(events, report.Event{
+			Kind: report.KindSkillChanged, At: now,
+			Skill: one.Name, Signed: one.Approved, Found: one.OnDisk,
+			// The approver, not a description of the change. Whoever reads this in a console
+			// wants to know who to ask, and the bytes themselves never travel here.
+			Detail: one.ApprovedBy,
+		})
+	}
+	fileEvents(events)
+}
+
+// skillDrift is one skill whose bytes stopped matching its approval.
+type skillDrift struct {
+	Name       string
+	ApprovedBy string
+	Approved   string
+	OnDisk     string
+}
+
+func fileEvents(events []report.Event) {
 	if len(events) == 0 {
 		return
 	}
