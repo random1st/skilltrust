@@ -374,6 +374,38 @@ certify prose an agent will follow.
 | `digest` | either | The canonical digest of a skill directory. |
 | `attest` | either | Sign and verify a statement about a digest. |
 
+### Skills nobody publishes
+
+Everything above is about plugins that come from a signed marketplace, and three of the four
+clients supported here install nothing that way. For a skill written locally or committed to
+a repository — which is what `.agents/skills`, `.cursor/skills` and a Cursor or Antigravity
+machine is made of — the question "are these the bytes somebody approved?" has a separate
+answer, and it needs no server:
+
+```bash
+skillctl attest sign ~/.agents/skills/deploy --store   # approve these bytes, keep the record
+skillctl attest verify                                 # check every skill on this machine
+```
+
+`--store` keeps the approval in `~/.skilltrust/attestations` rather than only beside the
+skill. That matters because an attestation living next to what it approves is deleted by
+whatever deletes that thing, and `git clean`, a reinstall and a fresh clone all do exactly
+that. `attest verify` with no argument reads both, so a copy that arrived carrying its own
+attestation still verifies.
+
+It prints one line unless something is wrong:
+
+```
+1 verified · 0 changed · 0 with no approval on this machine
+```
+
+Skills nobody approved are counted rather than listed. Most skills on a laptop are somebody's
+own, and a check that treats each of them as a finding is one that gets run once — but
+saying nothing at all would read as though they had been approved. A skill whose bytes no
+longer match its approval is reported with both digests and exits non-zero. The digest is
+recomputed from disk every time rather than read from the signed statement: a valid signature
+over the wrong bytes is the failure this exists to catch.
+
 ## For the agent
 
 Setting a machine up is a sequence in which every step succeeds out of order and the wrong

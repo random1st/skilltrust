@@ -10,6 +10,7 @@ import (
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/archive"
+	"github.com/random1st/skilltrust/internal/lint"
 	"github.com/random1st/skilltrust/internal/skillmd"
 )
 
@@ -115,6 +116,11 @@ func runAttestSign(args []string) int {
 	repository := flags.String("repository", "", "source repository, recorded for audit")
 	commit := flags.String("commit", "", "source commit, recorded for audit")
 	out := flags.String("out", "", "attestation path (default <skill-directory>.att.json)")
+	// Without this the store had no way to be filled, which is how it ended up written,
+	// documented and called by nothing.
+	store := flags.Bool("store", false,
+		"also keep a copy in this machine's attestation store, where `attest verify` "+
+			"with no argument looks and where deleting the skill cannot take it")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -184,17 +190,33 @@ func runAttestSign(args []string) int {
 		signed.ApprovedAt.Format(time.RFC3339))
 	fmt.Printf("key         %s\n", attest.Fingerprint(envelope.Signatures[0].KeyID))
 	fmt.Printf("attestation %s\n", path)
+
+	if *store {
+		directory := homePath(attest.StoreDirectory)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return fail(err)
+		}
+		kept := attest.StorePath(directory, signed.Subject.Name)
+		if err := envelope.Save(kept); err != nil {
+			return fail(err)
+		}
+		fmt.Printf("store       %s\n", kept)
+	}
 	return exitClean
 }
 
 func runAttestVerify(args []string) int {
 	flags := flag.NewFlagSet("attest verify", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl attest verify [flags] <skill-directory>\n\n"+
-			"Recomputes the directory's digest and checks a signed attestation over it\n"+
+		fmt.Fprintf(flags.Output(), "Usage: skillctl attest verify [flags] [skill-directory]\n\n"+
+			"Recomputes a directory's digest and checks a signed attestation over it\n"+
 			"against pinned keys. Offline: no network, no service, no vendor.\n\n"+
-			"Exit codes: %d verified, %d not verified, %d error.\n\nFlags:\n",
-			exitClean, exitFindings, exitUsage)
+			"With no directory, checks every skill on this machine against the approvals\n"+
+			"in %s and any beside a skill. Skills nobody\n"+
+			"approved are counted, not reported one by one: most skills on a laptop are\n"+
+			"somebody's own.\n\n"+
+			"Exit codes: %d verified, %d changed since approval, %d error.\n\nFlags:\n",
+			homePath(attest.StoreDirectory), exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 
@@ -204,9 +226,26 @@ func runAttestVerify(args []string) int {
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
-	if flags.NArg() != 1 {
+	if flags.NArg() > 1 {
 		flags.Usage()
 		return exitUsage
+	}
+
+	trusted, err := attest.LoadTrustedKeys(*trustedPath)
+	if err != nil {
+		return fail(err)
+	}
+
+	// No directory named means every skill this machine has. That is the question people
+	// actually have — "is anything here not what was approved?" — and asking it one
+	// directory at a time is how it stops being asked.
+	if flags.NArg() == 0 {
+		if *attestation != "" {
+			fmt.Fprintln(os.Stderr, "skillctl: --attestation names one file, so name the "+
+				"skill directory it belongs to as well")
+			return exitUsage
+		}
+		return verifyEverySkill(trusted)
 	}
 
 	directory, note, err := resolvePath(flags.Arg(0))
@@ -215,11 +254,6 @@ func runAttestVerify(args []string) int {
 	}
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
-	}
-
-	trusted, err := attest.LoadTrustedKeys(*trustedPath)
-	if err != nil {
-		return fail(err)
 	}
 
 	path := *attestation
@@ -256,6 +290,94 @@ func runAttestVerify(args []string) int {
 	fmt.Printf("key         %s (%d pinned)\n", attest.Fingerprint(keyID), trusted.Len())
 	if statement.Notes != "" {
 		fmt.Printf("notes       %s\n", statement.Notes)
+	}
+	return exitClean
+}
+
+// verifyEverySkill checks every skill on this machine against the approvals it holds.
+//
+// This is the loose-skill half of the product, and until now it existed only as an API
+// nobody called: attest.LoadStore was written, documented and wired to nothing. That matters
+// more since the client list grew, because three of the four clients supported here install
+// nothing from a marketplace — for Cursor and Antigravity, "are these the bytes somebody
+// approved?" is a question the marketplace path cannot answer at all.
+//
+// An approval is looked for in the machine's store first and beside the skill second. The
+// store is the durable half: an attestation living next to what it approves is deleted by
+// whatever deletes that thing, which is exactly what a `git clean` or a reinstall does. The
+// sibling is honoured anyway, because it is what `attest sign` writes by default and
+// stranding those would make the two halves of one command disagree.
+func verifyEverySkill(trusted *attest.TrustedKeys) int {
+	roots, err := resolveSkillRoots("")
+	if err != nil {
+		return fail(err)
+	}
+
+	approvals, notes, err := attest.LoadStore(homePath(attest.StoreDirectory), trusted)
+	if err != nil {
+		return fail(err)
+	}
+	// First, and on stderr. An attestation that does not verify is the single most
+	// interesting file in the store — corrupt or forged — and burying it under a list of
+	// skills that were fine is how the strongest available signal gets read as noise.
+	for _, note := range notes {
+		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
+	}
+
+	verified, changed, unapproved := 0, 0, 0
+	for _, root := range roots {
+		directories, _ := lint.Discover(root, lint.Options{})
+		for _, directory := range directories {
+			name, _ := skillmd.Parse(filepath.Join(directory, skillmd.FileName)).Name()
+			if name == "" {
+				name = filepath.Base(directory)
+			}
+
+			approval, held := approvals[name]
+			if !held {
+				// Beside the skill, for a copy that arrived with its own attestation.
+				if envelope, err := attest.LoadEnvelope(attest.DefaultName(directory)); err == nil {
+					if statement, keyID, err := attest.Verify(envelope, trusted); err == nil {
+						approval = attest.Approval{
+							Name: statement.Subject.Name, Digest: statement.Subject.Digest,
+							ApprovedBy: statement.ApprovedBy, KeyID: keyID,
+						}
+						held = true
+					}
+				}
+			}
+			if !held {
+				unapproved++
+				continue
+			}
+
+			// Recomputed, never taken from the statement. A valid signature over the wrong
+			// bytes is the whole failure this product exists to catch.
+			built, err := archive.Build(directory, archive.Limits{})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "skillctl: %s could not be read: %v\n", directory, err)
+				changed++
+				continue
+			}
+			if built.Digest != approval.Digest {
+				fmt.Printf("  changed    %-28s approved by %s\n", name, approval.ApprovedBy)
+				fmt.Printf("             approved %s\n             on disk  %s\n",
+					approval.Digest, built.Digest)
+				changed++
+				continue
+			}
+			verified++
+		}
+	}
+
+	// Unapproved is a count and not a list, and not a failure. Most skills on a laptop are
+	// somebody's own, and a check that treats every personal skill as a finding is one that
+	// gets run once. Saying nothing at all would be the other error: silence about a skill
+	// nobody signed reads as a skill that was approved.
+	fmt.Printf("%d verified · %d changed · %d with no approval on this machine\n",
+		verified, changed, unapproved)
+	if changed > 0 {
+		return exitFindings
 	}
 	return exitClean
 }
