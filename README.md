@@ -181,7 +181,11 @@ cost is scanning a skill Antigravity would skip, which is noise; the other error
 silent gap.
 
 Loose skills are read from `~/.agents/skills` — the cross-client location Codex and Amp both
-use — as well as each client's own `skills` directory.
+use — as well as each client's own `skills` directory. The search starts in the working
+directory and climbs to the repository root, because that is what every client here does: a
+check run from inside `server/` has to find the project's skills at the top of the checkout,
+or it reports a clean machine having never looked at them. It stops at the root rather than
+continuing, so a sibling checkout's skills are never counted as this one's.
 
 ## What is deliberate
 

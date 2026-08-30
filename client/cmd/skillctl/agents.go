@@ -238,8 +238,14 @@ func readSkillsConfig(path, base string, seen map[string]bool, depth int) []stri
 }
 
 // resolveConfigPath applies the three rules Antigravity documents: absolute stays absolute,
-// ~/ is the home directory, and anything else is relative to the repository root — which
-// here is the base the config was found under.
+// ~/ is the home directory, and anything else is relative to the repository root.
+//
+// The repository root, not the directory the config was found in. Those were the same thing
+// while the scanner only ever looked at the working directory; now that it climbs, a
+// skills.json in a subdirectory would otherwise resolve `tools/agents/skills` against that
+// subdirectory and find nothing, while Antigravity resolves it against the root and finds
+// the skills. A path that quietly resolves to a directory nobody has is worse than an error,
+// because it produces a clean report.
 func resolveConfigPath(path, base string) string {
 	switch {
 	case filepath.IsAbs(path):
@@ -251,6 +257,9 @@ func resolveConfigPath(path, base string) string {
 		}
 		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	default:
+		if root, found := repositoryRoot(base); found {
+			return filepath.Join(root, path)
+		}
 		return filepath.Join(base, path)
 	}
 }

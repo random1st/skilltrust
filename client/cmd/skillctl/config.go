@@ -67,15 +67,73 @@ func skillRoots() []string {
 	return roots
 }
 
+// baseDirectories are the places a client would look for project and user configuration.
+//
+// The working directory is not enough, and this was wrong for as long as the scanner has
+// existed. Every client here searches upwards: Claude Code, Codex, Cursor and Antigravity all
+// walk from the directory they were started in towards the repository root looking for
+// `.claude`, `.cursor` or `.agents`. Anyone who ran a check from inside `src/` or `server/` —
+// which is where people work — was told their machine was clean by a command that never
+// looked at the project's own skills directory one level up.
+//
+// The walk stops at the repository root, because that is where the clients stop, and going
+// further would start reporting a neighbouring checkout's skills as this one's. A directory
+// that is in no repository contributes itself alone, which is what happened before.
 func baseDirectories() []string {
 	var bases []string
 	if working, err := os.Getwd(); err == nil {
-		bases = append(bases, working)
+		bases = append(bases, workingAncestors(working)...)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		bases = append(bases, home)
 	}
 	return bases
+}
+
+// maxAncestors bounds the climb. Nothing legitimate is a hundred directories deep, and a
+// command that runs at session start must not walk an unbounded path because a mount went
+// strange.
+const maxAncestors = 64
+
+// workingAncestors returns the working directory and everything above it up to and including
+// the repository root, nearest first.
+func workingAncestors(working string) []string {
+	root, found := repositoryRoot(working)
+	if !found {
+		return []string{working}
+	}
+	var bases []string
+	for current := working; len(bases) < maxAncestors; {
+		bases = append(bases, current)
+		if current == root {
+			break
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return bases
+}
+
+// repositoryRoot finds the directory holding .git, which is where every client stops.
+//
+// `.git` is tested with Stat rather than as a directory: a worktree or a submodule has a
+// file there, and treating those as "not a repository" would quietly turn the walk off for
+// exactly the checkouts people use for parallel work.
+func repositoryRoot(start string) (string, bool) {
+	for current, steps := start, 0; steps < maxAncestors; steps++ {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			return current, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
+	return "", false
 }
 
 // resolveSkillRoots returns every location a command with no path argument should cover.
@@ -125,9 +183,21 @@ func dedupeByResolvedPath(paths []string) []string {
 	return unique
 }
 
+// noSkillsError names every place that was actually searched.
+//
+// Built from the agents table rather than written out, because it was written out: it still
+// said ".agents/skills and .claude/skills" three clients after those stopped being the whole
+// list, and told people the search covered "here and under your home directory" after it had
+// started climbing to the repository root. An error that misdescribes where a tool looked
+// sends someone to check a directory that was already checked.
 func noSkillsError() error {
-	return fmt.Errorf("no skills directory found; looked for .agents/skills and " +
-		".claude/skills here and under your home directory. Pass a path to scan somewhere else")
+	looked := []string{filepath.Join(".agents", "skills")}
+	for _, known := range agents {
+		looked = append(looked, filepath.ToSlash(filepath.Join(known.HomeDir, known.SkillDir)))
+	}
+	return fmt.Errorf("no skills directory found; looked for %s in this directory, in every "+
+		"directory up to the repository root, and under your home directory. Pass a path to "+
+		"scan somewhere else", strings.Join(looked, ", "))
 }
 
 // resolveSkillRoot picks what a command with no path argument should look at.
