@@ -193,3 +193,37 @@ func TestAnAttestationThatDoesNotVerifyIsReported(t *testing.T) {
 		t.Errorf("the note must name the file: %v", notes)
 	}
 }
+
+// --store on its own means the store, not the store as well. The first version always wrote
+// the file beside the skill and treated --store as an extra copy, which forced an .att.json
+// into a skills tree that had never held one — litter left behind to record something the
+// caller had asked to keep somewhere else.
+func TestStoreOnItsOwnDoesNotLitterTheSkillsTree(t *testing.T) {
+	home := pinnedKeyMachine(t)
+	skill := writeSkill(t, home, "tidy", "---\nname: tidy\ndescription: tidy\n---\n\nTidy.\n")
+
+	if code := runAttestSign([]string{
+		skill, "--key", filepath.Join(home, "signer.key"),
+		"--as", "someone@example.com", "--store",
+	}); code != exitClean {
+		t.Fatalf("sign = %d", code)
+	}
+	if _, err := os.Stat(attest.DefaultName(skill)); err == nil {
+		t.Error("--store alone must not write beside the skill")
+	}
+	if _, err := os.Stat(attest.StorePath(homePath(attest.StoreDirectory), "tidy")); err != nil {
+		t.Fatalf("--store must write the store: %v", err)
+	}
+
+	// Both, when both are spelled out.
+	beside := filepath.Join(t.TempDir(), "tidy.att.json")
+	if code := runAttestSign([]string{
+		skill, "--key", filepath.Join(home, "signer.key"),
+		"--as", "someone@example.com", "--store", "--out", beside,
+	}); code != exitClean {
+		t.Fatalf("sign = %d", code)
+	}
+	if _, err := os.Stat(beside); err != nil {
+		t.Errorf("--out must still be honoured alongside --store: %v", err)
+	}
+}

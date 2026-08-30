@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
@@ -119,8 +120,9 @@ func runAttestSign(args []string) int {
 	// Without this the store had no way to be filled, which is how it ended up written,
 	// documented and called by nothing.
 	store := flags.Bool("store", false,
-		"also keep a copy in this machine's attestation store, where `attest verify` "+
-			"with no argument looks and where deleting the skill cannot take it")
+		"write into this machine's attestation store, where `attest verify` with no "+
+			"argument looks and where deleting the skill cannot take it. On its own this "+
+			"replaces the file beside the skill; pass --out as well to write both")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -176,12 +178,21 @@ func runAttestSign(args []string) int {
 		return fail(err)
 	}
 
+	// Where the attestation goes, and the reason the two flags compose rather than stack.
+	//
+	// The first version always wrote the sibling and let --store add a second copy. That
+	// forced a file into the skills tree on every machine that wanted the durable half —
+	// seven of them, in a directory nobody had put an .att.json in — which is litter this
+	// tool has no business leaving behind to record something it was asked to keep
+	// elsewhere. --out still names a path explicitly, and asking for both is spelling both.
 	path := *out
-	if path == "" {
+	if path == "" && !*store {
 		path = attest.DefaultName(directory)
 	}
-	if err := envelope.Save(path); err != nil {
-		return fail(err)
+	if path != "" {
+		if err := envelope.Save(path); err != nil {
+			return fail(err)
+		}
 	}
 
 	fmt.Printf("signed      %s\n", signed.Subject.Name)
@@ -189,7 +200,9 @@ func runAttestSign(args []string) int {
 	fmt.Printf("approved by %s at %s\n", signed.ApprovedBy,
 		signed.ApprovedAt.Format(time.RFC3339))
 	fmt.Printf("key         %s\n", attest.Fingerprint(envelope.Signatures[0].KeyID))
-	fmt.Printf("attestation %s\n", path)
+	if path != "" {
+		fmt.Printf("attestation %s\n", path)
+	}
 
 	if *store {
 		directory := homePath(attest.StoreDirectory)
@@ -324,7 +337,19 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
 
-	verified, changed, unapproved := 0, 0, 0
+	// Grouped by name before anything is judged, because the store is keyed by name and a
+	// machine can hold two different skills called the same thing — this one does, with an
+	// adapty-cli in ~/.agents/skills and another in ~/.codex/skills carrying different
+	// files. One approval cannot describe both. Reporting the loser as "changed" would
+	// accuse it of drifting from an approval that was never about it, and re-signing to
+	// clear the accusation just moves it to the other copy: a loop with no exit.
+	type candidate struct {
+		directory string
+		digest    string
+		err       error
+	}
+	byName := map[string][]candidate{}
+	var order []string
 	for _, root := range roots {
 		directories, _ := lint.Discover(root, lint.Options{})
 		for _, directory := range directories {
@@ -332,41 +357,77 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 			if name == "" {
 				name = filepath.Base(directory)
 			}
+			// Recomputed from disk, never taken from the statement. A valid signature over
+			// the wrong bytes is the whole failure this product exists to catch.
+			built, err := archive.Build(directory, archive.Limits{})
+			one := candidate{directory: directory, err: err}
+			if err == nil {
+				one.digest = built.Digest
+			}
+			if _, seen := byName[name]; !seen {
+				order = append(order, name)
+			}
+			byName[name] = append(byName[name], one)
+		}
+	}
+	sort.Strings(order)
 
-			approval, held := approvals[name]
-			if !held {
-				// Beside the skill, for a copy that arrived with its own attestation.
-				if envelope, err := attest.LoadEnvelope(attest.DefaultName(directory)); err == nil {
+	verified, changed, unapproved, ambiguous := 0, 0, 0, 0
+	for _, name := range order {
+		copies := byName[name]
+
+		approval, held := approvals[name]
+		if !held {
+			for _, one := range copies {
+				if envelope, err := attest.LoadEnvelope(attest.DefaultName(one.directory)); err == nil {
 					if statement, keyID, err := attest.Verify(envelope, trusted); err == nil {
 						approval = attest.Approval{
 							Name: statement.Subject.Name, Digest: statement.Subject.Digest,
 							ApprovedBy: statement.ApprovedBy, KeyID: keyID,
 						}
 						held = true
+						break
 					}
 				}
 			}
-			if !held {
-				unapproved++
-				continue
-			}
+		}
+		if !held {
+			unapproved += len(copies)
+			continue
+		}
 
-			// Recomputed, never taken from the statement. A valid signature over the wrong
-			// bytes is the whole failure this product exists to catch.
-			built, err := archive.Build(directory, archive.Limits{})
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "skillctl: %s could not be read: %v\n", directory, err)
-				changed++
-				continue
+		matched := false
+		for _, one := range copies {
+			if one.err == nil && one.digest == approval.Digest {
+				matched = true
+				break
 			}
-			if built.Digest != approval.Digest {
+		}
+
+		for _, one := range copies {
+			switch {
+			case one.err != nil:
+				fmt.Fprintf(os.Stderr, "skillctl: %s could not be read: %v\n", one.directory, one.err)
+				changed++
+			case one.digest == approval.Digest:
+				verified++
+			case matched:
+				// Another directory holds the approved bytes, so this one is not a changed
+				// copy of an approved skill — it is a second skill wearing the same name,
+				// which is a thing to resolve rather than a thing to re-approve.
+				fmt.Printf("  same name  %-28s %s\n", name, one.directory)
+				fmt.Printf("             a different skill is approved under this name; " +
+					"rename one of them\n")
+				ambiguous++
+			default:
 				fmt.Printf("  changed    %-28s approved by %s\n", name, approval.ApprovedBy)
 				fmt.Printf("             approved %s\n             on disk  %s\n",
-					approval.Digest, built.Digest)
+					approval.Digest, one.digest)
+				if len(copies) > 1 {
+					fmt.Printf("             %s\n", one.directory)
+				}
 				changed++
-				continue
 			}
-			verified++
 		}
 	}
 
@@ -374,8 +435,12 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 	// somebody's own, and a check that treats every personal skill as a finding is one that
 	// gets run once. Saying nothing at all would be the other error: silence about a skill
 	// nobody signed reads as a skill that was approved.
-	fmt.Printf("%d verified · %d changed · %d with no approval on this machine\n",
+	fmt.Printf("%d verified · %d changed · %d with no approval on this machine",
 		verified, changed, unapproved)
+	if ambiguous > 0 {
+		fmt.Printf(" · %d sharing a name with an approved skill", ambiguous)
+	}
+	fmt.Println()
 	if changed > 0 {
 		return exitFindings
 	}
