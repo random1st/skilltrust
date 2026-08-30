@@ -1,2 +1,5 @@
 dist/
 bin/
+# Copied from the repository root by the goreleaser before hook
+/LICENSE
+/README.md

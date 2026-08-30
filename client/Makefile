@@ -55,6 +55,8 @@ reproducible:
 release:
 	@test -n "$$APPLE_SIGNING_IDENTITY" || \
 		{ echo "set APPLE_SIGNING_IDENTITY, e.g. \"Developer ID Application: Name (TEAMID)\""; exit 1; }
+	@test -n "$$GITHUB_TOKEN" || \
+		{ echo "set GITHUB_TOKEN (e.g. GITHUB_TOKEN=\$$(gh auth token)) — it creates the release and pushes the cask to random1st/homebrew-tap, so it needs repo scope on both"; exit 1; }
 	goreleaser release --clean
 
 notarize:

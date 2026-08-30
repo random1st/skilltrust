@@ -16,6 +16,11 @@ before:
     # The module path pattern, not ./...: the module root is the repository root and this
     # runs from client/, where ./... would test the commands and skip internal/.
     - go test github.com/random1st/skilltrust/...
+    # The licence and README live at the repository root, and goreleaser's file globbing
+    # cannot reach above its working directory — a bare LICENSE* here matched nothing and
+    # every archive shipped without the licence, reported only as a warning. The copies are
+    # gitignored; the archives.files globs pick them up.
+    - cp ../LICENSE ../README.md .
 
 builds:
   - id: skillctl
@@ -120,8 +125,9 @@ archives:
       - goos: darwin
         formats: [zip]
     files:
-      - LICENSE*
-      - README*
+      # Copied in from the repository root by the before hook — see there for why.
+      - LICENSE
+      - README.md
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
