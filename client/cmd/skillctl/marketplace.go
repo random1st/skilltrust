@@ -204,6 +204,16 @@ func runMarketplaceVerify(args []string) int {
 	now := time.Now().UTC()
 	problems, restored := 0, 0
 
+	// This is the fourth surface that can put bytes back, and it must honour adoptions
+	// like the other three — a manual verify that quietly reverts a copy its owner chose
+	// to keep closes the escape hatch behind exactly the person checking their machine.
+	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n  Nothing is adopted this run, so every "+
+			"signed skill is checked as published.\n", err)
+		adopted = marketplace.Adoptions{}
+	}
+
 	for name, snapshot := range snapshots {
 		fmt.Printf("%s   sequence %d\n", name, snapshot.Sequence)
 		for _, managed := range snapshot.Skills {
@@ -211,6 +221,14 @@ func runMarketplaceVerify(args []string) int {
 			if status.ok {
 				fmt.Printf("  ok          %-28s %s\n", status.name, status.version)
 				continue
+			}
+
+			if status.detail == "changed" {
+				if adoption, ok := adopted.Find(name, managed.Name); ok &&
+					adoption.Local == status.actual && adoption.From == managed.Digest {
+					fmt.Printf("  adapted     %-28s %s\n", status.name, adoption.Reason)
+					continue
+				}
 			}
 
 			// Only a changed plugin can be put back. A revoked one has no correct bytes to
@@ -335,12 +353,21 @@ func checkInstalled(
 		return status
 	}
 
-	digest, _, err := marketplace.DigestPlugin(directory)
+	digest, _, err := marketplace.DigestInstalled(directory)
 	if err != nil {
 		status.detail = "unreadable"
 		return status
 	}
 	status.actual = digest
+	// The bytes on disk can be revoked even when the published ones are not — a machine
+	// running an edited copy whose digest the catalog withdrew must hear about it.
+	if entry, revoked := snapshot.IsRevoked(digest); revoked {
+		status.detail = "revoked"
+		if entry.Reason != "" {
+			status.name = managed.Name + " — " + entry.Reason
+		}
+		return status
+	}
 	if digest == managed.Digest {
 		status.ok = true
 		return status

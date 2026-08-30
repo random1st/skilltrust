@@ -75,6 +75,10 @@ func runFleet(args []string) int {
 		last       time.Time
 		byKind     map[report.Kind]int
 		highlights []report.Event
+		// adapted keeps the latest adapted event per plugin, not every one: a machine
+		// files the same adoption every session, and a count of events would read as 250
+		// modified copies where there is one, a year old.
+		adapted map[string]report.Event
 	}
 	machines := map[string]*machine{}
 	unattributed := undecodable
@@ -93,7 +97,10 @@ func runFleet(args []string) int {
 
 		item := machines[event.Machine]
 		if item == nil {
-			item = &machine{name: event.Machine, byKind: map[report.Kind]int{}}
+			item = &machine{
+				name: event.Machine, byKind: map[report.Kind]int{},
+				adapted: map[string]report.Event{},
+			}
 			machines[event.Machine] = item
 		}
 		item.byKind[event.Kind]++
@@ -102,6 +109,12 @@ func runFleet(args []string) int {
 		}
 		if event.Kind == report.KindRevoked || event.Kind == report.KindRestored {
 			item.highlights = append(item.highlights, *event)
+		}
+		if event.Kind == report.KindAdapted {
+			key := event.Marketplace + "/" + event.Plugin
+			if previous, seen := item.adapted[key]; !seen || event.At.After(previous.At) {
+				item.adapted[key] = *event
+			}
 		}
 	}
 
@@ -135,6 +148,22 @@ func runFleet(args []string) int {
 				outstanding += count
 			}
 		}
+		// Adapted is a state, not an incident: it appears on the page — an administrator
+		// asking "which machines run bytes nobody signed" is the reason it is reported at
+		// all — but it does not flip the exit code, because a customised machine that is
+		// otherwise clean is not something outstanding.
+		if len(item.adapted) > 0 {
+			fmt.Printf("  %-16s %d plugin%s\n", "adapted",
+				len(item.adapted), plural(len(item.adapted), "", "s"))
+			keys := make([]string, 0, len(item.adapted))
+			for key := range item.adapted {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				fmt.Printf("    %s\n", item.adapted[key].Summary())
+			}
+		}
 		sort.Slice(item.highlights, func(i, j int) bool {
 			return item.highlights[i].At.After(item.highlights[j].At)
 		})
@@ -148,7 +177,7 @@ func runFleet(args []string) int {
 		fmt.Println()
 	}
 
-	fmt.Printf("%d machine%s reporting · %d event%s\n",
+	fmt.Printf("%d machine%s reporting · %d event%s needing attention\n",
 		len(names), plural(len(names), "", "s"),
 		outstanding, plural(outstanding, "", "s"))
 	if unattributed > 0 {

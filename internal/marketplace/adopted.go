@@ -37,6 +37,11 @@ type Adoption struct {
 	From  string    `json:"from"`
 	Local string    `json:"local"`
 	Since time.Time `json:"since"`
+	// Version is the release the adopted bytes belong to. Without it, a record left behind
+	// by an upstream version bump cannot even be described: the reconciler checks the
+	// version the catalog signs now, never digests the old install, and the record sits in
+	// `adopt --list` looking alive. Empty on records written before this field existed.
+	Version string `json:"version,omitempty"`
 	// Reason is required. An adoption with no reason cannot be told apart from a mistake,
 	// and a year later cannot be told apart from a decision nobody remembers making.
 	Reason string `json:"reason"`

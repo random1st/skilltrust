@@ -75,6 +75,38 @@ func signedTree(source string) (*archive.Archive, error) {
 	return archive.BuildFiltered(source, PluginLimits(), keep, excludedRoots()...)
 }
 
+// Reclaim puts a quarantined copy back as the installed one: the recovery half of Restore.
+//
+// It exists because the advertised path out of a restore dead-ended. The hint said "adopt
+// this to keep it", but by the time anyone reads a hint the restore has already happened —
+// the person's bytes are in quarantine, the installed copy matches what was published, and
+// adopt truthfully answers that there is nothing to adopt. The way back was hand-copying a
+// directory nobody would guess the name of.
+//
+// The client-managed entries currently installed move into the reclaimed tree first, for
+// the same reason Restore carries them the other way: they were made after the quarantined
+// copy was set aside, and losing them breaks the plugin or drops live session locks. The
+// published bytes being discarded are re-materialisable from the marketplace checkout, so
+// nothing is quarantined here.
+func Reclaim(quarantined, installed string) error {
+	if _, err := os.Stat(quarantined); err != nil {
+		return fmt.Errorf("nothing to take back: %w", err)
+	}
+	for _, name := range ClientManagedRoots {
+		from := filepath.Join(installed, name)
+		if _, err := os.Lstat(from); err != nil {
+			continue
+		}
+		if err := os.Rename(from, filepath.Join(quarantined, name)); err != nil {
+			return fmt.Errorf("cannot preserve %s: %w", name, err)
+		}
+	}
+	if err := os.RemoveAll(installed); err != nil {
+		return err
+	}
+	return os.Rename(quarantined, installed)
+}
+
 // quarantine moves a directory aside under a timestamped name, never replacing one already
 // there: the earlier directory is the earlier evidence.
 func quarantine(directory, root, name string, now time.Time) (string, error) {

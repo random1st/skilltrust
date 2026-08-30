@@ -20,7 +20,8 @@ func install(t *testing.T, home, market, plugin, version, body string) string {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	digest, _, err := DigestPlugin(dir)
+	// DigestInstalled, because that is what a consumer computes about this directory.
+	digest, _, err := DigestInstalled(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

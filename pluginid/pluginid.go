@@ -11,17 +11,30 @@ import (
 	"github.com/random1st/skilltrust/internal/marketplace"
 )
 
-// Of returns the digest of the plugin rooted at directory, and whether that plugin ships
-// dependency code the digest does not cover.
+// Of returns the digest of a tree of bytes as received, and whether it ships dependency
+// code the digest does not cover. Every file counts.
 //
-// The rules are the ones signing uses, because they are the same call: files the client
-// owns are excluded, so a source checkout and an installed copy are comparable; the
-// signature is never part of what it signs; symlinks are refused, because a link decides
-// which bytes the identity covers and the answer must be in the tree itself.
+// This is the verifying side, and the default: an installed copy, an extracted archive, a
+// tree materialised from a repository API. Nothing inside the directory may narrow what
+// the identity covers — a `.git` planted in a tree would otherwise decide which of its own
+// files are digested, which hands that choice to whoever wrote the tree.
 //
-// Inside a git checkout only tracked files count, which keeps a stray local build artefact
-// from changing a published identity. Outside one — an extracted archive, a temporary
-// directory — every file counts, since there is nothing to ask.
+// The rules it does apply are the ones signing uses, because they are the same call: files
+// the client owns are excluded, so a source checkout and an installed copy stay
+// comparable; the signature is never part of what it signs; symlinks are refused, because
+// a link decides which bytes the identity covers and the answer must be in the tree itself.
 func Of(directory string) (digest string, hasDependencies bool, err error) {
+	return marketplace.DigestInstalled(directory)
+}
+
+// OfCheckout returns the digest of a publisher's working copy, where only git-tracked
+// files count.
+//
+// A checkout is not what a consumer receives: build output, caches and local scratch live
+// there and never reach a clone, so digesting the directory as it stands would sign a tree
+// that exists on one machine and matches nobody's install. Asking git is safe here and
+// only here, because the question is about the publisher's own machine before anything is
+// signed. Never use this to check bytes somebody else produced.
+func OfCheckout(directory string) (digest string, hasDependencies bool, err error) {
 	return marketplace.DigestPlugin(directory)
 }

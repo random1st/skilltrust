@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,12 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrNoDestinations means nobody is configured to hear about events. It is an error, not a
+// success: a caller that deletes its spooled copy on a nil return would otherwise write
+// every event and immediately destroy it, leaving a default install that reports nowhere —
+// not to a console, not to a directory, not even to its own disk.
+var ErrNoDestinations = errors.New("no reporting destinations configured")
 
 // Destination is where events go. Several may be configured; each is tried independently, and
 // an event is kept in the spool until at least one accepts it.
@@ -84,7 +91,7 @@ type Notification struct {
 // and repaired the problem, and the only thing outstanding is telling somebody.
 func Deliver(config *Config, event Event, envelopeBytes []byte, timeout time.Duration) error {
 	if len(config.Destinations) == 0 {
-		return nil
+		return ErrNoDestinations
 	}
 	if timeout <= 0 {
 		timeout = 10 * time.Second

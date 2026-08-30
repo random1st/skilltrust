@@ -64,14 +64,35 @@ func PluginLimits() archive.Limits {
 	}
 }
 
-// DigestPlugin computes the identity of a plugin tree the way both sides must compute it:
-// ignoring what the client owns, so a source checkout and an installed copy are comparable.
+// DigestPlugin computes the identity of a plugin tree on the publishing side: what a
+// checkout would ship, ignoring what the client owns.
+//
+// It consults git, so a publisher's local build scratch does not change a published
+// identity. That makes it wrong for anything a consumer verifies — use DigestInstalled
+// for an installed copy.
 func DigestPlugin(directory string) (string, bool, error) {
 	var keep func(string) bool
 	if tracked := trackedFiles(directory); tracked != nil {
 		keep = func(path string) bool { _, ok := tracked[path]; return ok }
 	}
 	built, err := archive.BuildFiltered(directory, PluginLimits(), keep, excludedRoots()...)
+	if err != nil {
+		return "", false, err
+	}
+	return built.Digest, hasDependencies(directory), nil
+}
+
+// DigestInstalled computes the identity of an installed copy: every file counts.
+//
+// The git filter above must never run here. An installed copy contains only what was
+// shipped, so there is no scratch to ignore — and asking git means letting data inside the
+// tree decide what the digest covers, which hands that choice to whoever wrote the tree.
+// The attack is concrete: `git init && git add SKILL.md && git commit` inside an installed
+// plugin, and every file that repo does not track vanishes from the identity, so bytes
+// nobody signed verify as published, forever. The two digests still agree on a clean
+// install, because a clone delivers exactly the tracked files.
+func DigestInstalled(directory string) (string, bool, error) {
+	built, err := archive.BuildFiltered(directory, PluginLimits(), nil, excludedRoots()...)
 	if err != nil {
 		return "", false, err
 	}

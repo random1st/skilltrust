@@ -1,6 +1,7 @@
 package marketplace
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"time"
@@ -128,18 +129,38 @@ func reconcileOne(
 	if _, err := os.Stat(installed); os.IsNotExist(err) {
 		if others := InstalledVersions(options.ClaudeHome, snapshot.Name, managed.Name); len(others) > 0 {
 			result.Outcome, result.Installed = OutcomeOtherVersion, others[0]
+			// The version the catalog signs is the only one this reconciler digests, so an
+			// adoption of the installed release is never examined again once the publisher
+			// moves on. Left unsaid, that is a silent end to something a person decided on
+			// purpose — the line about the version difference must also say what it did to
+			// their adoption.
+			if adoption, ok := options.Adopted.Find(snapshot.Name, managed.Name); ok {
+				result.Detail = fmt.Sprintf(
+					"you adopted a change to %s (%s); the catalog has moved to %s — "+
+						"re-apply your change there and adopt it again, if you still want it",
+					others[0], adoption.Reason, managed.Version)
+			}
 			return result
 		}
 		result.Outcome = OutcomeAbsent
 		return result
 	}
 
-	digest, _, err := DigestPlugin(installed)
+	digest, _, err := DigestInstalled(installed)
 	if err != nil {
 		result.Outcome, result.Detail = OutcomeUnverifiable, err.Error()
 		return result
 	}
 	result.OnDisk = digest
+	// The copy on disk has its own identity, and that identity can be revoked even when
+	// the published one is not. This is the only lever an organisation has against bytes a
+	// machine adopted: revoking the digest the dashboard shows must stop those bytes, or
+	// the one mechanism for withdrawing a bad skill is inert on exactly the machines that
+	// edited it. Answered before the adoption branch, so revocation outranks adoption.
+	if entry, revoked := snapshot.IsRevoked(digest); revoked {
+		result.Outcome, result.Detail = OutcomeRevoked, entry.Reason
+		return result
+	}
 	if digest == managed.Digest {
 		result.Outcome = OutcomeVerified
 		return result

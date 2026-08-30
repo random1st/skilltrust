@@ -65,6 +65,9 @@ func runHookSessionStart(args []string) int {
 		return exitClean
 	}
 	recordEvents(results, unusable, time.Now().UTC())
+	for _, line := range pruneDeadAdoptions(results) {
+		fmt.Printf("skillctl: %s\n", line)
+	}
 	writeSessionReport(results, unusable, *verbose)
 	return exitClean
 }
@@ -78,7 +81,7 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 			"not checked\n  %s\n  refresh with: skillctl sync\n\n", failure)
 	}
 
-	spoken := 0
+	spoken, overridden := 0, 0
 	for _, result := range results {
 		if result.Outcome.Settled() {
 			continue
@@ -87,6 +90,9 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 			fmt.Printf("skillctl: your organisation's plugins were reconciled\n\n")
 		}
 		spoken++
+		if result.Outcome != marketplace.OutcomeAdapted {
+			overridden++
+		}
 
 		fmt.Printf("  %-13s %s   (%s)\n", result.Outcome, result.Plugin, result.Marketplace)
 		if result.Detail != "" {
@@ -95,7 +101,7 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 		if result.Outcome == marketplace.OutcomeRestored {
 			fmt.Printf("                this copy had been changed here and was put back\n")
 			fmt.Printf("                to keep your version instead: "+
-				"skillctl adopt %s --because \"...\"\n", result.Plugin)
+				"skillctl adopt %s --from-quarantine --because \"...\"\n", result.Plugin)
 		}
 		// The reason lives in Adapted, not Detail, so a surface that only prints Detail
 		// shows a divergence with no account of it — which is the state adopting exists to
@@ -109,8 +115,14 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 		}
 	}
 
-	if spoken > 0 {
+	// The trailer is only true of plugins the check overrode. Printing it after a run
+	// whose only news was "your own copy, kept on purpose" told the person their change
+	// did not survive in the same breath as preserving it.
+	if overridden > 0 {
 		fmt.Printf("\nThese plugins are managed centrally; local changes to them do not survive.\n")
+		return
+	}
+	if spoken > 0 {
 		return
 	}
 	if verbose && len(unusable) == 0 {

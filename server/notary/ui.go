@@ -48,6 +48,10 @@ type Dashboard struct {
 	// scanning six columns of zeros, which is a question the page can answer itself.
 	// Empty means nothing needs looking at, and that is worth saying out loud too.
 	Attention []string
+	// AdaptedNote qualifies the all-clear. "Every machine found what you published" is
+	// false on a fleet with adopted copies, and a headline that overclaims once is a
+	// headline nobody trusts about the machines that matter. Empty when nothing is adopted.
+	AdaptedNote string
 	// Session is true when the viewer arrived through the login form rather than
 	// HTTP Basic; it decides whether a sign-out button makes sense.
 	Session bool
@@ -77,7 +81,9 @@ type MachineView struct {
 	Revoked         int
 	Unverifiable    int
 	CatalogUnusable int
-	// Adapted counts plugins someone at that machine deliberately keeps modified. Not an
+	// Adapted counts plugins someone at that machine deliberately keeps modified —
+	// distinct plugins, not events. A machine files the same adoption every session, and
+	// counting events read as 250 modified copies where there was one, a year old. Not an
 	// incident, and shown anyway: it is the one case where a machine knowingly runs bytes
 	// no publisher signed, and an organisation that cannot see it does not know what its
 	// fleet is running.
@@ -142,6 +148,10 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 	stored, err := s.ServeEvents(org)
 	if err == nil {
 		machines := map[string]*MachineView{}
+		// One adoption, one row. The same adopted plugin is reported every session, and a
+		// table of one reason repeated fifty times informs nobody about anything else.
+		type adoptionKey struct{ machine, marketplace, plugin string }
+		adoptions := map[adoptionKey]report.Event{}
 		for _, raw := range stored {
 			var envelope attest.Envelope
 			if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -166,6 +176,13 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 			if event.At.After(view.Last) {
 				view.Last = event.At
 			}
+			if event.Kind == report.KindAdapted {
+				key := adoptionKey{event.Machine, event.Marketplace, event.Plugin}
+				if previous, seen := adoptions[key]; !seen || event.At.After(previous.At) {
+					adoptions[key] = *event
+				}
+				continue
+			}
 			switch event.Kind {
 			case report.KindRestored:
 				view.Restored++
@@ -175,9 +192,14 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 				view.Unverifiable++
 			case report.KindCatalogUnusable:
 				view.CatalogUnusable++
-			case report.KindAdapted:
-				view.Adapted++
 			}
+			dashboard.Events = append(dashboard.Events, EventView{
+				At: event.At, Machine: event.Machine,
+				Summary: event.Summary(), Kind: string(event.Kind),
+			})
+		}
+		for key, event := range adoptions {
+			machines[key.machine].Adapted++
 			dashboard.Events = append(dashboard.Events, EventView{
 				At: event.At, Machine: event.Machine,
 				Summary: event.Summary(), Kind: string(event.Kind),
@@ -204,6 +226,24 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 		return dashboard.Marketplaces[i].Name < dashboard.Marketplaces[j].Name
 	})
 	dashboard.Attention = whatNeedsLookingAt(dashboard)
+
+	adaptedPlugins, adaptedMachines := 0, 0
+	for _, view := range dashboard.Machines {
+		if view.Adapted > 0 {
+			adaptedMachines++
+			adaptedPlugins += view.Adapted
+		}
+	}
+	switch {
+	case adaptedPlugins == 1:
+		dashboard.AdaptedNote = "1 plugin is a modified copy its owner chose to keep; " +
+			"everything else matches what you published."
+	case adaptedPlugins > 1:
+		dashboard.AdaptedNote = fmt.Sprintf(
+			"%s across %s are modified copies their owners chose to keep; everything else "+
+				"matches what you published.",
+			plural(adaptedPlugins, "plugin"), plural(adaptedMachines, "machine"))
+	}
 	return dashboard
 }
 

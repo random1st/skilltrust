@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,10 +120,16 @@ func TestTheSpoolKeepsEventsInOrderAndNeverOverwrites(t *testing.T) {
 	}
 }
 
-// A machine with nowhere to report is a legitimate configuration: the spool is still
-// readable, and an administrator can collect it. It must not be an error.
-func TestNoDestinationsIsNotAFailure(t *testing.T) {
-	if err := Deliver(&Config{}, Event{Kind: KindRestored}, nil, time.Second); err != nil {
-		t.Fatalf("spool-only reporting must be allowed: %v", err)
+// A machine with nowhere to report is a legitimate configuration — but Deliver must say
+// that nothing was delivered, not pretend something was. Its caller deletes the spooled
+// copy on success, so a nil return here meant a default install wrote every event and
+// immediately destroyed it: nothing in the spool, nothing anywhere. The sentinel is what
+// keeps this test's own premise true, that "the spool is still readable and an
+// administrator can collect it".
+func TestNoDestinationsKeepsTheEventSpooled(t *testing.T) {
+	err := Deliver(&Config{}, Event{Kind: KindRestored}, nil, time.Second)
+	if !errors.Is(err, ErrNoDestinations) {
+		t.Fatalf("Deliver with no destinations = %v, want ErrNoDestinations so the "+
+			"caller keeps its spooled copy", err)
 	}
 }

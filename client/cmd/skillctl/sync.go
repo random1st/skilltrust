@@ -121,6 +121,48 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 	return results, unusable, exitClean
 }
 
+// pruneDeadAdoptions drops adoption records that no longer describe anything on disk, and
+// says so — once, at the moment they die.
+//
+// The reconciler never looks at an adoption once its plugin verifies as published: after
+// an upstream version bump the new release installs, matches its signature, and the record
+// sits in `adopt --list` looking alive for a decision that quietly stopped existing. The
+// command's own promise is "the publisher ships a new version → checking resumes and says
+// so"; this is the saying so.
+func pruneDeadAdoptions(results []marketplace.Result) []string {
+	adoptions, err := marketplace.LoadAdoptions(defaultAdoptions())
+	if err != nil || len(adoptions.Entries) == 0 {
+		return nil
+	}
+	var ended []string
+	changed := false
+	for _, result := range results {
+		if result.Outcome != marketplace.OutcomeVerified {
+			continue
+		}
+		entry, ok := adoptions.Find(result.Marketplace, result.Plugin)
+		if !ok {
+			continue
+		}
+		adoptions, _ = adoptions.Forget(result.Marketplace, result.Plugin)
+		changed = true
+		was := entry.Version
+		if was == "" {
+			was = "an earlier release"
+		}
+		ended = append(ended, fmt.Sprintf(
+			"your adoption of %s ended: %s is installed exactly as published, so the "+
+				"record was removed (it was for %s: %s)",
+			result.Plugin, result.Version, was, entry.Reason))
+	}
+	if changed {
+		if err := marketplace.SaveAdoptions(defaultAdoptions(), adoptions); err != nil {
+			ended = append(ended, fmt.Sprintf("the ended records could not be removed: %v", err))
+		}
+	}
+	return ended
+}
+
 func runSync(args []string) int {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 	flags.Usage = func() {
@@ -157,6 +199,9 @@ func runSync(args []string) int {
 	}
 	if !*report {
 		recordEvents(results, unusable, time.Now().UTC())
+		for _, line := range pruneDeadAdoptions(results) {
+			fmt.Printf("  %s\n", line)
+		}
 	}
 	return writeReconcileReport(results, unusable, home, *report)
 }
@@ -192,8 +237,11 @@ func writeReconcileReport(
 				break
 			}
 			fmt.Printf("                this copy had been changed here and was put back\n")
+			// --from-quarantine, not a plain adopt: the restore above has already happened,
+			// so the person's bytes are in quarantine and adopting what is installed now
+			// would adopt the published copy — a hint that fails for everyone who takes it.
 			fmt.Printf("                to keep your version instead: "+
-				"skillctl adopt %s --because \"...\"\n", result.Plugin)
+				"skillctl adopt %s --from-quarantine --because \"...\"\n", result.Plugin)
 		case marketplace.OutcomeAdapted:
 			// The reason is the whole reason to print this line. Without it a person
 			// reading their own machine six months on sees a divergence and no account

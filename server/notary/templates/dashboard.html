@@ -16,7 +16,7 @@
   <ul>{{range .Attention}}<li>{{.}}</li>{{end}}</ul>
 </div>
 {{else}}
-<p class="ok">Nothing needs looking at. Every machine that reported found what you published.</p>
+<p class="ok">Nothing needs looking at.{{if .AdaptedNote}} {{.AdaptedNote}}{{else}} Every machine that reported found what you published.{{end}}</p>
 {{end}}
 
 <h2>Marketplaces</h2>

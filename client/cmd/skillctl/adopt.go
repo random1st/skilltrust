@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +25,8 @@ func runAdopt(args []string) int {
 			"ships a new version, checking resumes and says so. Your machine reports an\n"+
 			"adopted plugin like any other finding.\n\n"+
 			"  skillctl adopt deploy-runbook --because \"our staging URL, not theirs\"\n"+
+			"  skillctl adopt deploy-runbook --from-quarantine --because \"...\"\n"+
+			"                                            # take back a change a check put back\n"+
 			"  skillctl adopt deploy-runbook --forget    # go back to the published copy\n"+
 			"  skillctl adopt --list\n\n"+
 			"Exit codes: %d done, %d nothing matched, %d usage error.\n\nFlags:\n",
@@ -35,6 +39,9 @@ func runAdopt(args []string) int {
 		"which catalog the plugin belongs to, when two publish the same name")
 	forget := flags.Bool("forget", false,
 		"drop the record, so the published copy is restored on the next check")
+	fromQuarantine := flags.Bool("from-quarantine", false,
+		"put the newest quarantined copy of the plugin back first, then adopt it — "+
+			"the way to keep a change a check has already put back")
 	list := flags.Bool("list", false, "print what this machine has adopted")
 	claudeHome := flags.String("claude-home", "", "Claude Code directory (default ~/.claude)")
 
@@ -87,14 +94,37 @@ func runAdopt(args []string) int {
 	if code == exitUsage {
 		return code
 	}
+
+	if *fromQuarantine {
+		if code := reclaimFromQuarantine(results, home, *marketplaceName, name); code != exitClean {
+			return code
+		}
+		// The tree just changed under the earlier reconciliation, so its digests describe
+		// a directory that no longer exists. Recompute rather than adopt stale bytes.
+		results, _, code = reconcileAll(home, false, true)
+		if code == exitUsage {
+			return code
+		}
+	}
+
 	found, err := pick(results, *marketplaceName, name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		// The refusal is correct and still a dead end: after a restore the bytes worth
+		// adopting are in quarantine, and the person was sent here by a hint that did not
+		// say so. Point at the door instead of just closing this one.
+		if errors.Is(err, errAlreadyPublished) && !*fromQuarantine {
+			if _, ok := newestQuarantine(name); ok {
+				fmt.Fprintf(os.Stderr, "  an earlier copy of it is in quarantine; to take "+
+					"that back and keep it:\n  skillctl adopt %s --from-quarantine --because %q\n",
+					name, *because)
+			}
+		}
 		return exitFindings
 	}
 
 	entry := marketplace.Adoption{
-		Marketplace: found.Marketplace, Plugin: name,
+		Marketplace: found.Marketplace, Plugin: name, Version: found.Version,
 		From: found.Signed, Local: found.OnDisk,
 		Since: time.Now().UTC(), Reason: strings.TrimSpace(*because),
 	}
@@ -114,9 +144,106 @@ func runAdopt(args []string) int {
 	return exitClean
 }
 
+// errAlreadyPublished marks the one refusal that has a recovery: the installed copy
+// matches the signature, so if the person's change exists at all, it is in quarantine.
+var errAlreadyPublished = errors.New("already matches what was published")
+
+// reclaimFromQuarantine puts the newest quarantined copy of a plugin back in place, so the
+// ordinary adopt flow that follows can describe and record it.
+func reclaimFromQuarantine(
+	results []marketplace.Result, claudeHome, marketplaceName, plugin string,
+) int {
+	found, err := match(results, marketplaceName, plugin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitFindings
+	}
+	// Revocation outranks recovery for the same reason it outranks adoption: quarantine is
+	// exactly where withdrawn bytes go, and a command that moves them back would be the
+	// undo button for the one mechanism that must not have one.
+	if found.Outcome == marketplace.OutcomeRevoked {
+		fmt.Fprintf(os.Stderr, "skillctl: %s is revoked (%s); what is in quarantine "+
+			"stays there\n", plugin, found.Detail)
+		return exitFindings
+	}
+	if found.Outcome == marketplace.OutcomeAbsent || found.Outcome == marketplace.OutcomeOtherVersion {
+		fmt.Fprintf(os.Stderr, "skillctl: %s %s is not installed here, so there is no "+
+			"place to put a quarantined copy back\n", plugin, found.Version)
+		return exitFindings
+	}
+	quarantined, ok := newestQuarantine(plugin)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "skillctl: nothing quarantined for %s in %s\n",
+			plugin, quarantineRoot())
+		return exitFindings
+	}
+	installed := marketplace.InstalledPath(claudeHome, found.Marketplace, plugin, found.Version)
+	if err := marketplace.Reclaim(quarantined, installed); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("%-11s %s, from %s\n", "took back", plugin, quarantined)
+	return exitClean
+}
+
+// newestQuarantine finds the most recent quarantined copy of a plugin. The directory names
+// embed a UTC timestamp, so the lexicographically last one is the latest.
+func newestQuarantine(plugin string) (string, bool) {
+	entries, err := os.ReadDir(quarantineRoot())
+	if err != nil {
+		return "", false
+	}
+	prefix := plugin + "-"
+	best := ""
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		// The suffix must look like a timestamp, or the quarantined copy of a plugin named
+		// "run" would claim everything quarantined for "run-tests".
+		rest := entry.Name()[len(prefix):]
+		if len(rest) < 8 || rest[0] < '0' || rest[0] > '9' {
+			continue
+		}
+		if entry.Name() > best {
+			best = entry.Name()
+		}
+	}
+	if best == "" {
+		return "", false
+	}
+	return filepath.Join(quarantineRoot(), best), true
+}
+
 // pick finds the one plugin being adopted, and refuses rather than guessing when the name
 // is ambiguous or the copy on disk is not one an adoption can describe.
 func pick(results []marketplace.Result, marketplaceName, plugin string) (marketplace.Result, error) {
+	found, err := match(results, marketplaceName, plugin)
+	if err != nil {
+		return marketplace.Result{}, err
+	}
+	switch found.Outcome {
+	case marketplace.OutcomeVerified:
+		return marketplace.Result{}, fmt.Errorf(
+			"%s %w, so there is nothing to adopt", plugin, errAlreadyPublished)
+	case marketplace.OutcomeRevoked:
+		// Revocation is a statement about now and outranks a signature; it must outrank a
+		// local preference too, or the one mechanism for withdrawing a bad skill becomes
+		// optional on exactly the machines that edited it.
+		return marketplace.Result{}, fmt.Errorf(
+			"%s is revoked (%s) and cannot be adopted", plugin, found.Detail)
+	case marketplace.OutcomeAbsent, marketplace.OutcomeOtherVersion:
+		return marketplace.Result{}, fmt.Errorf(
+			"%s is not installed here, so there are no bytes to adopt", plugin)
+	case marketplace.OutcomeUnverifiable:
+		return marketplace.Result{}, fmt.Errorf(
+			"%s could not be read (%s), so nothing can be claimed about it", plugin, found.Detail)
+	}
+	return found, nil
+}
+
+// match finds the one result a plugin name refers to, refusing rather than guessing when
+// the name matches nothing or more than one catalog publishes it.
+func match(results []marketplace.Result, marketplaceName, plugin string) (marketplace.Result, error) {
 	var matches []marketplace.Result
 	for _, result := range results {
 		if result.Plugin != plugin {
@@ -134,33 +261,14 @@ func pick(results []marketplace.Result, marketplaceName, plugin string) (marketp
 				"catalog you follow publishes", plugin)
 	case len(matches) > 1:
 		var names []string
-		for _, match := range matches {
-			names = append(names, match.Marketplace)
+		for _, found := range matches {
+			names = append(names, found.Marketplace)
 		}
 		return marketplace.Result{}, fmt.Errorf(
 			"%s is published by %s; say which with --marketplace",
 			plugin, strings.Join(names, " and "))
 	}
-
-	found := matches[0]
-	switch found.Outcome {
-	case marketplace.OutcomeVerified:
-		return marketplace.Result{}, fmt.Errorf(
-			"%s already matches what was published, so there is nothing to adopt", plugin)
-	case marketplace.OutcomeRevoked:
-		// Revocation is a statement about now and outranks a signature; it must outrank a
-		// local preference too, or the one mechanism for withdrawing a bad skill becomes
-		// optional on exactly the machines that edited it.
-		return marketplace.Result{}, fmt.Errorf(
-			"%s is revoked (%s) and cannot be adopted", plugin, found.Detail)
-	case marketplace.OutcomeAbsent, marketplace.OutcomeOtherVersion:
-		return marketplace.Result{}, fmt.Errorf(
-			"%s is not installed here, so there are no bytes to adopt", plugin)
-	case marketplace.OutcomeUnverifiable:
-		return marketplace.Result{}, fmt.Errorf(
-			"%s could not be read (%s), so nothing can be claimed about it", plugin, found.Detail)
-	}
-	return found, nil
+	return matches[0], nil
 }
 
 func printAdoptions(adoptions marketplace.Adoptions) int {
