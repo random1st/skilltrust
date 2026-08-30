@@ -1,5 +1,5 @@
 {
-  "description": "Every command is guarded by `command -v skillctl`. The plugin puts its own binary on PATH, but a platform without one, or an install that has not been reloaded yet, must degrade to a single line at session start rather than a failing hook on every skill invocation. A security check that breaks the session is a security check people remove.",
+  "description": "Every command is guarded by `command -v skillctl`, which catches an install that has not been reloaded yet — not a platform without a build. The plugin's bin/ holds a shim that is always present, so once installed the guard always passes and the shim is what decides: it execs the matching binary, or prints where to get one and exits 0. Exit 0 is deliberate, and it means a PreToolUse check on an unsupported platform allows rather than refuses. A security check that breaks the session is a security check people remove, so the honest claim is detection where a build exists, and a message where one does not.",
   "hooks": {
     "SessionStart": [
       {

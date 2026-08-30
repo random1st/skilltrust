@@ -61,14 +61,23 @@ skillctl marketplace sign ./acme-marketplace
 SkillTrust ships as a Claude Code plugin, so there is nothing to wire by hand:
 
 ```
-/plugin marketplace add acme/skilltrust
+/plugin marketplace add random1st/skilltrust
 /plugin install skilltrust@skilltrust
 ```
 
-The plugin puts `skillctl` on the session's `PATH` and brings its own hooks. Every hook is
-guarded by `command -v skillctl`, so a platform without a build degrades to one line at
-session start rather than a failing hook on every skill invocation — a security check that
-breaks the session is a security check people remove.
+Or install the two commands directly, which is what the hosted console's setup assumes:
+
+```bash
+brew install random1st/tap/skillctl        # skillctl and skilltrust-mcp
+claude mcp add skilltrust -- skilltrust-mcp
+```
+
+The plugin puts `skillctl` on the session's `PATH` and brings its own hooks. What is on PATH
+is a shim that picks the binary for the machine; builds ship for macOS and Linux on both
+architectures and for Windows on amd64. On anything else the shim prints where to get one and
+exits 0, so a session starts with a line rather than a failing hook on every skill invocation
+— a security check that breaks the session is a security check people remove. It also means
+the per-skill check allows rather than refuses there, which is the honest reading of exit 0.
 
 Then point it at the marketplace you want verified:
 

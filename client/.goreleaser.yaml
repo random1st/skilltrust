@@ -40,6 +40,36 @@ builds:
       - amd64
       - arm64
 
+  # The MCP server, shipped because the console tells people to run it.
+  #
+  # It was missing while two pages said `claude mcp add skilltrust -- skilltrust-mcp`, so
+  # the documented first run ended at a command that could not resolve. A release that omits
+  # half of what the onboarding names is not a partial release, it is a broken install path —
+  # and the half it omitted is the one an agent reaches for.
+  #
+  # Same flags as skillctl and for the same reason: a verifier you cannot rebuild is a
+  # verifier you have to trust.
+  - id: skilltrust-mcp
+    main: ./cmd/skilltrust-mcp
+    binary: skilltrust-mcp
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
 # A single macOS binary that runs on both Intel and Apple Silicon, so the cask does not
 # have to pick.
 universal_binaries:
@@ -54,11 +84,28 @@ universal_binaries:
       post:
         - ./scripts/sign-macos.sh "{{ .Path }}"
 
+  # The MCP server gets the same treatment, not because it is symmetrical but because an
+  # unsigned Mach-O downloaded from the internet is quarantined by Gatekeeper. Shipping one
+  # signed command beside one that refuses to start would be a worse first run than shipping
+  # neither, since the failure arrives after the person believes they are set up.
+  - id: skilltrust-mcp-macos
+    ids:
+      - skilltrust-mcp
+    replace: true
+    name_template: skilltrust-mcp
+    hooks:
+      post:
+        - ./scripts/sign-macos.sh "{{ .Path }}"
+
 archives:
+  # One archive carrying both commands, because they are installed together and a person
+  # who downloaded only half would meet the same dead end the console used to lead to.
   - id: skillctl
     ids:
       - skillctl
       - skillctl-macos
+      - skilltrust-mcp
+      - skilltrust-mcp-macos
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
       {{- if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
@@ -96,13 +143,34 @@ sboms:
 # the repository, and their integrity is covered by the checksums and the notarized Developer
 # ID signature. It comes back the moment the repository is public.
 
-# Homebrew is deferred until the licence is decided.
+# Homebrew, restored. It was deferred for a reason that expired.
 #
-# A cask can only serve a release the public can download, and this repository is private, so
-# publishing one would produce a tap whose every install fails with a 404 — worse than no tap,
-# because the failure looks like a broken tool rather than a closed door. Releases are GitHub
-# assets and `go install`; the cask block is in git history and comes back unchanged when the
-# licence question is answered.
+# The note that stood here said a cask can only serve a release the public can download, that
+# this repository was private, and that a tap would produce installs failing with a 404. Both
+# halves of that are gone: the repository went public on 2026-08-28 under Apache-2.0. Nobody
+# revisited the decision, so the console kept telling people to run
+# `brew install random1st/tap/skillctl` against a tap that has never contained it — which is
+# the same 404 the deferral was avoiding, arrived at from the other direction.
+#
+# Both commands are installed, because the onboarding names both and a person who followed it
+# and got half would meet the dead end one step later.
+homebrew_casks:
+  - name: skillctl
+    repository:
+      owner: random1st
+      name: homebrew-tap
+    homepage: https://github.com/random1st/skilltrust
+    description: Verify, restore and revoke the Agent Skills your organisation signed
+    # Both, named explicitly. The console tells people to run `skilltrust-mcp`, and a cask
+    # that linked only skillctl would put them one step further along before the same dead
+    # end.
+    binaries:
+      - skillctl
+      - skilltrust-mcp
+    # No quarantine dance. The macOS artifact is signed with a Developer ID and notarized,
+    # which is what makes it openable — a cask that stripped the attribute instead would be
+    # teaching people to bypass the check this project is in the business of selling.
+
 release:
   draft: true
   prerelease: auto

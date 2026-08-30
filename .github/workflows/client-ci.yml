@@ -80,6 +80,11 @@ jobs:
       # the property that actually matters: that they are executable, since a plugin's bin/
       # goes on PATH and a non-executable shim would resolve to nothing.
       - name: The Claude Code plugin assembles
+        # Not on Windows. The step ends by running ../plugin/bin/skillctl, which is the
+        # POSIX shim — there is a skillctl.cmd beside it for Windows, and the shim is not it.
+        # The neighbouring formatting step already carries this guard; this one did not, so
+        # the Windows leg of the matrix failed on a check that was never about Windows.
+        if: runner.os != 'Windows'
         run: |
           make plugin VERSION=ci
           test -x ../plugin/bin/skillctl
