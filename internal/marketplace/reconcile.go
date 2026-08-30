@@ -70,6 +70,11 @@ type Result struct {
 	// fourteen months.
 	Adapted      string    `json:"adapted,omitempty"`
 	AdaptedSince time.Time `json:"adapted_since,omitempty"`
+	// Lapsed marks a difference that used to be adopted and no longer is. A reporter must
+	// tell these two apart: after a plain edit, "adopt this to keep it" is the right
+	// advice; after a lapse the person's bytes are already in quarantine, so adopting now
+	// would adopt the publisher's copy — the opposite of what they wanted.
+	Lapsed bool `json:"lapsed,omitempty"`
 }
 
 // Options configures a reconciliation.
@@ -148,6 +153,7 @@ func reconcileOne(
 	if adoption, ok := options.Adopted.Find(snapshot.Name, managed.Name); ok {
 		switch {
 		case adoption.Local != digest:
+			result.Lapsed = true
 			result.Detail = "these are not the bytes that were adopted; they changed again since"
 		case adoption.From != managed.Digest:
 			// The published bytes win, because they are the ones that were signed and a
@@ -155,6 +161,7 @@ func reconcileOne(
 			// current. But "adopt again to keep it" was a lie: by the time anyone reads
 			// it, their copy has already been moved and the file on disk is upstream's.
 			// Say what happened and what it costs to get back.
+			result.Lapsed = true
 			result.Detail = "the publisher shipped a new version, so your copy was replaced " +
 				"by theirs and kept in quarantine. Re-apply your change to the new version " +
 				"and adopt that, if you still want it"

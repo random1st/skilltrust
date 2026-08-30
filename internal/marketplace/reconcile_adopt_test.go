@@ -322,3 +322,35 @@ func TestAdoptionAgainstEveryOtherMechanism(t *testing.T) {
 		}
 	})
 }
+
+// A plain edit and a lapsed adoption both end as "restored", and the advice differs
+// completely. After an edit, adopting keeps your version. After a lapse your bytes are
+// already in quarantine, so adopting now would adopt the publisher's copy — the opposite
+// of what you wanted. Anything reporting these has to be able to tell them apart.
+func TestALapsedAdoptionIsDistinguishableFromAPlainEdit(t *testing.T) {
+	home := t.TempDir()
+	published := "sha256:published"
+	mine := install(t, home, "acme", "runbook", "1.0.0", "ours\n")
+
+	plain := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published),
+		Options{ClaudeHome: home})
+	if plain[0].Lapsed {
+		t.Error("an edit nobody had adopted must not be reported as a lapse")
+	}
+
+	// Adopted, then edited again: not the bytes that were approved.
+	edited := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+		From: published, Local: "sha256:some-older-copy", Reason: "ours", Since: time.Now()})
+	if got := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published),
+		Options{ClaudeHome: home, Adopted: edited}); !got[0].Lapsed {
+		t.Error("bytes that changed after being adopted must be reported as a lapse")
+	}
+
+	// Adopted, then the publisher moved.
+	moved := Adoptions{}.Record(Adoption{Marketplace: "acme", Plugin: "runbook",
+		From: "sha256:the-version-i-patched", Local: mine, Reason: "ours", Since: time.Now()})
+	if got := Reconcile(snapshotOf("acme", "runbook", "1.0.0", published),
+		Options{ClaudeHome: home, Adopted: moved}); !got[0].Lapsed {
+		t.Error("a publisher shipping over an adoption must be reported as a lapse")
+	}
+}

@@ -185,8 +185,13 @@ func writeReconcileReport(
 		}
 		switch result.Outcome {
 		case marketplace.OutcomeRestored:
+			if result.Lapsed {
+				// Their copy is already in quarantine, so "adopt this" would adopt the
+				// publisher's bytes - the opposite of what they want. The detail above
+				// has already said what happened; all that helps here is the diff.
+				break
+			}
 			fmt.Printf("                this copy had been changed here and was put back\n")
-			fmt.Printf("                was     %s\n", result.OnDisk)
 			fmt.Printf("                to keep your version instead: "+
 				"skillctl adopt %s --because \"...\"\n", result.Plugin)
 		case marketplace.OutcomeAdapted:
@@ -203,6 +208,13 @@ func writeReconcileReport(
 		}
 		if result.Quarantine != "" {
 			fmt.Printf("                kept at %s\n", result.Quarantine)
+			// Both versions are on disk and nobody would guess the second path. Without
+			// this line, re-applying a patch across an upstream release is archaeology:
+			// find the quarantine directory, work out where the new copy landed, and
+			// diff them by hand. It is the difference between a chore and a paste.
+			fmt.Printf("                see what changed: diff -ru %s %s\n",
+				result.Quarantine,
+				marketplace.InstalledPath(claudeHome, result.Marketplace, result.Plugin, result.Version))
 		}
 	}
 

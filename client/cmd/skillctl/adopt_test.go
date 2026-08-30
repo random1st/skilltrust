@@ -108,3 +108,25 @@ func TestLosingYourWorkTellsYouHowToKeepIt(t *testing.T) {
 		}
 	}
 }
+
+// When the publisher ships a new version over somebody's patch, both versions end up on
+// disk and nobody would guess the second path. Without the diff line, re-applying a patch
+// across an upstream release is archaeology: find the quarantine directory, work out where
+// the new copy landed, compare them by hand. This is the one place the tool can turn that
+// into a paste, and it is the whole of what exists for keeping a patch across updates.
+func TestBeingReplacedShowsHowToSeeWhatChanged(t *testing.T) {
+	body, err := os.ReadFile("cmd/skillctl/sync.go")
+	if err != nil {
+		body, err = os.ReadFile("sync.go")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "diff -ru") {
+		t.Error("a replaced copy is reported without any way to see what changed")
+	}
+	if !strings.Contains(text, "marketplace.InstalledPath(") {
+		t.Error("the diff names no second path, so the reader still has to find it")
+	}
+}
