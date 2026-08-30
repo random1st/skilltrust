@@ -89,7 +89,7 @@ func runHookInstall(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	client := flags.String("client", "claude", "target client: claude or codex")
+	client := flags.String("client", "claude", "target client: claude, codex or cursor")
 	settings := flags.String("settings", "", "settings file to modify (default the client's user settings)")
 	apply := flags.Bool("apply", false, "write the change instead of printing it")
 	remove := flags.Bool("uninstall", false, "remove skillctl hooks instead of adding them")
@@ -114,6 +114,15 @@ func runHookInstall(args []string) int {
 			return fail(err)
 		}
 		fmt.Printf("removed %d hook%s from %s\n", removed, plural(removed, "", "s"), path)
+		return exitClean
+	}
+
+	// Asked for a client with no moment worth taking. Writing an entry anyway would produce
+	// the one state this project exists to prevent — a machine that looks configured and
+	// checks nothing — so it says what is true and writes nothing. Removal above still
+	// works, in case an earlier version put something there.
+	if target.Hooks == nil {
+		fmt.Printf("nothing to install for %s\n\n%s\n", target.Name, target.NoHooksBecause)
 		return exitClean
 	}
 

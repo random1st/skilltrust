@@ -127,6 +127,29 @@ installed rather than one that never fires. In exchange the session-start check 
 earlier than on Claude Code: the bytes are put back before the model has seen the list at
 all. What neither client gives is a re-check part-way through a session already running.
 
+**Cursor is known here, and gets no hook.** It installs nothing from a marketplace — it has
+no `plugins/cache` tree at all, so there is nothing for a check to put back or refuse, and an
+entry at its session start would walk an empty directory and print the same nothing as a
+machine where everything matched. Those two must not look alike, so none is installed:
+
+```bash
+skillctl hook install --client cursor    # says why, writes nothing
+skillctl lint                            # reads ~/.cursor/skills and .cursor/skills
+```
+
+Cursor is worth listing anyway for two reasons. Its skill directories — `~/.cursor/skills`
+and a repository's `.cursor/skills` — are now scanned like every other client's. And with
+third-party extensibility on, its default, Cursor also loads `~/.claude/skills` and
+`~/.codex/skills`, so a machine already set up for either of those is largely covered.
+
+One thing it does that looks like more than it is: Cursor reads Claude Code's
+`~/.claude/settings.json` and translates the hooks it finds — `SessionStart` to its own
+`sessionStart`, `PreToolUse` matchers `Bash`, `Read`, `Write` and `Edit` to its own. So the
+hook installed for Claude Code can also run inside Cursor. Do not count on it: that import is
+gated on a flag that arrives in Cursor's server configuration rather than from any file on
+your machine, and defaults to off. Whether it is on is not something this tool can observe,
+and a check you cannot confirm is running is not a check.
+
 Loose skills are read from `~/.agents/skills` — the cross-client location Codex and Amp both
 use — as well as each client's own `skills` directory.
 

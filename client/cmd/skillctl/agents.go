@@ -8,19 +8,22 @@ import (
 	"strings"
 )
 
-// An agent is a client that installs skills on this machine and can be asked to check them
+// An agent is a client that reads skills on this machine and can be asked to check them
 // before it runs.
 //
-// There is more than one now, and the second one cost almost nothing to support, because the
-// thing this tool actually needs from a client is small: a directory laid out as
-// <home>/plugins/cache/<marketplace>/<plugin>/<version>, and a moment before the session
-// starts where a command can run. Codex CLI has both, in the same shapes — it installs the
-// same plugins from the same marketplaces, `.claude-plugin/plugin.json` and all.
+// Two things were once assumed of every client and only one of them held. The first is a
+// directory of loose skills, which all three have. The second is a plugin cache laid out as
+// <home>/plugins/cache/<marketplace>/<plugin>/<version> fed by a signed marketplace — Claude
+// Code and Codex CLI both have it, in the same shapes, `.claude-plugin/plugin.json` and all,
+// and Cursor has neither a marketplace nor that tree. So the two capabilities are separate
+// fields rather than one notion of "supported", and a client can be known here for its skill
+// directories alone.
 //
-// What differs between clients is a home directory, the file hooks are configured in, and
-// which moments that client offers. Those three are what this type holds. Everything else —
-// digesting, verifying, restoring, reporting — never learns there is more than one client,
-// which is the property worth protecting as more are added.
+// What differs between clients is a home directory, the file hooks are configured in, which
+// moments that client offers, and whether anything centrally managed lives there. Those are
+// what this type holds. Everything else — digesting, verifying, restoring, reporting — never
+// learns there is more than one client, which is the property worth protecting as more are
+// added.
 type agent struct {
 	// Name is what a person types after --agent.
 	Name string
@@ -34,8 +37,19 @@ type agent struct {
 	HookConfig string
 	// SkillDir is where loose skills live, relative to the home.
 	SkillDir string
-	// Hooks are the moments this client offers that are worth taking.
+	// Managed reports whether this client installs plugins from a marketplace into
+	// <home>/plugins/cache, which is the only tree reconciling can act on.
+	//
+	// False means every skilltrust command that restores or revokes has nothing to work
+	// with here, and must say so instead of running and finding nothing.
+	Managed bool
+	// Hooks are the moments this client offers that are worth taking, and may be nil when
+	// there is nothing worth checking at any of them.
 	Hooks func(executable string) []hookSpec
+	// NoHooksBecause is required whenever Hooks is nil, and is what someone who asked to
+	// install one is told. "Nothing to install" on its own reads as a bug in this tool
+	// rather than a fact about their client.
+	NoHooksBecause string
 	// AfterInstall is what the person still has to do in the client itself. Empty when
 	// writing the file is the whole of it.
 	//
@@ -58,7 +72,7 @@ var agents = []agent{
 	{
 		Name: "claude", HomeDir: ".claude", HomeEnv: "CLAUDE_CONFIG_DIR",
 		HookConfig: "settings.json", SkillDir: "skills",
-		Hooks: claudeHooks,
+		Managed: true, Hooks: claudeHooks,
 	},
 	{
 		Name: "codex", HomeDir: ".codex", HomeEnv: "",
@@ -66,7 +80,7 @@ var agents = []agent{
 		// from ~/.codex/hooks.json, and writing them into config.toml instead would be
 		// configuration nobody reads.
 		HookConfig: "hooks.json", SkillDir: "skills",
-		Hooks: codexHooks,
+		Managed: true, Hooks: codexHooks,
 		// Codex records a trusted_hash per hook in config.toml under [hooks.state] and
 		// asks before running one it has not seen. Writing that hash from here would be
 		// this tool granting itself execution inside another tool, past the review that
@@ -76,6 +90,38 @@ var agents = []agent{
 			"will ask you to trust this one; until you do, nothing is checked.\n" +
 			"Approve it there rather than with --dangerously-bypass-hook-trust, which " +
 			"turns off the review for every hook, not this one.",
+	},
+	{
+		Name: "cursor", HomeDir: ".cursor", HomeEnv: "",
+		HookConfig: "hooks.json", SkillDir: "skills",
+		// Cursor installs nothing from a marketplace. It has no plugins/cache tree at all —
+		// its skills are the ones written into ~/.cursor/skills or committed to a repo's
+		// .cursor/skills, and there is no publisher whose signature they could be checked
+		// against. So it is listed for its skill directories and nothing else, and Hooks is
+		// deliberately nil: a sessionStart entry reconciling a cache that does not exist
+		// would be a hook that never fires, which is the failure the Codex work refused to
+		// ship and would be no better here.
+		//
+		// It is worth knowing what it does have, because the temptation is real. Cursor
+		// offers a native sessionStart hook in ~/.cursor/hooks.json, and separately reads
+		// Claude Code's ~/.claude/settings.json, translating SessionStart to its own
+		// sessionStart and PreToolUse matchers Bash, Read, Write and Edit to its own. That
+		// import is gated on claudeCodeHooksEnabled, which arrives in the server config
+		// response rather than from any file here and defaults to off — so whether the hook
+		// this tool wrote for Claude Code also runs in Cursor is not a fact this machine can
+		// observe. Claiming it does would be a promise held by somebody else's feature flag.
+		//
+		// The one thing that is both true and useful: with third-party extensibility on, its
+		// default, Cursor also loads ~/.claude/skills and ~/.codex/skills — directories
+		// skillRoots already covers, so a machine scanned for Claude Code is largely
+		// scanned for Cursor too.
+		Managed: false, Hooks: nil,
+		NoHooksBecause: "Cursor installs no plugins from a marketplace, so there is nothing " +
+			"here for a check to put back or refuse.\n" +
+			"Its skills are the ones in ~/.cursor/skills and a repository's .cursor/skills; " +
+			"those are covered by skillctl lint, which reads them without a hook.\n" +
+			"Cursor also loads ~/.claude/skills and ~/.codex/skills, so a machine set up for " +
+			"either of those is already largely covered here.",
 	},
 }
 
@@ -90,8 +136,9 @@ func lookupAgent(name string) (agent, error) {
 		names = append(names, known.Name)
 	}
 	sort.Strings(names)
-	return agent{}, fmt.Errorf("unknown agent %q; skillctl knows %s",
-		name, strings.Join(names, " and "))
+	last := len(names) - 1
+	return agent{}, fmt.Errorf("unknown agent %q; skillctl knows %s and %s",
+		name, strings.Join(names[:last], ", "), names[last])
 }
 
 // Home is where this client keeps its plugins on this machine.

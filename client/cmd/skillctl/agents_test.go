@@ -120,11 +120,11 @@ func TestEachClientIsConfiguredWhereItReads(t *testing.T) {
 // typo that installs a hook for the wrong agent produces a machine that reports nothing
 // and looks configured.
 func TestAnUnknownClientIsRefusedAndNamesWhatExists(t *testing.T) {
-	_, err := lookupAgent("cursor")
+	_, err := lookupAgent("claude-code")
 	if err == nil {
 		t.Fatal("an unsupported client must be refused, not defaulted")
 	}
-	for _, expected := range []string{"cursor", "claude", "codex"} {
+	for _, expected := range []string{"claude-code", "claude", "codex", "cursor"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("the refusal must mention %q, got %v", expected, err)
 		}
@@ -157,6 +157,7 @@ func TestSkillRootsCoverEveryClientsOwnDirectory(t *testing.T) {
 		filepath.Join(".agents", "skills"),
 		filepath.Join(".claude", "skills"),
 		filepath.Join(".codex", "skills"),
+		filepath.Join(".cursor", "skills"),
 	} {
 		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -164,9 +165,62 @@ func TestSkillRootsCoverEveryClientsOwnDirectory(t *testing.T) {
 	}
 
 	found := strings.Join(skillRoots(), " ")
-	for _, expected := range []string{".agents/skills", ".claude/skills", ".codex/skills"} {
+	for _, expected := range []string{
+		".agents/skills", ".claude/skills", ".codex/skills", ".cursor/skills",
+	} {
 		if !strings.Contains(filepath.ToSlash(found), expected) {
 			t.Errorf("%s is not scanned; roots were %s", expected, found)
+		}
+	}
+}
+
+// Cursor installs nothing from a marketplace — verified against cursor-agent 2026.01.28,
+// whose bundle has no plugins/cache path and no marketplace of any kind. So reconciling has
+// nothing to act on, and the entry that would have run at its session start must not exist:
+// a hook that walks an empty tree prints the same nothing as a machine where everything
+// matched, and the two would be indistinguishable to the person relying on it.
+//
+// This is the same refusal the Codex work made about a PreToolUse matcher that would never
+// fire, and it is worth a test rather than a comment because the pressure to add the entry
+// comes back every time somebody notices Cursor does have a sessionStart hook. It does. What
+// it does not have is anything for that hook to check.
+func TestCursorIsNotGivenAHookItHasNothingToCheckWith(t *testing.T) {
+	cursor, err := lookupAgent("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.Managed {
+		t.Error("Cursor has no <home>/plugins/cache; claiming otherwise makes " +
+			"reconciling walk a tree that is not there")
+	}
+	if cursor.Hooks != nil {
+		t.Fatal("Cursor has no plugin cache, so an entry at any of its moments would be " +
+			"a check that can never report anything")
+	}
+
+	// And whoever asks for one is told why, in terms of their client rather than ours.
+	// "Nothing to install" alone reads as a bug in this tool.
+	for _, expected := range []string{"marketplace", "skillctl lint", ".cursor/skills"} {
+		if !strings.Contains(cursor.NoHooksBecause, expected) {
+			t.Errorf("the explanation must mention %q, got:\n%s", expected, cursor.NoHooksBecause)
+		}
+	}
+}
+
+// Every agent without hooks owes an explanation, and every agent with them owes none. The
+// pairing is what stops a future client being added with Hooks left nil by oversight and
+// printing an empty line where a reason belongs.
+func TestAnAgentWithNoHooksSaysWhy(t *testing.T) {
+	for _, known := range agents {
+		if known.Hooks == nil && known.NoHooksBecause == "" {
+			t.Errorf("%s has no hooks and does not say why", known.Name)
+		}
+		if known.Hooks != nil && known.NoHooksBecause != "" {
+			t.Errorf("%s has hooks; explaining their absence would be false", known.Name)
+		}
+		if !known.Managed && known.Hooks != nil {
+			t.Errorf("%s installs nothing from a marketplace, so its hook would "+
+				"reconcile an empty tree", known.Name)
 		}
 	}
 }

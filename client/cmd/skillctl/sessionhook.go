@@ -45,6 +45,16 @@ func runHookSessionStart(args []string) int {
 	if err := parseArgs(flags, args); err != nil {
 		return exitClean
 	}
+	// Reconciling reads <home>/plugins/cache, so a client that installs nothing from a
+	// marketplace would produce an empty walk and the same silence as a clean machine. The
+	// two must not look alike: "checked, nothing had changed" is safe to read as fine and
+	// "there was never anything here to check" is a different sentence.
+	if known, err := lookupAgent(*agentName); err == nil && !known.Managed {
+		fmt.Fprintf(os.Stderr, "skillctl: %s installs no plugins from a marketplace, so "+
+			"there is nothing here to reconcile\n", known.Name)
+		return exitClean
+	}
+
 	home, err := resolveAgentHome(*agentName, *claudeHome)
 	if err != nil {
 		// A hook that fails loudly at the start of every session is a hook people remove,
