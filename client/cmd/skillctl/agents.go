@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,15 @@ type agent struct {
 	HookConfig string
 	// SkillDir is where loose skills live, relative to the home.
 	SkillDir string
+	// ExtraRoots finds skill directories this client reads that no fixed path names,
+	// given one base to look under — the working directory or the home. Nil for a client
+	// whose skills are only ever in SkillDir.
+	//
+	// It exists because Antigravity CLI lets a repository register skills anywhere through
+	// a skills.json, so the set of directories it reads is not knowable from a table. A
+	// scanner that reported on SkillDir alone would describe a different machine than the
+	// agent runs on, and would do it silently.
+	ExtraRoots func(base string) []string
 	// Managed reports whether this client installs plugins from a marketplace into
 	// <home>/plugins/cache, which is the only tree reconciling can act on.
 	//
@@ -123,6 +133,126 @@ var agents = []agent{
 			"Cursor also loads ~/.claude/skills and ~/.codex/skills, so a machine set up for " +
 			"either of those is already largely covered here.",
 	},
+	{
+		Name: "antigravity", HomeDir: ".gemini", HomeEnv: "",
+		// Its global customization root is ~/.gemini/config, which holds hooks.json,
+		// mcp_config.json and skills/. Verified against agy 1.1.15's own strings rather
+		// than the migration page, which names a different directory.
+		HookConfig: filepath.Join("config", "hooks.json"),
+		SkillDir:   filepath.Join("config", "skills"),
+		ExtraRoots: antigravityRoots,
+		// Antigravity has plugins, and they are not the plugins this tool reconciles.
+		// `agy plugin install` accepts plugin@marketplace, but what lands on disk is
+		// plugins/<name>/plugin.json inside a customization root — no marketplace in the
+		// path, no version, and the manifest at the directory root rather than under
+		// .claude-plugin. Reconciling keys on (marketplace, plugin, version) and could not
+		// identify an installed copy here, so there is nothing for a check to put back.
+		Managed: false, Hooks: nil,
+		NoHooksBecause: "Antigravity installs plugins as plugins/<name>/ inside a " +
+			"customization root, recording neither which marketplace they came from nor " +
+			"which version, so there is nothing here a check could put back or refuse.\n" +
+			"Its skills — .agents/skills, ~/.gemini/config/skills, and anything a " +
+			"skills.json registers — are covered by skillctl lint, which reads them " +
+			"without a hook.\n" +
+			"It offers no session-start moment either: the events are PreToolUse, " +
+			"PostToolUse, PreInvocation, PostInvocation and Stop, and the first two run on " +
+			"every tool call rather than once.",
+	},
+}
+
+// antigravityRoots finds the skill directories a skills.json registers under base.
+//
+// Antigravity discovers skills from `.agents/skills` and `~/.gemini/config/skills`, both of
+// which the table already covers — and from `entries[].path` in a skills.json, which may
+// point anywhere: absolute, ~/-relative, or relative to the repository root. A team that
+// keeps its skills in tools/agents/skills and registers them this way is the documented
+// way to share them, so a scanner that only knew the fixed paths would report on a machine
+// nobody is running.
+//
+// include_only and exclude are deliberately not applied. They are regular expressions over
+// skill directory names inside a root, and this returns roots; honouring them would mean
+// carrying per-root filters through every caller. The cost of ignoring them is scanning a
+// skill Antigravity would skip, which is noise. The cost of the other error — missing a
+// root — is a silent gap, and between the two the choice is not close.
+func antigravityRoots(base string) []string {
+	var found []string
+	for _, config := range []string{
+		filepath.Join(base, ".agents", "skills.json"),
+		filepath.Join(base, ".gemini", "config", "skills.json"),
+	} {
+		found = append(found, readSkillsConfig(config, base, map[string]bool{}, 0)...)
+	}
+	return found
+}
+
+// readSkillsConfig resolves one skills.json, following the configs it inherits.
+//
+// Inheritance is followed rather than skipped: a shared config is how an organisation
+// distributes the paths, so stopping at the first file would miss exactly the machines with
+// the most skills on them. depth and seen bound it — a config that inherits itself is a
+// hang in a command that runs at session start, and a malformed file must cost nothing.
+func readSkillsConfig(path, base string, seen map[string]bool, depth int) []string {
+	const maxDepth = 8
+	resolved, err := filepath.Abs(path)
+	if err != nil || depth > maxDepth || seen[resolved] {
+		return nil
+	}
+	seen[resolved] = true
+
+	raw, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil
+	}
+	var document struct {
+		Inherits []struct {
+			Path string `json:"path"`
+		} `json:"inherits"`
+		Entries []struct {
+			Path string `json:"path"`
+		} `json:"entries"`
+	}
+	// A skills.json this cannot parse is Antigravity's problem to report, not ours to fail
+	// on: every command that walks skill roots would otherwise stop on somebody's typo.
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil
+	}
+
+	var roots []string
+	for _, parent := range document.Inherits {
+		if parent.Path == "" {
+			continue
+		}
+		roots = append(roots, readSkillsConfig(
+			resolveConfigPath(parent.Path, base), base, seen, depth+1)...)
+	}
+	for _, entry := range document.Entries {
+		if entry.Path == "" {
+			continue
+		}
+		candidate := resolveConfigPath(entry.Path, base)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
+}
+
+// resolveConfigPath applies the three rules Antigravity documents: absolute stays absolute,
+// ~/ is the home directory, and anything else is relative to the repository root — which
+// here is the base the config was found under.
+func resolveConfigPath(path, base string) string {
+	switch {
+	case filepath.IsAbs(path):
+		return path
+	case strings.HasPrefix(path, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	default:
+		return filepath.Join(base, path)
+	}
 }
 
 func lookupAgent(name string) (agent, error) {

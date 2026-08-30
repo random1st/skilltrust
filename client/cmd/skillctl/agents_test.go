@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -124,7 +125,7 @@ func TestAnUnknownClientIsRefusedAndNamesWhatExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unsupported client must be refused, not defaulted")
 	}
-	for _, expected := range []string{"claude-code", "claude", "codex", "cursor"} {
+	for _, expected := range []string{"claude-code", "claude", "codex", "cursor", "antigravity"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("the refusal must mention %q, got %v", expected, err)
 		}
@@ -158,6 +159,7 @@ func TestSkillRootsCoverEveryClientsOwnDirectory(t *testing.T) {
 		filepath.Join(".claude", "skills"),
 		filepath.Join(".codex", "skills"),
 		filepath.Join(".cursor", "skills"),
+		filepath.Join(".gemini", "config", "skills"),
 	} {
 		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -167,6 +169,7 @@ func TestSkillRootsCoverEveryClientsOwnDirectory(t *testing.T) {
 	found := strings.Join(skillRoots(), " ")
 	for _, expected := range []string{
 		".agents/skills", ".claude/skills", ".codex/skills", ".cursor/skills",
+		".gemini/config/skills",
 	} {
 		if !strings.Contains(filepath.ToSlash(found), expected) {
 			t.Errorf("%s is not scanned; roots were %s", expected, found)
@@ -222,6 +225,104 @@ func TestAnAgentWithNoHooksSaysWhy(t *testing.T) {
 			t.Errorf("%s installs nothing from a marketplace, so its hook would "+
 				"reconcile an empty tree", known.Name)
 		}
+	}
+}
+
+// Antigravity CLI lets a repository register skills anywhere. `.agents/skills.json` names
+// directories with `entries[].path`, and that is the documented way a team shares them — so
+// the set of directories the agent reads is a property of the machine, not of our table.
+//
+// This is the failure the scanner already made once with a different cause: reporting on one
+// root while others existed, and being believed. A team whose skills live in
+// tools/agents/skills would have been told their machine was clean by a command that never
+// opened the directory.
+func TestSkillsRegisteredThroughAntigravityConfigAreFound(t *testing.T) {
+	base := t.TempDir()
+	elsewhere := filepath.Join(base, "tools", "agents", "skills")
+	shared := filepath.Join(base, "vendor", "shared-skills")
+	for _, dir := range []string{elsewhere, shared, filepath.Join(base, ".agents")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A config that inherits another. Inheritance is followed because a shared config is
+	// how an organisation distributes these paths, so stopping at the first file would miss
+	// exactly the machines carrying the most skills.
+	write := func(path, body string) {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(base, "team-skills.json"),
+		`{"entries":[{"path":"vendor/shared-skills"}]}`)
+	write(filepath.Join(base, ".agents", "skills.json"), `{
+	  "inherits": [{"path": "team-skills.json"}],
+	  "entries": [
+	    {"path": "tools/agents/skills"},
+	    {"path": "tools/agents/does-not-exist"}
+	  ]
+	}`)
+
+	found := antigravityRoots(base)
+	for _, expected := range []string{elsewhere, shared} {
+		if !slices.Contains(found, expected) {
+			t.Errorf("%s is registered but was not found; got %v", expected, found)
+		}
+	}
+	// A path that names nothing must not be reported as a directory that was scanned.
+	for _, root := range found {
+		if strings.Contains(root, "does-not-exist") {
+			t.Errorf("a path pointing at nothing was returned as a root: %s", root)
+		}
+	}
+}
+
+// A skills.json that inherits itself must not hang the command that reads it, and one that
+// is not valid JSON must cost nothing. Both run at session start, where a hang is
+// indistinguishable from a broken client and a crash gets the tool removed.
+func TestABrokenAntigravityConfigCostsNothing(t *testing.T) {
+	for name, body := range map[string]string{
+		"inherits itself":  `{"inherits":[{"path":".agents/skills.json"}],"entries":[]}`,
+		"not valid JSON":   `{"entries": [`,
+		"empty document":   `{}`,
+		"paths are absent": `{"entries":[{"path":""}],"inherits":[{"path":""}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(base, ".agents"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(
+				filepath.Join(base, ".agents", "skills.json"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// The assertion is that this returns at all.
+			if roots := antigravityRoots(base); len(roots) != 0 {
+				t.Errorf("a config naming nothing produced roots: %v", roots)
+			}
+		})
+	}
+}
+
+// The three path rules Antigravity documents, each of which a naive filepath.Join gets
+// wrong in a different way.
+func TestAntigravityPathsResolveTheWayItDocuments(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory here")
+	}
+	cases := map[string]struct{ given, want string }{
+		"absolute stays absolute": {"/opt/skills", "/opt/skills"},
+		"tilde is the home":       {"~/personal-skills", filepath.Join(home, "personal-skills")},
+		"bare is workspace":       {"tools/skills", filepath.Join("/repo", "tools", "skills")},
+	}
+	for name, one := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := resolveConfigPath(one.given, "/repo"); got != one.want {
+				t.Errorf("resolveConfigPath(%q) = %q, want %q", one.given, got, one.want)
+			}
+		})
 	}
 }
 

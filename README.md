@@ -150,6 +150,36 @@ gated on a flag that arrives in Cursor's server configuration rather than from a
 your machine, and defaults to off. Whether it is on is not something this tool can observe,
 and a check you cannot confirm is running is not a check.
 
+**Antigravity CLI is known here, and also gets no hook.** It has plugins, and they are not
+the plugins this tool reconciles. `agy plugin install` accepts `plugin@marketplace`, but what
+lands on disk is `plugins/<name>/plugin.json` inside a customization root — no marketplace in
+the path, no version, and the manifest at the directory root rather than under
+`.claude-plugin`. Reconciling keys on marketplace, plugin and version, so it could not
+identify an installed copy here. There is also no session-start moment: the events are
+`PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation` and `Stop`, and the first two
+run on every tool call rather than once.
+
+What Antigravity does need is a scanner that can find its skills at all:
+
+```bash
+skillctl lint    # reads .agents/skills, ~/.gemini/config/skills,
+                 # and every directory a skills.json registers
+```
+
+That last clause is the reason this client was worth adding. A repository can register skill
+directories anywhere through `.agents/skills.json` — absolute, `~/`-relative, or relative to
+the repository root — and committing one is the documented way a team shares skills. So the
+set of directories the agent reads is a property of the machine rather than of any table
+here, and a scanner that knew only the fixed paths would have told a team whose skills live
+in `tools/agents/skills` that their machine was clean without ever opening the directory.
+Configs that `inherit` from other configs are followed, because a shared config is how an
+organisation distributes those paths.
+
+One thing it does not do: `include_only` and `exclude` in a `skills.json` are not applied.
+They are regular expressions over skill names inside a root, and this resolves roots. The
+cost is scanning a skill Antigravity would skip, which is noise; the other error would be a
+silent gap.
+
 Loose skills are read from `~/.agents/skills` — the cross-client location Codex and Amp both
 use — as well as each client's own `skills` directory.
 

@@ -53,6 +53,16 @@ func skillRoots() []string {
 				roots = append(roots, candidate)
 			}
 		}
+		// And the directories no fixed path can name. Antigravity CLI lets a repository
+		// register skills anywhere through a skills.json, so for that client the set is a
+		// property of the machine rather than of this table. Asking the client keeps the
+		// knowledge beside the client, which is the whole point of the table.
+		for _, known := range agents {
+			if known.ExtraRoots == nil {
+				continue
+			}
+			roots = append(roots, known.ExtraRoots(base)...)
+		}
 	}
 	return roots
 }
