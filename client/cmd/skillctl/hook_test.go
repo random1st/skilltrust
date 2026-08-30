@@ -98,7 +98,7 @@ func TestHookInstallIsIdempotentAndReversible(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"model":"opus","hooks":{"SessionStart":[]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	specs := clientHooks("/usr/local/bin/skillctl")
+	specs := claudeHooks("/usr/local/bin/skillctl")
 
 	added, err := applyClaudeHooks(path, specs)
 	if err != nil || len(added) != 1 {

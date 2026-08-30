@@ -40,10 +40,14 @@ func defaultAdoptions() string   { return homePath("adopted.json") }
 func skillRoots() []string {
 	var roots []string
 	for _, base := range baseDirectories() {
-		for _, suffix := range []string{
-			filepath.Join(".agents", "skills"),
-			filepath.Join(".claude", "skills"),
-		} {
+		// `.agents/skills` first: it is the cross-client location, and Codex and Amp both
+		// read it alongside their own. The per-client ones follow, one per known agent, so
+		// adding a client to the table in agents.go is the whole change.
+		suffixes := []string{filepath.Join(".agents", "skills")}
+		for _, known := range agents {
+			suffixes = append(suffixes, filepath.Join(known.HomeDir, known.SkillDir))
+		}
+		for _, suffix := range suffixes {
 			candidate := filepath.Join(base, suffix)
 			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 				roots = append(roots, candidate)

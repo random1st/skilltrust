@@ -97,6 +97,39 @@ after fetching, and `.in_use` is a directory of session locks — one file per l
 holding the plugin. The signed tree is laid down fresh and those entries are carried across
 whole, so a restore does not break a plugin's dependencies or drop a running session's lock.
 
+### More than one client
+
+Codex CLI installs the same plugins, from the same marketplaces, into the same layout —
+`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>`, `.claude-plugin/plugin.json` and
+all — and reads hooks from JSON with the same shape under the same event names. So it is
+checked the same way:
+
+```bash
+skillctl hook install --client codex --apply   # writes ~/.codex/hooks.json
+skillctl sync --agent codex --report-only      # or check by hand
+```
+
+Two differences are worth knowing before you rely on it.
+
+**Codex reviews hooks before it runs them.** It keeps a `trusted_hash` per hook in
+`config.toml` and asks about anything it has not seen. Writing the entry is therefore not
+the end of the job: until you approve it in Codex, nothing is checked. `skillctl` says so
+after installing and deliberately does not write that hash itself — a tool that granted
+itself execution inside another tool, past the review that client added on purpose, would
+be doing the thing this project exists to catch. Approve the hook rather than reaching for
+`--dangerously-bypass-hook-trust`, which turns the review off for every hook you have.
+
+**There is no per-skill check, because Codex has no per-skill moment.** It does not route a
+skill through a tool call: it lists every available skill — name, description, path — in the
+developer message it builds when the session starts, and the model then reads the `SKILL.md`
+itself. There is no `PreToolUse` matcher meaning "a skill is about to load", so none is
+installed rather than one that never fires. In exchange the session-start check lands
+earlier than on Claude Code: the bytes are put back before the model has seen the list at
+all. What neither client gives is a re-check part-way through a session already running.
+
+Loose skills are read from `~/.agents/skills` — the cross-client location Codex and Amp both
+use — as well as each client's own `skills` directory.
+
 ## What is deliberate
 
 **Only signed plugins.** The marketplace decides the set, under a signature; a machine never

@@ -175,16 +175,18 @@ func runSync(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	claudeHome := flags.String("claude-home", "", "Claude Code directory (default ~/.claude)")
+	agentName := flags.String("agent", "claude", "which client's plugins to check: claude or codex")
+	claudeHome := flags.String("claude-home", "", "the client's directory (default the agent's own)")
 	offline := flags.Bool("offline", false, "use the marketplaces already fetched")
 	report := flags.Bool("report-only", false, "say what differs without putting anything back")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
-	home := *claudeHome
-	if home == "" {
-		home = marketplace.DefaultClaudeHome()
+	home, err := resolveAgentHome(*agentName, *claudeHome)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitUsage
 	}
 
 	if subscriptions, err := loadSubscriptions(); err == nil && len(subscriptions) == 0 {

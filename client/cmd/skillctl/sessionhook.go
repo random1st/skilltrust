@@ -37,16 +37,20 @@ func runHookSessionStart(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	claudeHome := flags.String("claude-home", "", "Claude Code directory (default ~/.claude)")
+	agentName := flags.String("agent", "claude", "which client's plugins to check: claude or codex")
+	claudeHome := flags.String("claude-home", "", "the client's directory (default the agent's own)")
 	verbose := flags.Bool("verbose", false, "also report when everything already matched")
 	fetch := flags.Bool("fetch", false, "refresh first; adds network latency to the session")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitClean
 	}
-	home := *claudeHome
-	if home == "" {
-		home = marketplace.DefaultClaudeHome()
+	home, err := resolveAgentHome(*agentName, *claudeHome)
+	if err != nil {
+		// A hook that fails loudly at the start of every session is a hook people remove,
+		// so this reports and stands aside rather than taking the session down with it.
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		return exitClean
 	}
 
 	subscriptions, err := loadSubscriptions()

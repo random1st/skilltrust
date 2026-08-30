@@ -61,25 +61,10 @@ func claudeSettings(explicit string) (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-// clientHooks are the two checks, at the two moments that answer different questions.
-//
-// SessionStart reports what changed while nobody was looking. It cannot refuse anything —
-// the documented behaviour is that its output is shown to the user only — so it is an
-// awareness notice and nothing more.
-//
-// PreToolUse fires immediately before a skill's instructions are loaded, receives the skill
-// name in tool_input, and is the one event here that can deny. That is the moment worth
-// checking: between "these bytes changed" and "these bytes are about to become instructions
-// executed with your credentials" lies the entire difference the tool is for.
-//
-// Neither is enforcement on a laptop. Anything able to edit a skill can edit these lines,
-// and a hook that times out does not block. The claim is detection, at a useful moment.
-func clientHooks(executable string) []hookSpec {
-	return []hookSpec{{
-		Event: "SessionStart", Matcher: "", Command: executable + " hook session-start",
-		Why: "restores any centrally managed skill changed here, and says so",
-	}}
-}
+// Which hooks a client gets, and why, now lives beside the client it belongs to, in
+// agents.go. None of them is enforcement on a laptop: anything able to edit a skill can
+// edit these lines, and a hook that times out does not block. The claim is detection, at a
+// useful moment.
 
 func executablePath() string {
 	path, err := os.Executable()
@@ -104,7 +89,7 @@ func runHookInstall(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	client := flags.String("client", "claude", "target client: claude")
+	client := flags.String("client", "claude", "target client: claude or codex")
 	settings := flags.String("settings", "", "settings file to modify (default the client's user settings)")
 	apply := flags.Bool("apply", false, "write the change instead of printing it")
 	remove := flags.Bool("uninstall", false, "remove skillctl hooks instead of adding them")
@@ -112,14 +97,15 @@ func runHookInstall(args []string) int {
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
-	if *client != "claude" {
-		fmt.Fprintf(os.Stderr, "skillctl: unsupported --client %q\n", *client)
+	target, err := lookupAgent(*client)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
 	}
 
-	path, err := claudeSettings(*settings)
-	if err != nil {
-		return fail(err)
+	path := *settings
+	if path == "" {
+		path = target.HookConfigPath()
 	}
 
 	if *remove {
@@ -131,7 +117,7 @@ func runHookInstall(args []string) int {
 		return exitClean
 	}
 
-	specs := clientHooks(executablePath())
+	specs := target.Hooks(executablePath())
 
 	if !*apply {
 		fmt.Printf("Add to %s:\n\n", path)
@@ -139,7 +125,11 @@ func runHookInstall(args []string) int {
 			encoded, _ := json.MarshalIndent(spec.entry(), "  ", "  ")
 			fmt.Printf("  under hooks.%s — %s\n  %s\n\n", spec.Event, spec.Why, encoded)
 		}
-		fmt.Printf("Apply automatically with: skillctl hook install --apply\n")
+		if target.AfterInstall != "" {
+			fmt.Printf("%s\n\n", target.AfterInstall)
+		}
+		fmt.Printf("Apply automatically with: skillctl hook install --client %s --apply\n",
+			target.Name)
 		return exitClean
 	}
 
@@ -155,9 +145,24 @@ func runHookInstall(args []string) int {
 		fmt.Printf("installed   %s\n", spec.Event)
 	}
 	fmt.Printf("into        %s\n", path)
-	fmt.Printf("backup      %s.skillctl-backup\n", path)
-	fmt.Printf("\nUndo with: skillctl hook install --uninstall\n")
+	// Only when there is one. A first install has nothing to back up, and printing the
+	// line anyway offers a file to copy back that does not exist — a small lie, in the
+	// output of a tool whose entire claim is that it does not overstate what it did.
+	if backup := path + ".skillctl-backup"; fileExists(backup) {
+		fmt.Printf("backup      %s\n", backup)
+	}
+	// Before the undo line, because what is still outstanding matters more than how to
+	// reverse it, and the last thing printed is the part people read.
+	if target.AfterInstall != "" {
+		fmt.Printf("\n%s\n", target.AfterInstall)
+	}
+	fmt.Printf("\nUndo with: skillctl hook install --client %s --uninstall\n", target.Name)
 	return exitClean
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // hookSpec is one entry to place in a client's settings.
@@ -261,6 +266,18 @@ func removeClaudeHooks(path, needle string) (int, error) {
 // makes to a file it does not own can be undone by copying one file back.
 func readSettings(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		// A client that has never had a hook configured has no file to read, and that is
+		// the ordinary first install rather than an error. Codex keeps its hooks in a
+		// dedicated hooks.json which simply does not exist until something writes one; the
+		// first person to try this got "cannot read … no such file or directory" and a
+		// working client that looked broken. No backup is written, because there is
+		// nothing yet to lose.
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", path, err)
 	}
