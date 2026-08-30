@@ -59,7 +59,7 @@ func TestEverySkillIsCheckedAgainstTheStore(t *testing.T) {
 	}); code != exitClean {
 		t.Fatalf("sign = %d", code)
 	}
-	if _, err := os.Stat(attest.StorePath(homePath(attest.StoreDirectory), "deploy")); err != nil {
+	if _, err := os.Stat(attest.StorePath(homePath(attest.StoreDirectory), "deploy", skill)); err != nil {
 		t.Fatalf("--store did not fill the store, which is how it stayed empty: %v", err)
 	}
 
@@ -172,7 +172,9 @@ func TestAnAttestationThatDoesNotVerifyIsReported(t *testing.T) {
 	if err := os.MkdirAll(store, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(attest.StorePath(store, "tampered"),
+	// Written under the legacy name-only key on purpose: the store loads every .json it
+	// holds, so files from before per-copy keying keep working — including broken ones.
+	if err := os.WriteFile(filepath.Join(store, "tampered.att.json"),
 		[]byte(`{"payload":"eyJub3BlIjoxfQ==","payloadType":"application/vnd.skilltrust+json",`+
 			`"signatures":[{"keyid":"sha256:00","sig":"AA=="}]}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -194,6 +196,48 @@ func TestAnAttestationThatDoesNotVerifyIsReported(t *testing.T) {
 	}
 }
 
+// Two different skills wearing one name can each hold an approval. The store used to be
+// keyed by name alone, and this exact thing happened on a real machine: approving a
+// vendor-shipped skill-creator silently destroyed the owner's approval of their own, and
+// re-signing to fix it just moved the loss to the other copy — a loop with no exit.
+func TestTwoSkillsSharingANameEachKeepTheirApproval(t *testing.T) {
+	home := pinnedKeyMachine(t)
+	mine := writeSkill(t, home, "creator",
+		"---\nname: creator\ndescription: mine\n---\n\nMine.\n")
+	vendor := writeSkill(t, home, "creator-vendor",
+		"---\nname: creator\ndescription: shipped by the client\n---\n\nTheirs.\n")
+
+	for _, skill := range []string{mine, vendor} {
+		if code := runAttestSign([]string{
+			skill, "--key", filepath.Join(home, "signer.key"),
+			"--as", "someone@example.com", "--store",
+		}); code != exitClean {
+			t.Fatalf("sign %s = %d", skill, code)
+		}
+	}
+
+	store := homePath(attest.StoreDirectory)
+	for _, skill := range []string{mine, vendor} {
+		if _, err := os.Stat(attest.StorePath(store, "creator", skill)); err != nil {
+			t.Fatalf("signing the second skill destroyed the first one's approval: %v", err)
+		}
+	}
+
+	t.Chdir(home)
+	if code := runAttestVerify(nil); code != exitClean {
+		t.Fatalf("two approved skills sharing a name must both verify; exit = %d", code)
+	}
+
+	// And a change to either is still caught — the shared name must not widen what passes.
+	if err := os.WriteFile(filepath.Join(vendor, "SKILL.md"),
+		[]byte("---\nname: creator\ndescription: shipped by the client\n---\n\nEdited.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runAttestVerify(nil); code != exitFindings {
+		t.Fatalf("a changed copy must not hide behind its twin's approval; exit = %d", code)
+	}
+}
+
 // --store on its own means the store, not the store as well. The first version always wrote
 // the file beside the skill and treated --store as an extra copy, which forced an .att.json
 // into a skills tree that had never held one — litter left behind to record something the
@@ -211,7 +255,7 @@ func TestStoreOnItsOwnDoesNotLitterTheSkillsTree(t *testing.T) {
 	if _, err := os.Stat(attest.DefaultName(skill)); err == nil {
 		t.Error("--store alone must not write beside the skill")
 	}
-	if _, err := os.Stat(attest.StorePath(homePath(attest.StoreDirectory), "tidy")); err != nil {
+	if _, err := os.Stat(attest.StorePath(homePath(attest.StoreDirectory), "tidy", skill)); err != nil {
 		t.Fatalf("--store must write the store: %v", err)
 	}
 

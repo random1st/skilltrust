@@ -205,11 +205,13 @@ func runAttestSign(args []string) int {
 	}
 
 	if *store {
-		directory := homePath(attest.StoreDirectory)
-		if err := os.MkdirAll(directory, 0o700); err != nil {
+		storeDir := homePath(attest.StoreDirectory)
+		if err := os.MkdirAll(storeDir, 0o700); err != nil {
 			return fail(err)
 		}
-		kept := attest.StorePath(directory, signed.Subject.Name)
+		// Keyed by name and place, so approving this skill cannot silently destroy the
+		// approval of a different skill that happens to share its name.
+		kept := attest.StorePath(storeDir, signed.Subject.Name, directory)
 		if err := envelope.Save(kept); err != nil {
 			return fail(err)
 		}
@@ -352,12 +354,12 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
 
-	// Grouped by name before anything is judged, because the store is keyed by name and a
-	// machine can hold two different skills called the same thing — this one does, with an
-	// adapty-cli in ~/.agents/skills and another in ~/.codex/skills carrying different
-	// files. One approval cannot describe both. Reporting the loser as "changed" would
-	// accuse it of drifting from an approval that was never about it, and re-signing to
-	// clear the accusation just moves it to the other copy: a loop with no exit.
+	// Grouped by name before anything is judged, because a machine can hold two different
+	// skills called the same thing — this one does, with an adapty-cli in ~/.agents/skills
+	// and another in ~/.codex/skills carrying different files. Approvals are matched to
+	// copies by digest, so each copy can hold its own; the grouping is what lets an
+	// unapproved copy of a shared name be reported as "same name, not approved" rather
+	// than accused of drifting from an approval that was never about it.
 	type candidate struct {
 		directory string
 		digest    string
@@ -391,74 +393,89 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 	for _, name := range order {
 		copies := byName[name]
 
-		approval, held := approvals[name]
-		if !held {
-			for _, one := range copies {
-				if envelope, err := attest.LoadEnvelope(attest.DefaultName(one.directory)); err == nil {
-					if statement, keyID, err := attest.Verify(envelope, trusted); err == nil {
-						approval = attest.Approval{
-							Name: statement.Subject.Name, Digest: statement.Subject.Digest,
-							ApprovedBy: statement.ApprovedBy, KeyID: keyID,
-						}
-						held = true
-						break
-					}
+		held := approvals[name]
+		for _, one := range copies {
+			if envelope, err := attest.LoadEnvelope(attest.DefaultName(one.directory)); err == nil {
+				if statement, keyID, err := attest.Verify(envelope, trusted); err == nil {
+					held = append(held, attest.Approval{
+						Name: statement.Subject.Name, Digest: statement.Subject.Digest,
+						ApprovedBy: statement.ApprovedBy, KeyID: keyID,
+					})
 				}
 			}
 		}
-		if !held {
+		if len(held) == 0 {
 			unapproved += len(copies)
 			continue
 		}
 
+		// A copy is verified by whichever approval covers its bytes. The store keeps one
+		// approval per copy, so two skills sharing a name can each hold their own.
+		covering := func(digest string) *attest.Approval {
+			for i := range held {
+				if held[i].Digest == digest {
+					return &held[i]
+				}
+			}
+			return nil
+		}
 		matched := false
 		for _, one := range copies {
-			if one.err == nil && one.digest == approval.Digest {
+			if one.err == nil && covering(one.digest) != nil {
 				matched = true
 				break
 			}
 		}
 
+		reportChanged := func(one candidate, against attest.Approval) {
+			fmt.Printf("  changed    %-28s approved by %s\n", name, against.ApprovedBy)
+			fmt.Printf("             approved %s\n             on disk  %s\n",
+				against.Digest, one.digest)
+			if len(copies) > 1 {
+				fmt.Printf("             %s\n", one.directory)
+			}
+			drift = append(drift, skillDrift{
+				Name: name, ApprovedBy: against.ApprovedBy,
+				Approved: against.Digest, OnDisk: one.digest,
+			})
+			changed++
+		}
+
 		for _, one := range copies {
-			switch {
-			case one.err != nil:
+			if one.err != nil {
 				fmt.Fprintf(os.Stderr, "skillctl: %s could not be read: %v\n", one.directory, one.err)
 				changed++
-			case one.digest == approval.Digest:
+				continue
+			}
+			if covering(one.digest) != nil {
 				verified++
-			case matched:
-				// Another directory holds the approved bytes, so this one is not a changed
-				// copy of an approved skill — it is a second skill wearing the same name,
-				// which is a thing to resolve rather than a thing to re-approve.
+				continue
+			}
+			if here := approvedAt(one.directory, name, trusted); here != nil {
+				// This directory itself was approved — the store file is keyed by where the
+				// skill lives — and its bytes no longer match. Without that key this copy
+				// hid in the "same name" bucket whenever its twin still matched, which let
+				// a changed skill pass behind a namesake's approval.
+				reportChanged(one, *here)
+				continue
+			}
+			if matched {
+				// Another directory holds approved bytes under this name, and nothing says
+				// this one was ever approved: a second skill wearing the same name, not a
+				// changed copy of the first.
 				if quiet {
 					ambiguous++
 					continue
 				}
 				fmt.Printf("  same name  %-28s %s\n", name, one.directory)
-				// Not "rename one of them", which is what this said until it was pointed at
-				// ~/.codex/skills/.system/skill-creator — a skill Codex ships, sitting
-				// beside imagegen and openai-docs. Telling somebody to rename a file their
-				// client installed is advice that is undone by the next update at best.
-				// Which copy is theirs to move is not a question this tool can answer, so
-				// it names the path and leaves the choice where it belongs.
-				fmt.Printf("             another skill is approved under this name. If this "+
-					"copy is yours, rename it; if your client shipped it, give it a name of "+
-					"its own and approve that:\n             skillctl attest sign %s --store\n",
+				fmt.Printf("             another skill is approved under this name, and this "+
+					"copy is not. If you trust these bytes too, approve them — each copy "+
+					"keeps its own approval:\n             skillctl attest sign %s --store\n",
 					one.directory)
 				ambiguous++
-			default:
-				fmt.Printf("  changed    %-28s approved by %s\n", name, approval.ApprovedBy)
-				fmt.Printf("             approved %s\n             on disk  %s\n",
-					approval.Digest, one.digest)
-				if len(copies) > 1 {
-					fmt.Printf("             %s\n", one.directory)
-				}
-				drift = append(drift, skillDrift{
-					Name: name, ApprovedBy: approval.ApprovedBy,
-					Approved: approval.Digest, OnDisk: one.digest,
-				})
-				changed++
+				continue
 			}
+			reportChanged(one, held[0])
 		}
 	}
 
@@ -478,6 +495,30 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 		return drift, exitFindings
 	}
 	return drift, exitClean
+}
+
+// approvedAt returns the approval recorded for the skill at this directory, if any: the
+// store file keyed by this path, or the attestation beside it. This is what tells a changed
+// copy of an approved skill apart from a namesake nobody ever approved.
+func approvedAt(directory, name string, trusted *attest.TrustedKeys) *attest.Approval {
+	for _, path := range []string{
+		attest.StorePath(homePath(attest.StoreDirectory), name, directory),
+		attest.DefaultName(directory),
+	} {
+		envelope, err := attest.LoadEnvelope(path)
+		if err != nil {
+			continue
+		}
+		statement, keyID, err := attest.Verify(envelope, trusted)
+		if err != nil || statement.Subject.Name != name {
+			continue
+		}
+		return &attest.Approval{
+			Name: statement.Subject.Name, Digest: statement.Subject.Digest,
+			ApprovedBy: statement.ApprovedBy, KeyID: keyID,
+		}
+	}
+	return nil
 }
 
 func fail(err error) int {

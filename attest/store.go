@@ -1,6 +1,8 @@
 package attest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -9,13 +11,30 @@ import (
 )
 
 // StoreDirectory is where a machine keeps the attestations it has been given, one file per
-// skill. Keeping them outside the skills tree is deliberate: an approval that lives beside
-// the thing it approves is deleted by whatever deletes that thing.
+// approved copy of a skill. Keeping them outside the skills tree is deliberate: an approval
+// that lives beside the thing it approves is deleted by whatever deletes that thing.
 const StoreDirectory = "attestations"
 
-// StorePath is the conventional file for one skill's attestation inside a store.
-func StorePath(directory, name string) string {
-	return filepath.Join(directory, name+".att.json")
+// StorePath is the file for one skill directory's attestation inside a store.
+//
+// The file is keyed by the skill's name plus a hash of where it lives, not by the name
+// alone. Keyed by name, signing one skill silently destroyed the approval of any other
+// skill that happened to share it — which a real machine does have: a vendor-shipped
+// skill-creator beside a hand-written one. Re-signing the same directory still replaces
+// its own file, which is what re-approving after a change should do; a different directory
+// gets a file of its own.
+func StorePath(directory, name, skillDirectory string) string {
+	// Canonicalised, because the same directory reached two ways must key one file: on
+	// macOS alone, /var and /private/var are one place with two spellings.
+	absolute, err := filepath.Abs(skillDirectory)
+	if err != nil {
+		absolute = skillDirectory
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+	sum := sha256.Sum256([]byte(absolute))
+	return filepath.Join(directory, name+"-"+hex.EncodeToString(sum[:4])+".att.json")
 }
 
 // Approval is a verified signed statement about one skill, reduced to what a caller
@@ -29,7 +48,11 @@ type Approval struct {
 }
 
 // LoadStore reads every attestation in a directory and returns the ones that verify against
-// the pinned keys, indexed by the skill they name.
+// the pinned keys, indexed by the skill they name. A name can carry several approvals: a
+// machine really does hold two different skills called the same thing — an adapty-cli in
+// ~/.agents/skills and another in ~/.codex/skills — and returning one approval per name
+// forced a choice between them that accused whichever lost of drifting from an approval
+// that was never about it.
 //
 // Failures are returned as notes rather than dropped. An attestation that does not verify is
 // the single most interesting file in the store — it is either corrupt or forged — and a
@@ -37,7 +60,7 @@ type Approval struct {
 // reads as "this skill was never approved" and is acted on as though nobody had ever signed
 // anything. A missing directory is different, and is not a failure: it means no approvals
 // have been given yet.
-func LoadStore(directory string, trusted *TrustedKeys) (map[string]Approval, []string, error) {
+func LoadStore(directory string, trusted *TrustedKeys) (map[string][]Approval, []string, error) {
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -46,7 +69,7 @@ func LoadStore(directory string, trusted *TrustedKeys) (map[string]Approval, []s
 		return nil, nil, err
 	}
 
-	approvals := map[string]Approval{}
+	approvals := map[string][]Approval{}
 	var notes []string
 
 	names := make([]string, 0, len(entries))
@@ -77,23 +100,26 @@ func LoadStore(directory string, trusted *TrustedKeys) (map[string]Approval, []s
 			continue
 		}
 
-		// Two signed approvals for one name is not a merge to resolve quietly. Keeping the
-		// first and reporting the rest means the choice is visible instead of depending on
-		// directory order.
-		if existing, clash := approvals[statement.Subject.Name]; clash &&
-			existing.Digest != statement.Subject.Digest {
-			notes = append(notes, fmt.Sprintf(
-				"%s approves a different digest for %q than an earlier attestation; the "+
-					"earlier one was used", path, statement.Subject.Name))
+		// The same digest approved twice is one fact recorded in two files — the legacy
+		// name-keyed file beside a per-copy one, or a skill signed before and after a move —
+		// not two approvals to report.
+		duplicate := false
+		for _, existing := range approvals[statement.Subject.Name] {
+			if existing.Digest == statement.Subject.Digest {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
 			continue
 		}
 
-		approvals[statement.Subject.Name] = Approval{
+		approvals[statement.Subject.Name] = append(approvals[statement.Subject.Name], Approval{
 			Name:       statement.Subject.Name,
 			Digest:     statement.Subject.Digest,
 			ApprovedBy: statement.ApprovedBy,
 			KeyID:      keyID,
-		}
+		})
 	}
 	return approvals, notes, nil
 }
