@@ -32,6 +32,9 @@ const (
 
 const usage = `skillctl - keep your organisation's skills the ones it published
 
+Seeing what it does (about a minute, in a sandbox, no account):
+  skillctl demo                  publish, install, tamper, detect, restore, file
+
 Following a catalog (on a machine):
   skillctl subscribe <git-url> --key <pub>
                                  follow an organisation's signed skill catalog
@@ -67,6 +70,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "demo":
+		os.Exit(runDemo(os.Args[2:]))
 	case "fleet":
 		os.Exit(runFleet(os.Args[2:]))
 	case "policy":

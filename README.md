@@ -25,6 +25,23 @@ machine installed from it, put back anything that changed, and revoke one plugin
 
 Everything outside a signed marketplace is left alone. Not scanned, not restored, not counted.
 
+## See it in a minute
+
+```bash
+brew install random1st/tap/skillctl
+skillctl demo
+```
+
+The demo publishes a skill and signs it, follows the catalog from a second directory,
+installs the plugin the way the client does, edits the installed copy behind everyone's
+back, detects the change, puts the approved bytes back, and prints the signed event that
+an organisation's console would receive.
+
+It runs every one of those steps for real — the same digests, the same reconciler, the same
+signatures — inside a sandbox of its own. No account, no network, no signup, and it reads
+nothing of yours: not your keys, not your skills, not your client's settings. Pass `--keep`
+to look through what it built.
+
 ## For the organisation
 
 ```bash
