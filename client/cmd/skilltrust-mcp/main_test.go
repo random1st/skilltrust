@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,16 +14,23 @@ import (
 
 // connect stands the server up against an in-memory client, on a home the test owns.
 //
-// The fake skillctl is a shell script that echoes its arguments. Every tool here is a
-// skillctl invocation, so what is worth pinning is the command each one builds — running the
-// real binary would test skillctl, which has its own tests, and would leave keys on the
-// machine running this one.
+// The fake skillctl is a script that echoes its arguments. Every tool here is a skillctl
+// invocation, so what is worth pinning is the command each one builds — running the real
+// binary would test skillctl, which has its own tests, and would leave keys on the machine
+// running this one.
+//
+// Windows gets a .cmd, because a file named `skillctl` holding `#!/bin/sh` is not something
+// Windows can execute: every one of these tests failed there with "executable file not
+// found", which read as a broken tool rather than a test that assumed a POSIX shell.
 func connect(t *testing.T) (*mcp.ClientSession, string) {
 	t.Helper()
 
 	home := t.TempDir()
-	fake := filepath.Join(t.TempDir(), "skillctl")
-	script := "#!/bin/sh\necho \"ARGS $@\"\n"
+	name, script := "skillctl", "#!/bin/sh\necho \"ARGS $@\"\n"
+	if runtime.GOOS == "windows" {
+		name, script = "skillctl.cmd", "@echo off\r\necho ARGS %*\r\n"
+	}
+	fake := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

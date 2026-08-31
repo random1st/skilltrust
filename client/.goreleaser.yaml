@@ -180,20 +180,27 @@ homebrew_casks:
 release:
   draft: true
   prerelease: auto
+  # No cosign instructions here until cosign actually runs. This footer printed a
+  # verify-blob command against .pem and .sig files the release does not contain, on a
+  # product whose whole pitch is that you should check signatures rather than trust a
+  # claim — a verification that cannot be performed is worse than none, because the reader
+  # who tries it learns the tool lies and the one who does not feels protected anyway.
   footer: |
     ## Verify this release
 
+    macOS builds are signed with a Developer ID certificate and notarized by Apple:
+
     ```
-    cosign verify-blob \
-      --certificate skillctl_{{ .Version }}_checksums.txt.pem \
-      --signature   skillctl_{{ .Version }}_checksums.txt.sig \
-      --certificate-identity-regexp 'https://github.com/random1st/skilltrust/.*' \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-      skillctl_{{ .Version }}_checksums.txt
+    codesign -dvv skillctl 2>&1 | grep Authority
+    spctl --assess --type exec skillctl
     ```
 
-    Builds are reproducible: `-trimpath` with a pinned toolchain and a commit-derived
-    timestamp. Rebuild from the tag and compare digests rather than taking our word for it.
+    Every artifact is covered by `skillctl_{{ .Version }}_checksums.txt`, and builds are
+    reproducible: `-trimpath` with a pinned toolchain and a commit-derived timestamp.
+    Rebuild from the tag and compare digests rather than taking our word for it.
+
+    Sigstore signatures are not published yet, so nothing here asks you to run
+    `cosign verify-blob`.
 
 changelog:
   use: github

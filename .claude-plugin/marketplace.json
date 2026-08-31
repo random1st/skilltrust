@@ -7,7 +7,7 @@
     {
       "name": "skilltrust",
       "source": "./plugin",
-      "description": "Verify, restore and revoke the plugins your organisation signed.",
+      "description": "Verify, restore and revoke the plugins your organisation signed. Hooks only — install the command first: brew install random1st/tap/skillctl",
       "category": "security"
     }
   ],

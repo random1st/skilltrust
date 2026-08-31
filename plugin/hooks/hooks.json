@@ -1,5 +1,5 @@
 {
-  "description": "Every command is guarded by `command -v skillctl`, which catches an install that has not been reloaded yet — not a platform without a build. The plugin's bin/ holds a shim that is always present, so once installed the guard always passes and the shim is what decides: it execs the matching binary, or prints where to get one and exits 0. Exit 0 is deliberate, and it means a PreToolUse check on an unsupported platform allows rather than refuses. A security check that breaks the session is a security check people remove, so the honest claim is detection where a build exists, and a message where one does not.",
+  "description": "Every command is guarded by `command -v skillctl`, which catches an install that has not been reloaded yet — not a platform without a build. The plugin's bin/ holds a shim that is always present, so once installed the guard always passes and the shim is what decides: a platform binary beside it first (what a built plugin artifact ships), then a skillctl installed on the system (the brew install, which the README calls canonical — the git tree ships no binaries, so a marketplace install straight from the repository has only the shim). When neither exists it says the session is not verified, names the brew command, and exits 0. Exit 0 is deliberate, and it means the check allows rather than refuses: a security check that breaks the session is a security check people remove. The honest claim is detection where a binary exists, and a loud message where one does not.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook session-start; else echo 'skilltrust: no skillctl binary for this platform; see https://github.com/random1st/skilltrust'; fi",
+            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook session-start; else echo 'skilltrust: skillctl is not installed, this session is NOT verified; run: brew install random1st/tap/skillctl'; fi",
             "timeout": 20
           }
         ]

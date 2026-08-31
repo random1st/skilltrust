@@ -2,15 +2,20 @@
 # Selects the binary for this machine.
 #
 # Claude Code puts a plugin's bin/ on PATH, so this is what `skillctl` resolves to inside a
-# session. Shipping one file per platform and choosing here keeps a single plugin installable
-# everywhere, instead of a marketplace entry per operating system.
+# session. A platform binary beside this shim is used first — that is what a built plugin
+# artifact ships. The git tree ships no binaries (forty megabytes of executables would make
+# every clone pay for them forever), so a marketplace install straight from the repository
+# holds only this shim; in that case the shim defers to a skillctl installed on the system,
+# which is what `brew install random1st/tap/skillctl` provides and what the README calls the
+# canonical install.
 #
-# Exiting 0 with a message when nothing matches is deliberate. This is called from hooks on
-# the critical path of a session; failing loudly on an unsupported platform would break every
-# session rather than the one thing that cannot work.
+# Exiting 0 with a message when neither exists is deliberate. This is called from hooks on
+# the critical path of a session; failing loudly would break every session rather than the
+# one thing that cannot work. The cost of that choice is stated where it is made: a session
+# with no binary anywhere runs unprotected, and says so.
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 case $(uname -s) in
   Darwin) os=darwin ;;
@@ -29,6 +34,24 @@ if [ -x "${real}" ]; then
   exec "${real}" "$@"
 fi
 
-echo "skilltrust: no skillctl build for ${os}-${arch} in ${here}" >&2
-echo "skilltrust: see https://github.com/random1st/skilltrust for a release binary" >&2
+# No binary beside the shim: find one elsewhere on PATH, skipping this shim's own
+# directory so an installed skillctl wins and an empty plugin cannot shadow it.
+oldifs=${IFS}
+IFS=:
+for dir in ${PATH}; do
+  [ -n "${dir}" ] || dir=.
+  physical=$(CDPATH= cd -- "${dir}" 2>/dev/null && pwd -P) || continue
+  [ "${physical}" = "${here}" ] && continue
+  candidate="${physical}/skillctl"
+  if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
+    IFS=${oldifs}
+    exec "${candidate}" "$@"
+  fi
+done
+IFS=${oldifs}
+
+echo "skilltrust: no skillctl for ${os}-${arch} in ${here} and none installed on PATH" >&2
+echo "skilltrust: this session is NOT verified; install one:" >&2
+echo "skilltrust:   brew install random1st/tap/skillctl" >&2
+echo "skilltrust: or download a release: https://github.com/random1st/skilltrust/releases" >&2
 exit 0

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -37,9 +38,18 @@ func findSkillctl() (string, error) {
 		return explicit, nil
 	}
 	if self, err := os.Executable(); err == nil {
-		sibling := filepath.Join(filepath.Dir(self), "skillctl")
-		if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
-			return sibling, nil
+		// .exe first on Windows, where the sibling that ships in the same archive is
+		// skillctl.exe and a bare "skillctl" matches nothing — so every Windows install
+		// silently fell through to PATH, which is the case this lookup exists to beat.
+		names := []string{"skillctl"}
+		if runtime.GOOS == "windows" {
+			names = []string{"skillctl.exe", "skillctl"}
+		}
+		for _, name := range names {
+			sibling := filepath.Join(filepath.Dir(self), name)
+			if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
+				return sibling, nil
+			}
 		}
 	}
 	found, err := exec.LookPath("skillctl")

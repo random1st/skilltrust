@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -154,6 +155,10 @@ func TestAnExplicitHomeOutranksTheAgentsOwn(t *testing.T) {
 func TestSkillRootsCoverEveryClientsOwnDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Windows reads USERPROFILE, not HOME: setting only HOME left this test looking at the
+	// real user's home, where it passed or failed for reasons that had nothing to do with
+	// the code under test.
+	t.Setenv("USERPROFILE", home)
 	for _, dir := range []string{
 		filepath.Join(".agents", "skills"),
 		filepath.Join(".claude", "skills"),
@@ -312,14 +317,22 @@ func TestAntigravityPathsResolveTheWayItDocuments(t *testing.T) {
 	if err != nil {
 		t.Skip("no home directory here")
 	}
+	// The absolute case is spelled per platform: "/opt/skills" is not absolute on Windows,
+	// where filepath.IsAbs wants a drive letter, so asserting it there tested the test.
+	absolute := "/opt/skills"
+	workspace := "/repo"
+	if runtime.GOOS == "windows" {
+		absolute = `C:\opt\skills`
+		workspace = `C:\repo`
+	}
 	cases := map[string]struct{ given, want string }{
-		"absolute stays absolute": {"/opt/skills", "/opt/skills"},
+		"absolute stays absolute": {absolute, absolute},
 		"tilde is the home":       {"~/personal-skills", filepath.Join(home, "personal-skills")},
-		"bare is workspace":       {"tools/skills", filepath.Join("/repo", "tools", "skills")},
+		"bare is workspace":       {"tools/skills", filepath.Join(workspace, "tools", "skills")},
 	}
 	for name, one := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := resolveConfigPath(one.given, "/repo"); got != one.want {
+			if got := resolveConfigPath(one.given, workspace); got != one.want {
 				t.Errorf("resolveConfigPath(%q) = %q, want %q", one.given, got, one.want)
 			}
 		})

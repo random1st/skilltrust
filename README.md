@@ -58,26 +58,34 @@ skillctl marketplace sign ./acme-marketplace
 
 ## For the machine
 
-SkillTrust ships as a Claude Code plugin, so there is nothing to wire by hand:
+Install the commands first. This is the step that puts a working binary on the machine, and
+nothing else does:
+
+```bash
+brew install random1st/tap/skillctl        # skillctl and skilltrust-mcp
+claude mcp add skilltrust -- skilltrust-mcp
+skillctl hook install --apply              # check again before every session
+```
+
+The Claude Code plugin is optional, and it is a convenience, not a second way to get the
+tool:
 
 ```
 /plugin marketplace add random1st/skilltrust
 /plugin install skilltrust@skilltrust
 ```
 
-Or install the two commands directly, which is what the hosted console's setup assumes:
+What the plugin adds is the hooks, already wired. What it does **not** carry is the binary:
+this repository ships no executables, because committing five platform builds would make
+every clone pay forty megabytes forever. The plugin's `bin/skillctl` is a shim that looks
+for a platform binary beside it — present only in a built plugin artifact — and otherwise
+runs the `skillctl` you installed above. Install the plugin without installing the binary
+and every session prints that it is **not** verified: the plugin alone protects nothing.
 
-```bash
-brew install random1st/tap/skillctl        # skillctl and skilltrust-mcp
-claude mcp add skilltrust -- skilltrust-mcp
-```
-
-The plugin puts `skillctl` on the session's `PATH` and brings its own hooks. What is on PATH
-is a shim that picks the binary for the machine; builds ship for macOS and Linux on both
-architectures and for Windows on amd64. On anything else the shim prints where to get one and
-exits 0, so a session starts with a line rather than a failing hook on every skill invocation
-— a security check that breaks the session is a security check people remove. It also means
-the per-skill check allows rather than refuses there, which is the honest reading of exit 0.
+When neither exists the shim exits 0 rather than failing, so a session starts with a line
+instead of a failing hook on every skill invocation — a security check that breaks the
+session is a security check people remove. The honest reading of exit 0 is that the
+per-skill check allows rather than refuses there.
 
 Then point it at the marketplace you want verified:
 

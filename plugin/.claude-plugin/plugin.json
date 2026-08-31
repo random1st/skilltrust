@@ -1,7 +1,7 @@
 {
   "name": "skilltrust",
   "version": "0.1.0",
-  "description": "Verifies that the plugins Claude Code installed are still the bytes your organisation signed, puts back any that changed, and refuses revoked ones.",
+  "description": "Verifies that the plugins Claude Code installed are still the bytes your organisation signed, puts back any that changed, and refuses revoked ones. Requires the skillctl command: brew install random1st/tap/skillctl. This plugin carries the hooks, not the binary.",
   "author": { "name": "SkillTrust" },
   "homepage": "https://github.com/random1st/skilltrust"
 }
