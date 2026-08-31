@@ -132,3 +132,36 @@ func TestHookInstallIsIdempotentAndReversible(t *testing.T) {
 		t.Fatalf("uninstall must leave nothing behind:\n%s", raw)
 	}
 }
+
+// The flag is the contract the console quotes. applyClaudeHooks writing a file is not the
+// same as `hook install --apply` writing one: a reader who runs the documented command
+// without --apply is told the check runs every session while nothing was installed.
+func TestHookInstallApplyWritesSettingsAndWithoutItDoesNot(t *testing.T) {
+	dir := t.TempDir()
+	applied := filepath.Join(dir, "applied.json")
+	if code := runHookInstall([]string{"--client", "claude", "--settings", applied, "--apply"}); code != 0 {
+		t.Fatalf("hook install --apply exited %d", code)
+	}
+	raw, err := os.ReadFile(applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "hook session-start") {
+		t.Fatalf("--apply did not write the session-start hook:\n%s", raw)
+	}
+
+	printed := filepath.Join(dir, "printed.json")
+	if err := os.WriteFile(printed, []byte("{\"model\":\"opus\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runHookInstall([]string{"--client", "claude", "--settings", printed}); code != 0 {
+		t.Fatalf("hook install without --apply exited %d", code)
+	}
+	left, err := os.ReadFile(printed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(left) != "{\"model\":\"opus\"}\n" {
+		t.Fatalf("without --apply the settings file was rewritten:\n%s", left)
+	}
+}

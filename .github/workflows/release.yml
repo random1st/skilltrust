@@ -1,7 +1,8 @@
-# Cut a release of the client.
+# Cut an unsigned client build, on purpose.
 #
-# This workflow publishes artifacts, checksums, an SBOM and a keyless cosign signature. It
-# does NOT hold the Apple Developer ID key.
+# This workflow publishes artifacts, checksums and an SBOM. It does not sign with Cosign
+# and it does NOT hold the Apple Developer ID key. The release notes must not tell anyone
+# to run `cosign verify-blob` against files this path does not produce.
 #
 # GoReleaser's notarize block wants that certificate as a base64 secret, which would put
 # the key that signs every release wherever the runner lives. For a product whose pitch is
@@ -36,7 +37,6 @@ jobs:
     runs-on: macos-latest # lipo, for the universal binary
     permissions:
       contents: write # create the release and upload artifacts
-      id-token: write # keyless cosign signing via the OIDC token
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,8 +46,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Install syft for SBOM generation
         run: brew install syft

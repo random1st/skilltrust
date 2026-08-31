@@ -75,23 +75,8 @@ jobs:
             GOOS="${pair%/*}" GOARCH="${pair#*/}" go build ./... || exit 1
             echo "  ${pair} ok"
           done
-      # The plugin is how this reaches a machine, so its assembly is part of the build
-      # rather than something discovered broken at release time. The shims are checked for
-      # the property that actually matters: that they are executable, since a plugin's bin/
-      # goes on PATH and a non-executable shim would resolve to nothing.
-      - name: The Claude Code plugin assembles
-        # Not on Windows. The step ends by running ../plugin/bin/skillctl, which is the
-        # POSIX shim — there is a skillctl.cmd beside it for Windows, and the shim is not it.
-        # The neighbouring formatting step already carries this guard; this one did not, so
-        # the Windows leg of the matrix failed on a check that was never about Windows.
+      - name: The plugin does not ship a skillctl that shadows PATH
+        # POSIX Makefile. The neighbouring formatting step already skips Windows; this
+        # check is about files in git, not about running a Windows binary.
         if: runner.os != 'Windows'
-        run: |
-          make plugin VERSION=ci
-          test -x ../plugin/bin/skillctl
-          test -f ../plugin/bin/skillctl.cmd
-          for pair in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
-            test -x "../plugin/bin/skillctl-${pair}" || { echo "missing ${pair}"; exit 1; }
-          done
-          test -f ../plugin/bin/skillctl-windows-amd64.exe
-          ../plugin/bin/skillctl version
-          echo "plugin assembled"
+        run: make plugin

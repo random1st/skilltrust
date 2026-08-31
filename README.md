@@ -76,16 +76,11 @@ tool:
 ```
 
 What the plugin adds is the hooks, already wired. What it does **not** carry is the binary:
-this repository ships no executables, because committing five platform builds would make
-every clone pay forty megabytes forever. The plugin's `bin/skillctl` is a shim that looks
-for a platform binary beside it — present only in a built plugin artifact — and otherwise
-runs the `skillctl` you installed above. Install the plugin without installing the binary
-and every session prints that it is **not** verified: the plugin alone protects nothing.
-
-When neither exists the shim exits 0 rather than failing, so a session starts with a line
-instead of a failing hook on every skill invocation — a security check that breaks the
-session is a security check people remove. The honest reading of exit 0 is that the
-per-skill check allows rather than refuses there.
+this repository ships no executables, and `plugin/bin` must not contain a file named
+`skillctl`. Claude Code puts that directory on PATH, so a same-named wrapper would intercept
+the installed command — including one that exits 0 and leaves the session unverified while
+looking configured. Install the plugin without installing the binary and every session
+prints that it is **not** verified: the plugin alone protects nothing.
 
 Then point it at the marketplace you want verified:
 
@@ -531,7 +526,7 @@ action.yml     the GitHub Action that runs the gate and talks to the notary
 client/        skillctl — the CLI. One static binary, two dependencies.
 server/        notaryd — the notary. Same story: one binary, files for state.
 internal/      the packages both sides are built from: digest, DSSE, catalog, reporting
-plugin/        the Claude Code plugin: hooks, and the binary shim that finds skillctl
+plugin/        the Claude Code plugin: hooks only. skillctl comes from a release
 docs/          the threat model, key rotation, running the gate in other CIs,
                and what a review panel does when the account is throttled
 ```
