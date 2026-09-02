@@ -1,10 +1,10 @@
 {
   "payloadType": "application/vnd.skilltrust.catalog.v1+json",
-  "payload": "eyJ2ZXJzaW9uIjoxLCJzZXF1ZW5jZSI6MiwiaXNzdWVkX2F0IjoiMjAyNi0wOC0yM1QxMToyNTozM1oiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDgtMzBUMTE6MjU6MzNaIiwibmFtZSI6InNraWxsdHJ1c3QiLCJza2lsbHMiOlt7Im5hbWUiOiJza2lsbHRydXN0IiwiZGlnZXN0Ijoic2hhMjU2OmZkNmUzMTliODVlYWQ2ZTA2NTBkZjU4YjU1NzRlYTNkNzc1OTk0ZjI4NGU2MTRiMzliM2E4OWI4YzMwMGE2MTUiLCJ2ZXJzaW9uIjoiMC4xLjAifV0sInJldm9rZWQiOm51bGx9",
+  "payload": "eyJ2ZXJzaW9uIjoxLCJzZXF1ZW5jZSI6MSwiaXNzdWVkX2F0IjoiMjAyNi0wOS0wMlQwNDo0MDo1MloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMTAtMDJUMDQ6NDA6NTJaIiwibmFtZSI6InNraWxsdHJ1c3QiLCJza2lsbHMiOlt7Im5hbWUiOiJza2lsbHRydXN0IiwiZGlnZXN0Ijoic2hhMjU2OmY2M2UzMTlkMGNkOTdkMGRlYjIxYmU4NjJkZDVhNmE4MDUxMGExZTY4ZTQ4ZWI4YzgyY2FjYzBiMTcwMmVkMmEiLCJ2ZXJzaW9uIjoiMC4xLjAifV0sInJldm9rZWQiOm51bGx9",
   "signatures": [
     {
-      "keyid": "sha256:9f8f405e889cc5e150dcfc9c284f3712aabc365a9342a45fed7ac135240e217f",
-      "sig": "fbeKSYMSDlZfoJ77Orbni2slS4ZXqTU1CEV/FFiE+gxnZsr3eLRSotOk4qHJfvId1ntRH6aBzly6/m0obKGLBg=="
+      "keyid": "sha256:fff519f64181564dbc50fb684b8c771a32924c119c88ade10be7fd401fcf342b",
+      "sig": "kssKkW79T6pz/KiaBpi7SlQIp81TrceuYlDa+spUg28uxr8UAtx98TUafXEUDkwy5xZOCQRFMJDv11K/AuxaDA=="
     }
   ]
 }
