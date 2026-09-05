@@ -122,6 +122,11 @@ func TestPublishBrowserSetupResumesWithoutExposingCredentials(t *testing.T) {
 
 func TestPublishPreparationIsIdempotentAndIncludesRootWorkflow(t *testing.T) {
 	f := newPublishFixture(t, true)
+	// Git for Windows commonly enables this globally. Publication must describe
+	// the repository bytes regardless of the publisher's checkout preference.
+	if err := testMarketplaceGit(f.repository, "config", "core.autocrlf", "true"); err != nil {
+		t.Fatal(err)
+	}
 	before, err := publishingGit(f.repository, nil, "ls-files", "--stage")
 	if err != nil {
 		t.Fatal(err)

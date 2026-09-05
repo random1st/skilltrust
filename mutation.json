@@ -1,6 +1,14 @@
 {
   "mutations": [
     {
+      "id": "publication_line_endings",
+      "file": "client/cmd/skillctl/publish_repository.go",
+      "before": "\"-c\", \"core.autocrlf=false\", \"-c\", \"core.eol=lf\", \"checkout-index\"",
+      "after": "\"checkout-index\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishPreparation"
+    },
+    {
       "id": "status_review_binding",
       "file": "client/cmd/skillctl/publish_submit.go",
       "before": "if err != nil || reviewID != record.ReviewID {",

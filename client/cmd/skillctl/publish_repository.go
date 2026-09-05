@@ -178,7 +178,9 @@ func publishingCoverage(repository, workflow string) (*marketplace.Coverage, err
 	if err := os.MkdirAll(checkout, 0o700); err != nil {
 		return nil, err
 	}
-	if _, err := publishingGit(repository, environment, "checkout-index", "--all", "--prefix="+checkout+string(os.PathSeparator)); err != nil {
+	// Sign repository bytes, not a platform's optional CRLF checkout conversion.
+	// The notary reads the GitHub revision on Linux and must see the same bytes.
+	if _, err := publishingGit(repository, environment, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "checkout-index", "--all", "--prefix="+checkout+string(os.PathSeparator)); err != nil {
 		return nil, err
 	}
 	if err := checkPublishingPaths(checkout); err != nil {
