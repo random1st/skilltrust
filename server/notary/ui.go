@@ -33,10 +33,8 @@ type Dashboard struct {
 	Now          time.Time
 	Marketplaces []MarketplaceView
 	Machines     []MachineView
-	// ActiveMachines counts machines whose latest verified report is within thirty days
-	// of Now. It is the fleet-size number a per-machine plan meters, computed from the
-	// same signed events the table shows — so an operator can always see which machines
-	// make up the count, and a machine that stops reporting ages out on its own.
+	// ActiveMachines counts machines with a current signed check inside its freshness
+	// window, whether that check is healthy or needs attention.
 	ActiveMachines int
 	Events         []EventView
 	// Unverified counts stored events no configured machine key signed. Shown as a
@@ -59,6 +57,10 @@ type Dashboard struct {
 	// scanning six columns of zeros, which is a question the page can answer itself.
 	// Empty means nothing needs looking at, and that is worth saying out loud too.
 	Attention []string
+	// CurrentStateWarnings report when the live roster or current checks could not be read,
+	// so the fleet view keeps whatever history it has without claiming that the current state
+	// is healthy.
+	CurrentStateWarnings []string
 	// AdaptedNote qualifies the all-clear. "Every machine found what you published" is
 	// false on a fleet with adopted copies, and a headline that overclaims once is a
 	// headline nobody trusts about the machines that matter. Empty when nothing is adopted.
@@ -87,7 +89,16 @@ type SignerView struct {
 
 type MachineView struct {
 	Name            string
+	Signer          string
+	Status          string
 	Last            time.Time
+	FreshUntil      time.Time
+	Checked         int
+	Changed         int
+	Unapproved      int
+	Errors          int
+	Complete        bool
+	Scopes          []string
 	Restored        int
 	Revoked         int
 	Unverifiable    int
@@ -116,11 +127,19 @@ type MachineView struct {
 // state that must never be mistaken for "nothing had changed".
 func (m MachineView) Unchecked() int { return m.Unverifiable + m.CatalogUnusable }
 
+func (m MachineView) ScopeSummary() string {
+	if len(m.Scopes) == 0 {
+		return "no current check"
+	}
+	return strings.Join(m.Scopes, ", ")
+}
+
 type EventView struct {
-	At      time.Time
-	Machine string
-	Summary string
-	Kind    string
+	At        time.Time
+	Machine   string
+	Summary   string
+	Kind      string
+	Admission string
 }
 
 // BuildDashboard assembles the page from stored state, tolerating partial damage: one
@@ -165,88 +184,250 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 		dashboard.Marketplaces = append(dashboard.Marketplaces, view)
 	}
 
+	type machineState struct {
+		view           MachineView
+		registered     bool
+		disabled       bool
+		freshUnknown   bool
+		hasCheck       bool
+		stale          bool
+		statusUnknown  bool
+		needsAttention bool
+	}
+	machines := map[string]*machineState{}
+	ensure := func(key, name, signer string) *machineState {
+		if key == "" {
+			key = name
+		}
+		row := machines[key]
+		if row == nil {
+			row = &machineState{view: MachineView{Name: name}}
+			machines[key] = row
+		}
+		if row.view.Name == "" && name != "" {
+			row.view.Name = name
+		}
+		if signer != "" {
+			row.view.Signer = attest.Fingerprint(signer)
+		}
+		return row
+	}
+	liveRosterUnavailable := false
+	if registry, ok := s.directory.(MachineRegistry); ok {
+		if registered, err := registry.RegisteredMachines(org.Name); err == nil {
+			for _, machine := range registered {
+				key := machine.Signer
+				if key == "" {
+					key = machine.Name
+				}
+				row := ensure(key, machine.Name, machine.Signer)
+				row.registered = true
+				row.disabled = machine.Disabled
+			}
+		} else {
+			liveRosterUnavailable = true
+			dashboard.CurrentStateWarnings = append(dashboard.CurrentStateWarnings,
+				"The current list of computers is unavailable. Refresh this page to try again.")
+		}
+	}
+	if checks, err := s.ServeChecks(org); err == nil {
+		for _, record := range checks {
+			key := record.Receipt.Signer
+			if key == "" {
+				key = record.Result.Machine
+			}
+			row := ensure(key, record.Result.Machine, record.Receipt.Signer)
+			row.hasCheck = true
+			if len(row.view.Scopes) == 0 {
+				row.view.Complete = true
+			}
+			row.view.Complete = row.view.Complete && record.Result.Complete
+			row.view.Scopes = append(row.view.Scopes, record.Result.Scope)
+			row.view.Checked += record.Result.Checked
+			row.view.Changed += record.Result.Changed
+			row.view.Unapproved += record.Result.Unapproved
+			row.view.Errors += record.Result.Errors
+			if record.Result.CheckedAt.After(row.view.Last) {
+				row.view.Last = record.Result.CheckedAt
+			}
+			switch {
+			case record.Result.FreshUntil.IsZero():
+				row.freshUnknown = true
+				row.view.FreshUntil = time.Time{}
+			case !row.freshUnknown &&
+				(row.view.FreshUntil.IsZero() || record.Result.FreshUntil.Before(row.view.FreshUntil)):
+				row.view.FreshUntil = record.Result.FreshUntil
+			}
+			if !record.Result.Complete || record.Result.Changed > 0 || record.Result.Unapproved > 0 ||
+				record.Result.Errors > 0 || record.Result.FreshUntil.IsZero() {
+				row.needsAttention = true
+			}
+			if record.Result.FreshUntil.IsZero() || !now.Before(record.Result.FreshUntil) {
+				row.stale = true
+			}
+			if !record.Result.HealthyAt(now) {
+				row.needsAttention = true
+			}
+			if !row.registered {
+				if liveRosterUnavailable {
+					row.statusUnknown = true
+					continue
+				}
+				if org.Machines == nil {
+					row.disabled = true
+					continue
+				}
+				if _, ok := org.Machines.Lookup(record.Receipt.Signer); ok {
+					row.registered = true
+				} else {
+					row.disabled = true
+				}
+			}
+		}
+	} else {
+		dashboard.CurrentStateWarnings = append(dashboard.CurrentStateWarnings,
+			"The latest checks are unavailable. Refresh this page to try again.")
+	}
+
 	stored, err := s.ServeEvents(org)
 	if err == nil {
-		machines := map[string]*MachineView{}
+		var historical *attest.TrustedKeys
+		if registry, ok := s.directory.(HistoricalMachineRegistry); ok {
+			historical, _ = registry.HistoricalMachineKeys(org.Name)
+		}
+		type signedEvent struct {
+			event     report.Event
+			signer    string
+			admission string
+		}
 		// One adoption, one row. The same adopted plugin is reported every session, and a
 		// table of one reason repeated fifty times informs nobody about anything else.
-		type adoptionKey struct{ machine, marketplace, plugin string }
-		adoptions := map[adoptionKey]report.Event{}
-		type skillKey struct{ machine, skill string }
-		drifted := map[skillKey]report.Event{}
+		type adoptionKey struct{ signer, marketplace, plugin string }
+		adoptions := map[adoptionKey]signedEvent{}
+		type skillKey struct{ signer, skill string }
+		drifted := map[skillKey]signedEvent{}
 		for _, raw := range stored {
-			var envelope attest.Envelope
-			if err := json.Unmarshal(raw, &envelope); err != nil {
-				dashboard.Unverified++
-				continue
-			}
-			if org.Machines == nil {
-				dashboard.Unverified++
-				continue
-			}
-			event, _, err := report.Verify(&envelope, org.Machines)
+			admission := ""
+			event, signer, found, err := s.verifyAcceptedEvent(org.Name, raw)
 			if err != nil {
 				dashboard.Unverified++
 				continue
 			}
-
-			view := machines[event.Machine]
-			if view == nil {
-				view = &MachineView{Name: event.Machine}
-				machines[event.Machine] = view
+			if !found {
+				var envelope attest.Envelope
+				if err := json.Unmarshal(raw, &envelope); err != nil {
+					dashboard.Unverified++
+					continue
+				}
+				verified := false
+				if org.Machines != nil {
+					event, signer, err = report.Verify(&envelope, org.Machines)
+					if err == nil {
+						verified = true
+					}
+				}
+				if !verified && historical != nil && historical.Len() > 0 {
+					event, signer, err = report.Verify(&envelope, historical)
+					if err == nil {
+						verified = true
+					}
+				}
+				if !verified {
+					dashboard.Unverified++
+					continue
+				}
+				admission = "UNKNOWN"
 			}
-			if event.At.After(view.Last) {
-				view.Last = event.At
+
+			key := signer
+			if key == "" {
+				key = event.Machine
+			}
+			row := ensure(key, event.Machine, signer)
+			activeSigner := false
+			if org.Machines != nil {
+				_, activeSigner = org.Machines.Lookup(signer)
+			}
+			switch {
+			case activeSigner:
+				if liveRosterUnavailable {
+					row.statusUnknown = true
+				} else {
+					row.registered = true
+				}
+			case found || admission == "UNKNOWN":
+				if liveRosterUnavailable {
+					row.statusUnknown = true
+				} else {
+					row.disabled = true
+				}
 			}
 			if event.Kind == report.KindSkillChanged {
-				key := skillKey{event.Machine, event.Skill}
-				if previous, seen := drifted[key]; !seen || event.At.After(previous.At) {
-					drifted[key] = *event
+				key := skillKey{signer, event.Skill}
+				if previous, seen := drifted[key]; !seen || event.At.After(previous.event.At) {
+					drifted[key] = signedEvent{event: *event, signer: signer, admission: admission}
 				}
 				continue
 			}
 			if event.Kind == report.KindAdapted {
-				key := adoptionKey{event.Machine, event.Marketplace, event.Plugin}
-				if previous, seen := adoptions[key]; !seen || event.At.After(previous.At) {
-					adoptions[key] = *event
+				key := adoptionKey{signer, event.Marketplace, event.Plugin}
+				if previous, seen := adoptions[key]; !seen || event.At.After(previous.event.At) {
+					adoptions[key] = signedEvent{event: *event, signer: signer, admission: admission}
 				}
 				continue
 			}
 			switch event.Kind {
 			case report.KindRestored:
-				view.Restored++
+				row.view.Restored++
 			case report.KindRevoked:
-				view.Revoked++
+				row.view.Revoked++
 			case report.KindUnverifiable:
-				view.Unverifiable++
+				row.view.Unverifiable++
 			case report.KindCatalogUnusable:
-				view.CatalogUnusable++
+				row.view.CatalogUnusable++
 			}
 			dashboard.Events = append(dashboard.Events, EventView{
 				At: event.At, Machine: event.Machine,
-				Summary: event.Summary(), Kind: string(event.Kind),
+				Summary: event.Summary(), Kind: string(event.Kind), Admission: admission,
 			})
 		}
 		for key, event := range drifted {
-			machines[key.machine].SkillsChanged++
+			row := ensure(key.signer, event.event.Machine, event.signer)
+			row.view.SkillsChanged++
 			dashboard.Events = append(dashboard.Events, EventView{
-				At: event.At, Machine: event.Machine,
-				Summary: event.Summary(), Kind: string(event.Kind),
+				At: event.event.At, Machine: event.event.Machine,
+				Summary: event.event.Summary(), Kind: string(event.event.Kind), Admission: event.admission,
 			})
 		}
 		for key, event := range adoptions {
-			machines[key.machine].Adapted++
+			row := ensure(key.signer, event.event.Machine, event.signer)
+			row.view.Adapted++
 			dashboard.Events = append(dashboard.Events, EventView{
-				At: event.At, Machine: event.Machine,
-				Summary: event.Summary(), Kind: string(event.Kind),
+				At: event.event.At, Machine: event.event.Machine,
+				Summary: event.event.Summary(), Kind: string(event.event.Kind), Admission: event.admission,
 			})
 		}
-		for _, view := range machines {
-			dashboard.Machines = append(dashboard.Machines, *view)
-			if view.Last.After(dashboard.Now.AddDate(0, 0, -30)) {
-				dashboard.ActiveMachines++
-			}
+	}
+
+	for _, row := range machines {
+		sort.Strings(row.view.Scopes)
+		switch {
+		case row.disabled:
+			row.view.Status = "Disabled"
+		case !row.hasCheck:
+			row.view.Status = "Pending"
+		case row.stale:
+			row.view.Status = "Stale"
+		case row.needsAttention:
+			row.view.Status = "Needs attention"
+			dashboard.ActiveMachines++
+		case row.statusUnknown:
+			row.view.Status = "Unknown"
+		default:
+			row.view.Status = "Checked"
+			dashboard.ActiveMachines++
 		}
+		dashboard.Machines = append(dashboard.Machines, row.view)
 	}
 
 	sort.Slice(dashboard.Machines, func(i, j int) bool {
@@ -311,50 +492,41 @@ func whatNeedsLookingAt(dashboard Dashboard) []string {
 		}
 	}
 
-	restored, revoked, unreadable, stale, drifted := 0, 0, 0, 0, 0
+	pending, checked, attention, stale, disabled := 0, 0, 0, 0, 0
 	for _, machine := range dashboard.Machines {
-		if machine.SkillsChanged > 0 {
-			drifted++
-		}
-		if machine.Restored > 0 {
-			restored++
-		}
-		if machine.Revoked > 0 {
-			revoked++
-		}
-		if machine.Unchecked() > 0 {
-			unreadable++
-		}
-		if machine.Last.Before(dashboard.Now.AddDate(0, 0, -30)) {
+		switch machine.Status {
+		case "Pending":
+			pending++
+		case "Checked":
+			checked++
+		case "Needs attention":
+			attention++
+		case "Stale":
 			stale++
+		case "Disabled":
+			disabled++
 		}
 	}
-	// Revocation first: it is the only line that means a machine ran into something you
-	// withdrew, and burying it under three counters is how it gets read last.
-	if revoked > 0 {
+	if attention > 0 {
 		lines = append(lines, fmt.Sprintf(
-			"%s found a skill you revoked and refused to load it", plural(revoked, "machine")))
+			"%s needs attention in its latest signed check", plural(attention, "machine")))
 	}
-	if restored > 0 {
+	if pending > 0 {
 		lines = append(lines, fmt.Sprintf(
-			"%s had a skill changed and put the published copy back", plural(restored, "machine")))
-	}
-	// After restored and before the softer lines. Nothing was put back here, so unlike a
-	// restore this is still true of the machine right now — but it is not a revocation, and
-	// putting it above one would push the only line that means "you withdrew this and
-	// somebody has it" further down the page.
-	if drifted > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"%s is running a skill that no longer matches what was approved for it, and "+
-				"nothing put it back", plural(drifted, "machine")))
-	}
-	if unreadable > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"%s could not check something, so it went unchecked", plural(unreadable, "machine")))
+			"%s has not filed a signed current check yet", plural(pending, "machine")))
 	}
 	if stale > 0 {
 		lines = append(lines, fmt.Sprintf(
-			"%s has not reported in over a month", plural(stale, "machine")))
+			"%s is stale and needs a fresh check", plural(stale, "machine")))
+	}
+	if disabled > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%s is disabled and kept only for history", plural(disabled, "machine")))
+	}
+	if dashboard.Unverified > 0 && !dashboard.NoMachineKeys {
+		lines = append(lines, fmt.Sprintf(
+			"%s stored event(s) are not signed by any machine key this notary currently trusts",
+			plural(dashboard.Unverified, "event")))
 	}
 	return lines
 }

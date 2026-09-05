@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,13 +15,36 @@ import (
 	"github.com/random1st/skilltrust/internal/source"
 )
 
-// reconcileAll runs every followed marketplace against this machine's plugin cache.
-//
-// One reconciler, one target. There were briefly two — a skills directory this tool invented
-// and the plugin cache Claude Code actually loads from — and two answers to one question is
-// how one of them ends up trusted and the other ignored. The cache won because it is where
-// the bytes that run live; the invented directory was deleted.
-func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Result, []string, int) {
+type ManagedCheckOptions struct {
+	Restore       bool
+	Offline       bool
+	UpdateSource  bool
+	RefreshBudget time.Duration
+}
+
+type ManagedCatalogCheck struct {
+	Name       string    `json:"name"`
+	Sequence   int64     `json:"sequence,omitempty"`
+	ValidUntil time.Time `json:"valid_until,omitempty"`
+	Refreshed  bool      `json:"refreshed,omitempty"`
+	UsedCached bool      `json:"used_cached,omitempty"`
+	Detail     string    `json:"detail,omitempty"`
+}
+
+type ManagedCheck struct {
+	Scope     string                `json:"scope"`
+	Coverage  string                `json:"coverage"`
+	Complete  bool                  `json:"complete"`
+	CheckedAt time.Time             `json:"checked_at"`
+	Catalogs  []ManagedCatalogCheck `json:"catalogs,omitempty"`
+	Results   []marketplace.Result  `json:"results,omitempty"`
+	Unusable  []string              `json:"unusable,omitempty"`
+}
+
+func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedCheck, int) {
+	now := time.Now().UTC()
+	check := ManagedCheck{Scope: CheckScopeManaged, CheckedAt: now}
+
 	// Defaulted here rather than at each call site. CacheRoot("") is the relative path
 	// ./plugins/cache, so a caller that forgets looks in the working directory, finds
 	// nothing, and reports every plugin as not installed — a wrong answer that reads
@@ -29,25 +54,23 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 	}
 	subscriptions, err := loadSubscriptions()
 	if err != nil {
-		return nil, nil, fail(err)
+		return check, fail(err)
 	}
 	if len(subscriptions) == 0 {
-		return nil, nil, exitClean
+		check.Coverage = "empty"
+		return check, exitClean
 	}
 
-	// Rotation is picked up in passing: a notary mid-rotation announces its next key
-	// under a signature from the current one, and merging that here — before the trust
-	// store is read — is what lets an unattended fleet keep verifying after the old key
-	// retires. A failed announcement is silent by design: servers that predate the
-	// endpoint answer 404 on every sync, and the machine still verifies against the pins
-	// it has. `skillctl refresh` is the loud version when rotation needs diagnosing.
-	if !offline {
+	ctx, cancel := refreshContext(options.RefreshBudget)
+	defer cancel()
+
+	if !options.Offline {
 		refreshed := false
 		for i := range subscriptions {
 			if subscriptions[i].CatalogURL == "" {
 				continue
 			}
-			added, err := refreshSubscription(&subscriptions[i], defaultTrustedKeys(), time.Now().UTC())
+			added, err := refreshSubscriptionContext(ctx, &subscriptions[i], defaultTrustedKeys(), now)
 			if err != nil || len(added) == 0 {
 				continue
 			}
@@ -57,68 +80,203 @@ func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Resul
 		}
 		if refreshed {
 			if err := saveSubscriptions(subscriptions); err != nil {
-				return nil, nil, fail(err)
+				return check, fail(err)
 			}
 		}
 	}
 
 	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
 	if err != nil {
-		return nil, nil, fail(err)
+		return check, fail(err)
 	}
-
-	now := time.Now().UTC()
-	var results []marketplace.Result
-	var unusable []string
 
 	// A file this machine's owner wrote deliberately. An unreadable one adopts nothing and
 	// is reported: the alternative direction — a corrupt file quietly meaning "accept every
 	// difference here" — turns a local mistake into a silent hole.
 	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
 	if err != nil {
-		// Said here rather than added to the unusable list: that list is about
-		// marketplaces that could not be checked, and this file has no bearing on any of
-		// them. Everything is still checked; refusing to reconcile at all would let one
-		// damaged local file stop every marketplace from being verified.
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n"+
 			"  Nothing is adopted this run, so every signed skill is checked as published.\n", err)
 		adopted = marketplace.Adoptions{}
 	}
 
 	for _, subscription := range subscriptions {
-		if !offline {
-			if _, err := fetchCatalog(subscription); err != nil {
-				unusable = append(unusable,
-					fmt.Sprintf("%s could not be reached: %v", subscription.Name, err))
-				continue
-			}
-			// The notary's index and the repository's bytes are both required: the index
-			// alone can detect but not restore, and restoring from bytes the fresh index
-			// no longer names would fail the digest check anyway. Refusing on either
-			// failure keeps "checked" meaning checked.
-			if subscription.CatalogURL != "" {
-				if err := source.FetchIndex(subscription.CatalogURL, indexPath(subscription)); err != nil {
-					unusable = append(unusable,
-						fmt.Sprintf("%s: %v", subscription.Name, err))
-					continue
-				}
-			}
-		}
-		snapshot, err := readSnapshot(subscription, trusted, now, !offline)
+		snapshot, catalogCheck, err := loadManagedSnapshot(ctx, subscription, trusted, now, options)
 		if err != nil {
-			unusable = append(unusable, fmt.Sprintf("%s: %v", subscription.Name, err))
+			check.Unusable = append(check.Unusable, fmt.Sprintf("%s: %v", subscription.Name, err))
+			catalogCheck.Detail = err.Error()
+			check.Catalogs = append(check.Catalogs, catalogCheck)
 			continue
 		}
-		results = append(results, marketplace.Reconcile(snapshot, marketplace.Options{
+
+		sourcePath := source.Path(catalogRoot(), subscription.Name)
+		if options.UpdateSource && subscription.CatalogURL != "" {
+			if _, err := fetchCatalogContext(ctx, subscription); err != nil {
+				if catalogCheck.Refreshed {
+					sourcePath = ""
+				}
+				appendManagedDetail(&catalogCheck, "source update failed: %v", err)
+			}
+		} else if subscription.CatalogURL != "" && catalogCheck.Refreshed {
+			sourcePath = ""
+			appendManagedDetail(&catalogCheck, "restore requires a full sync after catalog refresh")
+		}
+
+		check.Catalogs = append(check.Catalogs, catalogCheck)
+		check.Results = append(check.Results, marketplace.Reconcile(snapshot, marketplace.Options{
 			ClaudeHome:     claudeHome,
 			Adopted:        adopted,
-			Source:         source.Path(catalogRoot(), subscription.Name),
+			Source:         sourcePath,
 			QuarantineRoot: quarantineRoot(),
-			Restore:        restore,
+			Restore:        options.Restore,
 			Now:            now,
 		})...)
 	}
-	return results, unusable, exitClean
+	check.Coverage, check.Complete = managedCoverage(check.Results, check.Unusable)
+	return check, exitClean
+}
+
+// reconcileAll runs every followed marketplace against this machine's plugin cache.
+//
+// One reconciler, one target. There were briefly two — a skills directory this tool invented
+// and the plugin cache Claude Code actually loads from — and two answers to one question is
+// how one of them ends up trusted and the other ignored. The cache won because it is where
+// the bytes that run live; the invented directory was deleted.
+func reconcileAll(claudeHome string, restore, offline bool) ([]marketplace.Result, []string, int) {
+	check, code := RunManagedCheck(claudeHome, ManagedCheckOptions{
+		Restore: restore, Offline: offline, UpdateSource: !offline,
+	})
+	return check.Results, check.Unusable, code
+}
+
+func refreshContext(budget time.Duration) (context.Context, context.CancelFunc) {
+	if budget <= 0 {
+		return context.Background(), func() {}
+	}
+	return context.WithTimeout(context.Background(), budget)
+}
+
+func loadManagedSnapshot(
+	ctx context.Context,
+	subscription Subscription,
+	trusted *attest.TrustedKeys,
+	now time.Time,
+	options ManagedCheckOptions,
+) (*catalog.Snapshot, ManagedCatalogCheck, error) {
+	status := ManagedCatalogCheck{Name: subscription.Name}
+	if options.Offline {
+		snapshot, err := readSnapshot(subscription, trusted, now, !options.Offline)
+		if err != nil {
+			return nil, status, err
+		}
+		status.Sequence = snapshot.Sequence
+		status.ValidUntil = snapshot.ValidUntil
+		return snapshot, status, nil
+	}
+	if subscription.CatalogURL == "" {
+		if options.UpdateSource {
+			if _, err := fetchCatalogContext(ctx, subscription); err != nil {
+				cached, cachedErr := readSnapshot(subscription, trusted, now, false)
+				if cachedErr != nil {
+					return nil, status, err
+				}
+				status.Sequence = cached.Sequence
+				status.ValidUntil = cached.ValidUntil
+				status.UsedCached = true
+				status.Detail = fmt.Sprintf("using cached catalog after source update failed: %v", err)
+				return cached, status, nil
+			}
+		}
+		snapshot, err := readSnapshot(subscription, trusted, now, true)
+		if err != nil {
+			return nil, status, err
+		}
+		status.Sequence = snapshot.Sequence
+		status.ValidUntil = snapshot.ValidUntil
+		if options.UpdateSource {
+			status.Refreshed = true
+		}
+		return snapshot, status, nil
+	}
+
+	snapshot, err := refreshCatalogSnapshot(ctx, subscription, trusted, now)
+	if err == nil {
+		status.Sequence = snapshot.Sequence
+		status.ValidUntil = snapshot.ValidUntil
+		status.Refreshed = true
+		return snapshot, status, nil
+	}
+
+	cached, cachedErr := readSnapshot(subscription, trusted, now, false)
+	if cachedErr != nil {
+		return nil, status, err
+	}
+	status.Sequence = cached.Sequence
+	status.ValidUntil = cached.ValidUntil
+	status.UsedCached = true
+	status.Detail = fmt.Sprintf("using cached catalog after refresh failed: %v", err)
+	return cached, status, nil
+}
+
+func refreshCatalogSnapshot(
+	ctx context.Context,
+	subscription Subscription,
+	trusted *attest.TrustedKeys,
+	now time.Time,
+) (*catalog.Snapshot, error) {
+	target := indexPath(subscription)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return nil, err
+	}
+	staged, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".")
+	if err != nil {
+		return nil, err
+	}
+	stagePath := staged.Name()
+	staged.Close()
+	defer os.Remove(stagePath)
+
+	if err := source.FetchIndexContext(ctx, subscription.CatalogURL, stagePath); err != nil {
+		return nil, err
+	}
+	snapshot, err := readSnapshotPath(stagePath, subscription, trusted, now, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(stagePath, target); err != nil {
+		return nil, err
+	}
+	if err := saveSnapshotSequence(subscription, snapshot.Sequence, now); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func managedCoverage(results []marketplace.Result, unusable []string) (string, bool) {
+	if len(results) == 0 {
+		return "empty", false
+	}
+	if len(unusable) > 0 {
+		return "partial", false
+	}
+	for _, result := range results {
+		if result.Outcome == marketplace.OutcomeUnverifiable {
+			return "partial", false
+		}
+	}
+	return "full", true
+}
+
+func appendManagedDetail(status *ManagedCatalogCheck, format string, arguments ...any) {
+	addition := fmt.Sprintf(format, arguments...)
+	if addition == "" {
+		return
+	}
+	if status.Detail == "" {
+		status.Detail = addition
+		return
+	}
+	status.Detail += "; " + addition
 }
 
 // pruneDeadAdoptions drops adoption records that no longer describe anything on disk, and
@@ -195,17 +353,38 @@ func runSync(args []string) int {
 		return exitUsage
 	}
 
-	results, unusable, code := reconcileAll(home, !*report, *offline)
+	managed, code := RunManagedCheck(home, ManagedCheckOptions{
+		Restore: !*report, Offline: *offline, UpdateSource: !*offline,
+	})
 	if code != exitClean {
 		return code
 	}
+
+	var loose LooseSkillCheck
+	var drift []skillDrift
+	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
+		loose, drift, _ = verifyEverySkillReporting(trusted, true)
+	}
+	reportManaged := managed
+	if known, err := lookupAgent(*agentName); err == nil && known.Managed {
+		reportManaged = aggregateManagedReportCheck(managed, home, *agentName, *claudeHome)
+	}
+
+	now := time.Now().UTC()
+	events := collectEvents(managed.Results, managed.Unusable, now)
+	events = append(events, skillDriftEvents(drift, now)...)
+	checks := []CurrentCheck{managedCurrentCheck(reportManaged)}
+	if shouldReportLooseSkillCheck(loose) {
+		checks = append(checks, looseSkillCurrentCheck(loose))
+	}
+	_, _ = recordReports(events, checks, 2*time.Second)
+
 	if !*report {
-		recordEvents(results, unusable, time.Now().UTC())
-		for _, line := range pruneDeadAdoptions(results) {
+		for _, line := range pruneDeadAdoptions(managed.Results) {
 			fmt.Printf("  %s\n", line)
 		}
 	}
-	return writeReconcileReport(results, unusable, home, *report)
+	return writeReconcileReport(managed.Results, managed.Unusable, home, *report)
 }
 
 func writeReconcileReport(

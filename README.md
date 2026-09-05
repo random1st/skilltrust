@@ -75,6 +75,25 @@ skillctl marketplace sign ./acme-marketplace
 
 ## For the machine
 
+If your team uses Axela, start with:
+
+```bash
+skillctl connect
+```
+
+Sign in, choose your team and confirm the computer in the browser. SkillTrust
+sets up its local key, follows the team's signed catalogs and installs supported
+session hooks. It can install the first approved Claude Code plugin through the
+native CLI. A Codex installation or hook approval that needs your action is
+reported explicitly.
+
+The command says `connected` only after a real, nonempty check receives the
+matching cloud receipt. If approval, installation or delivery is still pending,
+it says what to do next; rerun the same command to continue. This connection flow
+requires the matching Axela server and client release.
+
+### Manual and self-hosted setup
+
 Install the commands first. This is the step that puts a working binary on the machine, and
 nothing else does:
 

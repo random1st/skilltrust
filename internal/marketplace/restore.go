@@ -1,11 +1,15 @@
 package marketplace
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/random1st/skilltrust/catalog"
 	"github.com/random1st/skilltrust/internal/archive"
 )
 
@@ -22,12 +26,34 @@ import (
 //
 // The replaced copy is kept rather than deleted. Restoring without it destroys the evidence
 // in the one case that is an incident, which is the case this exists for.
+//
+// This compatibility wrapper preserves the pre-digest-binding API for callers that have no
+// signed digest to compare against. Callers restoring from a signed catalog should use
+// RestoreVerified so the bytes written are bound to the catalog entry they are supposed to
+// restore.
 func Restore(installed, source, quarantineRoot, name string, now time.Time) (string, error) {
+	return RestoreVerified(installed, source, quarantineRoot, name, now, "")
+}
+
+// RestoreVerified restores from a local source checkout only when the archive it builds is
+// still exactly the digest the caller expects from a signed catalog entry.
+func RestoreVerified(
+	installed, source, quarantineRoot, name string, now time.Time, expectedDigest string,
+) (string, error) {
 	built, err := signedTree(source)
 	if err != nil {
 		return "", err
 	}
+	if expectedDigest != "" && !strings.EqualFold(built.Digest, expectedDigest) {
+		return "", fmt.Errorf("local source digest %s does not match the signed %s",
+			built.Digest, expectedDigest)
+	}
+	return restoreBuilt(installed, quarantineRoot, name, now, built)
+}
 
+func restoreBuilt(
+	installed, quarantineRoot, name string, now time.Time, built *archive.Archive,
+) (string, error) {
 	parent := filepath.Dir(installed)
 	staging, err := os.MkdirTemp(parent, ".skilltrust-staging-*")
 	if err != nil {
@@ -73,6 +99,90 @@ func signedTree(source string) (*archive.Archive, error) {
 		keep = func(path string) bool { _, ok := tracked[path]; return ok }
 	}
 	return archive.BuildFiltered(source, PluginLimits(), keep, excludedRoots()...)
+}
+
+// MaterializeVerifiedMarketplace writes one signed plugin into a minimal marketplace tree.
+//
+// It exists for the first-install path: the native client knows how to install from a
+// marketplace path, while the security boundary here is a single managed plugin digest.
+// Passing a whole checkout would let unsigned sibling entries and later edits ride along,
+// so the approved bytes are re-materialized into a marketplace that exposes exactly one
+// plugin and nothing else.
+func MaterializeVerifiedMarketplace(
+	destination, marketplaceName string, plugin catalog.Managed, source string,
+) error {
+	for _, part := range []string{marketplaceName, plugin.Name, plugin.Version} {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "/\\\x00\r\n") {
+			return fmt.Errorf("marketplace, plugin and version must be single path components")
+		}
+	}
+	digest, err := hex.DecodeString(strings.TrimPrefix(plugin.Digest, "sha256:"))
+	if !strings.HasPrefix(plugin.Digest, "sha256:") || err != nil || len(digest) != 32 {
+		return fmt.Errorf("a signed SHA-256 plugin digest is required before installation")
+	}
+	built, err := signedTree(source)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(built.Digest, plugin.Digest) {
+		return fmt.Errorf("local source digest %s does not match the signed %s",
+			built.Digest, plugin.Digest)
+	}
+	return writeMaterializedMarketplace(destination, marketplaceName, plugin, built)
+}
+
+func writeMaterializedMarketplace(
+	destination, marketplaceName string, plugin catalog.Managed, built *archive.Archive,
+) error {
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(parent, ".skilltrust-marketplace-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+
+	root := filepath.Join(staging, "snapshot")
+	pluginRoot := filepath.Join(root, "plugins", plugin.Name)
+	if _, err := archive.ExtractVerified(
+		built.Payload, pluginRoot, built.Digest, PluginLimits()); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude-plugin"), 0o755); err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(struct {
+		Name    string            `json:"name"`
+		Owner   map[string]string `json:"owner"`
+		Plugins []struct {
+			Name    string `json:"name"`
+			Source  string `json:"source"`
+			Version string `json:"version,omitempty"`
+		} `json:"plugins"`
+	}{
+		Name:  marketplaceName,
+		Owner: map[string]string{"name": marketplaceName},
+		Plugins: []struct {
+			Name    string `json:"name"`
+			Source  string `json:"source"`
+			Version string `json:"version,omitempty"`
+		}{
+			{Name: plugin.Name, Source: "./plugins/" + plugin.Name, Version: plugin.Version},
+		},
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, ManifestPath), append(body, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		return err
+	}
+	return os.Rename(root, destination)
 }
 
 // Reclaim puts a quarantined copy back as the installed one: the recovery half of Restore.

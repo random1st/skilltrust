@@ -33,6 +33,18 @@ func TestAdoptedCopiesAreCountedOncePerPluginAndQualifyTheAllClear(t *testing.T)
 	f.orgs["acme"] = org
 
 	now := time.Now().UTC()
+	check, err := report.SignCheck(report.CheckResult{
+		Machine: "laptop-7", Scope: "managed", Sequence: 1,
+		CheckedAt: now, FreshUntil: now.Add(time.Hour), Complete: true, Checked: 3,
+	}, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkBody, _ := json.Marshal(check)
+	if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", checkBody); response.StatusCode != http.StatusOK {
+		t.Fatalf("check ingest: %s", response.Status)
+	}
+
 	for session := 0; session < 7; session++ {
 		signed, err := report.Sign(report.Event{
 			Kind: report.KindAdapted, Machine: "laptop-7", Marketplace: "acme",
@@ -61,7 +73,7 @@ func TestAdoptedCopiesAreCountedOncePerPluginAndQualifyTheAllClear(t *testing.T)
 			len(dashboard.Events))
 	}
 	if len(dashboard.Attention) != 0 {
-		t.Fatalf("an adoption is not an incident and must raise nothing: %v", dashboard.Attention)
+		t.Fatalf("an adoption plus a healthy current check must raise nothing: %v", dashboard.Attention)
 	}
 
 	response, page := getDashboard(t, f, "admin-token")
@@ -69,8 +81,7 @@ func TestAdoptedCopiesAreCountedOncePerPluginAndQualifyTheAllClear(t *testing.T)
 		t.Fatalf("dashboard answered %s", response.Status)
 	}
 	if strings.Contains(page, "Every machine that reported found what you published") {
-		t.Fatal("the all-clear claims every machine matches what was published, while one " +
-			"reports running its own copy")
+		t.Fatal("the page still shows the old event-based all-clear")
 	}
 	if !strings.Contains(page, "modified copy its owner chose to keep") {
 		t.Fatalf("the page never says what the fleet is actually running:\n%s", page)
@@ -88,7 +99,7 @@ func TestAQuietFleetStillGetsThePlainAllClear(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("dashboard answered %s", response.Status)
 	}
-	if !strings.Contains(page, "Every machine that reported found what you published") {
+	if !strings.Contains(page, "Every registered machine with a fresh signed check matched what you published") {
 		t.Fatalf("a fleet with nothing adopted must keep the plain all-clear:\n%s", page)
 	}
 }

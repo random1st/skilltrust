@@ -9,11 +9,14 @@ package notarytest
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/random1st/skilltrust/catalog"
+	"github.com/random1st/skilltrust/report"
 	"github.com/random1st/skilltrust/server/notary"
 )
 
@@ -218,6 +221,128 @@ func Contract(t *testing.T, fresh func(t *testing.T) notary.Storage) {
 		}
 		if !bytes.Contains(events[0], []byte(`"n":1`)) {
 			t.Fatalf("events are not ordered by name: first is %q", events[0])
+		}
+	})
+
+	t.Run("no checks is not an error", func(t *testing.T) {
+		storage := fresh(t)
+
+		checks, err := storage.ListChecks("acme")
+		if err != nil {
+			t.Fatalf("an organisation with no current checks answered %v", err)
+		}
+		if len(checks) != 0 {
+			t.Fatalf("got %d checks from an empty state store", len(checks))
+		}
+	})
+
+	t.Run("checks stay bounded to the latest signer and scope", func(t *testing.T) {
+		storage := fresh(t)
+		now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+		for _, record := range []notary.CheckRecord{
+			{
+				Result: report.CheckResult{
+					Machine: "laptop-1", Scope: "managed", Sequence: 3,
+					CheckedAt: now.Add(-2 * time.Minute), FreshUntil: now.Add(time.Hour),
+					Complete: true, Checked: 2,
+				},
+				Receipt: notary.Receipt{Signer: "sha256:machine-1", AcceptedAt: now.Add(-2 * time.Minute), Digest: "a"},
+			},
+			{
+				Result: report.CheckResult{
+					Machine: "laptop-1", Scope: "managed", Sequence: 3,
+					CheckedAt: now.Add(-time.Minute), FreshUntil: now.Add(time.Hour),
+					Complete: true, Checked: 4,
+				},
+				Receipt: notary.Receipt{Signer: "sha256:machine-1", AcceptedAt: now.Add(-time.Minute), Digest: "b"},
+			},
+			{
+				Result: report.CheckResult{
+					Machine: "laptop-1", Scope: "managed", Sequence: 2,
+					CheckedAt: now, FreshUntil: now.Add(time.Hour), Complete: true, Checked: 1,
+				},
+				Receipt: notary.Receipt{Signer: "sha256:machine-1", AcceptedAt: now, Digest: "c"},
+			},
+			{
+				Result: report.CheckResult{
+					Machine: "laptop-1", Scope: report.CheckScopeApprovedSkills, Sequence: 1,
+					CheckedAt: now, Complete: false, Checked: 0, Errors: 1,
+				},
+				Receipt: notary.Receipt{Signer: "sha256:machine-1", AcceptedAt: now, Digest: "d"},
+			},
+		} {
+			receipt, err := storage.SaveCheck("acme", record)
+			if record.Receipt.Digest == "b" || record.Receipt.Digest == "c" {
+				if !errors.Is(err, notary.ErrRefused) {
+					t.Fatalf("save %q = %v, want ErrRefused", record.Receipt.Digest, err)
+				}
+				if !receipt.AcceptedAt.IsZero() || receipt.Digest != "" {
+					t.Fatalf("refused save returned receipt %+v", receipt)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt != record.Receipt {
+				t.Fatalf("receipt = %+v, want %+v", receipt, record.Receipt)
+			}
+		}
+
+		checks, err := storage.ListChecks("acme")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(checks) != 2 {
+			t.Fatalf("got %d current checks, want 2 scopes", len(checks))
+		}
+
+		found := map[string]notary.CheckRecord{}
+		for _, one := range checks {
+			found[one.Result.Scope] = one
+		}
+		if found["managed"].Result.Checked != 2 || found["managed"].Result.Sequence != 3 {
+			t.Fatalf("managed = %+v, want the first accepted sequence and not a same-sequence overwrite or rollback", found["managed"])
+		}
+		if found[report.CheckScopeApprovedSkills].Receipt.Digest != "d" {
+			t.Fatalf("second scope lost its own latest check: %+v", found[report.CheckScopeApprovedSkills])
+		}
+	})
+
+	t.Run("check envelopes round trip byte for byte with their receipt digest", func(t *testing.T) {
+		storage := fresh(t)
+		envelope := []byte("{\n  \"payloadType\": \"application/vnd.skilltrust.check.v1+json\",\n  \"payload\": \"eyJzY29wZSI6Im1hbmFnZWQifQ==\"\n}\n")
+		digest := sha256.Sum256(envelope)
+		record := notary.CheckRecord{
+			Result: report.CheckResult{
+				Machine: "laptop-1", Scope: "managed", Sequence: 1,
+				CheckedAt:  time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+				FreshUntil: time.Date(2026, 9, 4, 13, 0, 0, 0, time.UTC),
+				Complete:   true, Checked: 1,
+			},
+			Receipt: notary.Receipt{
+				Signer: "sha256:machine-1", AcceptedAt: time.Date(2026, 9, 4, 12, 0, 30, 0, time.UTC),
+				Digest: hex.EncodeToString(digest[:]),
+			},
+			Envelope: envelope,
+		}
+		if _, err := storage.SaveCheck("acme", record); err != nil {
+			t.Fatal(err)
+		}
+		checks, err := storage.ListChecks("acme")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(checks) != 1 {
+			t.Fatalf("got %d checks, want 1", len(checks))
+		}
+		if !bytes.Equal(checks[0].Envelope, envelope) {
+			t.Fatalf("storage changed the signed check bytes:\n stored %q\n   want %q", checks[0].Envelope, envelope)
+		}
+		reloaded := sha256.Sum256(checks[0].Envelope)
+		if checks[0].Receipt.Digest != hex.EncodeToString(reloaded[:]) {
+			t.Fatalf("receipt digest %q no longer matches reloaded envelope %q", checks[0].Receipt.Digest, hex.EncodeToString(reloaded[:]))
 		}
 	})
 }

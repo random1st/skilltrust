@@ -5,7 +5,51 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/random1st/skilltrust/attest"
+	"github.com/random1st/skilltrust/report"
 )
+
+func TestDemoEvidenceSelectsTheSignedRestoreRegardlessOfFilenameOrder(t *testing.T) {
+	home := t.TempDir()
+	public, key, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attest.WritePublicKey(filepath.Join(home, "signer.pub"), public); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, "events")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, one := range []struct {
+		file string
+		kind report.Kind
+	}{
+		{"001-detection.json", report.KindUnverifiable},
+		{"002-restoration.json", report.KindRestored},
+	} {
+		envelope, err := report.Sign(report.Event{
+			Kind: one.kind, At: time.Now().UTC(), Machine: "demo", Plugin: "runbook",
+		}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := envelope.Save(filepath.Join(root, one.file)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	output := capture(t, func() {
+		if code := showDemoEvidence(home); code != exitClean {
+			t.Fatalf("evidence exited %d", code)
+		}
+	})
+	if !strings.Contains(output, "kind           restored") || strings.Contains(output, "001-detection") {
+		t.Fatalf("wrong evidence shown: %s", output)
+	}
+}
 
 // The demo is the first thing a stranger runs and the only claim most of them will ever
 // check, so a break in it is a break in the pitch. It runs here for the same reason the

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
@@ -29,11 +30,26 @@ const PayloadType = "application/vnd.skilltrust.event.v1+json"
 // EventVersion is the payload schema version.
 const EventVersion = 1
 
+// CheckPayloadType keeps a current-check signature from being replayed as an event or an
+// attestation.
+const CheckPayloadType = "application/vnd.skilltrust.check.v1+json"
+
+// CheckVersion is the signed current-check schema version.
+const CheckVersion = 1
+
 // Kind is what happened. Only things worth waking someone for are kinds; an unchanged plugin
 // produces no event at all, because a stream that reports normality is a stream nobody reads.
 type Kind string
 
 const (
+	// CheckScopeManaged is the marketplace-managed plugin cache this machine verified.
+	CheckScopeManaged = "managed"
+	// CheckScopeApprovedSkills is the machine-local approved loose-skill directory this
+	// machine verified.
+	CheckScopeApprovedSkills = "approved-skills"
+	// CheckScopeLoose is a compatibility alias for the same loose-skill surface.
+	CheckScopeLoose = "loose"
+
 	// KindRestored means a signed plugin had been changed on this machine and was put back.
 	KindRestored Kind = "restored"
 	// KindRevoked means a revoked plugin was found installed.
@@ -57,6 +73,13 @@ const (
 	// case where a machine knowingly runs bytes no publisher signed — so an organisation
 	// that cannot see it does not know what its fleet is running.
 	KindAdapted Kind = "adapted"
+)
+
+const (
+	maxMachineNameBytes = 255
+	maxHostNameBytes    = 255
+	maxCatalogChecks    = 32
+	maxCatalogNameBytes = 255
 )
 
 // Severity lets a receiver route without parsing the whole event.
@@ -105,6 +128,30 @@ type Event struct {
 	Detail     string `json:"detail,omitempty"`
 }
 
+// CatalogCheck names one catalog this machine used while producing a current check.
+type CatalogCheck struct {
+	Name       string    `json:"name"`
+	Sequence   int64     `json:"sequence,omitempty"`
+	ValidUntil time.Time `json:"valid_until,omitempty"`
+}
+
+// CheckResult is one machine's latest signed account of a verification scope.
+type CheckResult struct {
+	Version    int            `json:"version"`
+	Machine    string         `json:"machine"`
+	Host       string         `json:"host,omitempty"`
+	Scope      string         `json:"scope"`
+	Sequence   int64          `json:"sequence"`
+	CheckedAt  time.Time      `json:"checked_at"`
+	FreshUntil time.Time      `json:"fresh_until,omitempty"`
+	Complete   bool           `json:"complete"`
+	Checked    int            `json:"checked"`
+	Changed    int            `json:"changed,omitempty"`
+	Unapproved int            `json:"unapproved,omitempty"`
+	Errors     int            `json:"errors,omitempty"`
+	Catalogs   []CatalogCheck `json:"catalogs,omitempty"`
+}
+
 // Summary is the one line a human reads first, in an alert or a console row.
 func (e Event) Summary() string {
 	switch e.Kind {
@@ -149,6 +196,41 @@ func (e Event) displayHost() string {
 	return e.Machine
 }
 
+func (c CheckResult) displayHost() string {
+	if c.Host != "" {
+		return c.Host
+	}
+	return c.Machine
+}
+
+// Summary is the one line a human reads first from a current-check result.
+func (c CheckResult) Summary() string {
+	if c.Healthy() {
+		return fmt.Sprintf("%s checked %s: %d item(s) matched what was signed",
+			c.displayHost(), c.Scope, c.Checked)
+	}
+	parts := []string{fmt.Sprintf("%d checked", c.Checked)}
+	if c.Changed > 0 {
+		parts = append(parts, fmt.Sprintf("%d changed", c.Changed))
+	}
+	if c.Unapproved > 0 {
+		parts = append(parts, fmt.Sprintf("%d unapproved", c.Unapproved))
+	}
+	if c.Errors > 0 {
+		parts = append(parts, fmt.Sprintf("%d error(s)", c.Errors))
+	}
+	if !c.Complete {
+		parts = append(parts, "partial")
+	}
+	if c.FreshUntil.IsZero() {
+		parts = append(parts, "freshness unknown")
+	} else if !time.Now().UTC().Before(c.FreshUntil) {
+		parts = append(parts, "stale")
+	}
+	return fmt.Sprintf("%s checked %s: %s",
+		c.displayHost(), c.Scope, strings.Join(parts, ", "))
+}
+
 // Complete fills the fields derived from the kind, so the event that is signed and the event
 // that is delivered are the same one. They were briefly not: Sign filled them on its own copy
 // and every notification went out with an empty severity, which is the field a receiver
@@ -156,6 +238,65 @@ func (e Event) displayHost() string {
 func (e *Event) Complete() {
 	e.Version = EventVersion
 	e.Severity = e.Kind.Severity()
+}
+
+// Healthy reports whether this check is a complete, fresh and issue-free verdict with
+// non-zero coverage.
+func (c CheckResult) Healthy() bool {
+	return c.HealthyAt(time.Now().UTC())
+}
+
+// HealthyAt reports whether this check is a complete, still-fresh and issue-free verdict
+// with non-zero coverage at the given time.
+func (c CheckResult) HealthyAt(now time.Time) bool {
+	return c.Complete && !c.FreshUntil.IsZero() && now.Before(c.FreshUntil) && c.Checked > 0 &&
+		c.Changed == 0 && c.Unapproved == 0 && c.Errors == 0
+}
+
+func (c *CheckResult) complete() error {
+	switch {
+	case c.Machine == "":
+		return fmt.Errorf("check result needs a machine")
+	case len(c.Machine) > maxMachineNameBytes:
+		return fmt.Errorf("check result machine is too long")
+	case len(c.Host) > maxHostNameBytes:
+		return fmt.Errorf("check result host is too long")
+	case c.Scope == "":
+		return fmt.Errorf("check result needs a scope")
+	case !ValidCheckScope(c.Scope):
+		return fmt.Errorf("check result scope %q is not supported", c.Scope)
+	case c.Sequence <= 0:
+		return fmt.Errorf("check result needs a positive sequence")
+	case c.CheckedAt.IsZero():
+		return fmt.Errorf("check result needs a checked_at time")
+	case !c.FreshUntil.IsZero() && !c.FreshUntil.After(c.CheckedAt):
+		return fmt.Errorf("check result fresh_until must be after checked_at")
+	case c.Checked < 0 || c.Changed < 0 || c.Unapproved < 0 || c.Errors < 0:
+		return fmt.Errorf("check result counts cannot be negative")
+	}
+	if len(c.Catalogs) > maxCatalogChecks {
+		return fmt.Errorf("check result names too many catalogs")
+	}
+	for _, catalog := range c.Catalogs {
+		switch {
+		case catalog.Name == "":
+			return fmt.Errorf("check result needs every catalog to have a name")
+		case len(catalog.Name) > maxCatalogNameBytes:
+			return fmt.Errorf("check result catalog name is too long")
+		}
+	}
+	c.Version = CheckVersion
+	return nil
+}
+
+// ValidCheckScope bounds current-check storage to the product's supported surfaces.
+func ValidCheckScope(scope string) bool {
+	switch scope {
+	case CheckScopeManaged, CheckScopeApprovedSkills, CheckScopeLoose:
+		return true
+	default:
+		return false
+	}
 }
 
 // Sign wraps an event in a DSSE envelope under the machine's key.
@@ -185,12 +326,45 @@ func Verify(envelope *attest.Envelope, trusted *attest.TrustedKeys) (*Event, str
 	return &event, keyID, nil
 }
 
+// SignCheck wraps a current-check result in a DSSE envelope under the machine's key.
+func SignCheck(check CheckResult, key ed25519.PrivateKey) (*attest.Envelope, error) {
+	if err := check.complete(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(check)
+	if err != nil {
+		return nil, err
+	}
+	return attest.SignPayload(CheckPayloadType, payload, key), nil
+}
+
+// VerifyCheck checks a current-check result against a set of machine keys and returns it
+// with the signer.
+func VerifyCheck(envelope *attest.Envelope, trusted *attest.TrustedKeys) (*CheckResult, string, error) {
+	payload, keyID, err := attest.VerifyPayload(envelope, CheckPayloadType, trusted)
+	if err != nil {
+		return nil, "", err
+	}
+	var check CheckResult
+	if err := json.Unmarshal(payload, &check); err != nil {
+		return nil, "", fmt.Errorf("check result payload is not readable: %w", err)
+	}
+	if check.Version != CheckVersion {
+		return nil, "", fmt.Errorf("check result version %d is not understood by this build",
+			check.Version)
+	}
+	if err := check.complete(); err != nil {
+		return nil, "", err
+	}
+	return &check, keyID, nil
+}
+
 // Spool is a directory of events waiting to be delivered.
 //
-// Events are written before delivery is attempted and removed only once one succeeds. A
-// machine that is offline, or whose receiver is down, accumulates rather than loses: the
-// alternative is that the one incident worth hearing about is the one that happened while
-// the VPN was down.
+// Events are written before delivery is attempted and removed only once every configured
+// destination that should receive them has acknowledged them. A machine that is offline,
+// or whose receiver is down, accumulates rather than loses: the alternative is that the
+// one incident worth hearing about is the one that happened while the VPN was down.
 type Spool struct{ Directory string }
 
 // Add writes an event to the spool.
@@ -213,6 +387,24 @@ func (s Spool) Add(envelope *attest.Envelope, at time.Time, name string) (string
 	return path, envelope.Save(path)
 }
 
+// SaveCheck keeps one pending current-check per scope, replacing an older one because the
+// latest state is the only thing a receiver needs.
+func (s Spool) SaveCheck(envelope *attest.Envelope, scope string) (string, error) {
+	if err := os.MkdirAll(s.Directory, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(s.Directory, "check-"+sanitize(scope)+".json")
+	if err := envelope.Save(path + ".tmp"); err != nil {
+		return "", err
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		_ = os.Remove(path + ".tmp")
+		return "", err
+	}
+	_ = os.Remove(ackPath(path))
+	return path, nil
+}
+
 // Pending lists spooled events oldest first, which is the order a receiver should see them.
 func (s Spool) Pending() ([]string, error) {
 	entries, err := os.ReadDir(s.Directory)
@@ -224,7 +416,8 @@ func (s Spool) Pending() ([]string, error) {
 	}
 	var paths []string
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" &&
+			!strings.HasSuffix(entry.Name(), ".acks.json") {
 			paths = append(paths, filepath.Join(s.Directory, entry.Name()))
 		}
 	}

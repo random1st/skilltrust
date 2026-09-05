@@ -11,6 +11,8 @@ package notary
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +77,13 @@ type Org struct {
 	Machines *attest.TrustedKeys
 }
 
+// Machine is one registered computer identity.
+type Machine struct {
+	Name     string
+	Signer   string
+	Disabled bool
+}
+
 // Provenance is what the notary knows about where a catalog came from, beyond the
 // signatures on it. It is empty for a publish made with a static token: that credential
 // says who, and nothing about from where.
@@ -86,7 +95,27 @@ type Provenance struct {
 	// read a publisher-supplied location would be checking whatever the publisher
 	// preferred it to check.
 	Repository string
+	Ref        string
 	Commit     string
+}
+
+// CatalogProvenanceStorage stores how one accepted catalog reached this notary, keyed by
+// the digest of the exact countersigned envelope that became visible to readers.
+type CatalogProvenanceStorage interface {
+	PutCatalogProvenance(org, marketplace string, provenance Provenance, envelopeDigest string) error
+	GetCatalogProvenance(org, marketplace, envelopeDigest string) (Provenance, error)
+}
+
+// MachineRegistry lists the current machine records for a fleet view, including machines
+// that have not filed a check yet.
+type MachineRegistry interface {
+	RegisteredMachines(orgName string) ([]Machine, error)
+}
+
+// CheckAdmission is the optional strong hosted machine-admission path. It returns the
+// organisation and the exact machine key set this token may sign with.
+type CheckAdmission interface {
+	AuthorizeCheck(orgName, token string, now time.Time) (Org, *attest.TrustedKeys, error)
 }
 
 // Gate is an optional admission check a deployment installs. It runs after a catalog has
@@ -108,10 +137,11 @@ type Service struct {
 	// keys are the countersigning keys, first one primary. More than one exists only
 	// mid-rotation: every catalog is signed by all of them, so a consumer pinning either
 	// the outgoing or the incoming key keeps verifying through the overlap window.
-	keys  []ed25519.PrivateKey
-	oidc  *OIDCVerifier
-	gate  Gate
-	brand string
+	keys           []ed25519.PrivateKey
+	oidc           *OIDCVerifier
+	gate           Gate
+	brand          string
+	checkAdmission CheckAdmission
 }
 
 // New wires the default deployment: records under a data directory, organisations from
@@ -152,6 +182,13 @@ func (s *Service) WithBrand(brand string) *Service {
 	return s
 }
 
+// WithCheckAdmission enables the strong hosted machine-admission path for checks and
+// verified event history.
+func (s *Service) WithCheckAdmission(admission CheckAdmission) *Service {
+	s.checkAdmission = admission
+	return s
+}
+
 // AuthorizeOIDC accepts a publish when a GitHub Actions token proves the caller is a
 // workflow of the repository this organisation registered.
 //
@@ -169,6 +206,7 @@ func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, Prov
 		return Org{}, Provenance{}, err
 	}
 	where := Provenance{Organisation: orgName, Repository: repository, Commit: commit}
+	where.Ref = ref
 	// A repository that matched by name but not by ref is reported as a ref failure, not
 	// as "unregistered": the caller is who they claim to be and got the branch wrong, and
 	// telling them their repository is unknown would send them to fix the wrong thing.
@@ -337,6 +375,13 @@ func (s *Service) AcceptFrom(ctx context.Context, org Org, marketplace string, b
 		return nil, err
 	}
 
+	if storage, ok := s.storage.(CatalogProvenanceStorage); ok && where.Repository != "" {
+		sum := sha256.Sum256(countersigned)
+		if err := storage.PutCatalogProvenance(org.Name, marketplace, where,
+			hex.EncodeToString(sum[:])); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.storage.PutCatalog(org.Name, marketplace, countersigned); err != nil {
 		return nil, err
 	}

@@ -204,7 +204,8 @@ func reconcileOne(
 		result.Detail = "no local copy of the signed bytes to restore from"
 		return result
 	}
-	kept, err := Restore(installed, source, options.QuarantineRoot, managed.Name, options.Now)
+	kept, err := RestoreVerified(
+		installed, source, options.QuarantineRoot, managed.Name, options.Now, managed.Digest)
 	if err != nil {
 		result.Outcome, result.Detail = OutcomeUnverifiable, err.Error()
 		return result

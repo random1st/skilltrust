@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -98,11 +99,17 @@ func runRefresh(args []string) int {
 // it against the keys the subscription already pins, and merges newly announced keys into
 // the announcing key's party. It reports the added key ids, empty when nothing changed.
 func refreshSubscription(subscription *Subscription, keysPath string, now time.Time) ([]string, error) {
+	return refreshSubscriptionContext(context.Background(), subscription, keysPath, now)
+}
+
+func refreshSubscriptionContext(
+	ctx context.Context, subscription *Subscription, keysPath string, now time.Time,
+) ([]string, error) {
 	address, err := keySetURL(subscription.CatalogURL)
 	if err != nil {
 		return nil, err
 	}
-	body, err := source.FetchJSON(address)
+	body, err := source.FetchJSONContext(ctx, address)
 	if err != nil {
 		return nil, err
 	}

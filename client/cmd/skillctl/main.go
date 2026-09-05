@@ -36,9 +36,12 @@ Seeing what it does (about a minute, in a sandbox, no account):
   skillctl demo                  publish, install, tamper, detect, restore, file
 
 Following a catalog (on a machine):
+  skillctl connect [https://axela.example]
+                                 browser-approved Axela setup for this machine; defaults to https://axela.app
   skillctl subscribe <git-url> --key <pub>
                                  follow an organisation's signed skill catalog
   skillctl sync                  fetch, verify, and reconcile signed plugins
+  skillctl report flush          retry saved reports and first-check receipts
   skillctl adopt <plugin>        keep a change you made, instead of having it put back
   skillctl refresh [catalog]     pin a rotating notary's next key from its signed announcement
   skillctl hook <subcommand>     run or install the session-start reconciler
@@ -80,6 +83,8 @@ func main() {
 		os.Exit(runMarketplace(os.Args[2:]))
 	case "subscribe":
 		os.Exit(runSubscribe(os.Args[2:]))
+	case "connect":
+		os.Exit(runConnect(os.Args[2:]))
 	case "trust":
 		os.Exit(runTrust(os.Args[2:]))
 	case "init":
@@ -94,6 +99,8 @@ func main() {
 		os.Exit(runCatalog(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
+	case "report":
+		os.Exit(runReport(os.Args[2:]))
 	case "adopt":
 		os.Exit(runAdopt(os.Args[2:]))
 	case "refresh":

@@ -8,11 +8,13 @@
 package source
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Directory is where fetched repositories are kept inside the skilltrust home.
@@ -21,6 +23,8 @@ const Directory = "sources"
 // SkillsSubdirectory is the conventional place a marketplace keeps its skills. A repository
 // that does not use it is still scanned from the root, so this is a hint and not a rule.
 const SkillsSubdirectory = "skills"
+
+const commandWaitDelay = 250 * time.Millisecond
 
 // Source is a git repository this machine installs skills from.
 type Source struct {
@@ -48,6 +52,13 @@ func NameFor(repository string) string {
 // fetching megabytes of history to read a dozen markdown files is the kind of cost that
 // makes people avoid the tool that imposes it.
 func Fetch(root, name, repository, ref string) (Source, error) {
+	return FetchContext(context.Background(), root, name, repository, ref)
+}
+
+// FetchContext is Fetch with a caller-supplied cancellation boundary.
+func FetchContext(
+	ctx context.Context, root, name, repository, ref string,
+) (Source, error) {
 	if err := checkArgument(repository); err != nil {
 		return Source{}, err
 	}
@@ -61,16 +72,16 @@ func Fetch(root, name, repository, ref string) (Source, error) {
 	}
 
 	if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-		if err := update(directory, ref); err != nil {
+		if err := updateContext(ctx, directory, ref); err != nil {
 			return Source{}, err
 		}
 	} else {
-		if err := clone(directory, repository, ref); err != nil {
+		if err := cloneContext(ctx, directory, repository, ref); err != nil {
 			return Source{}, err
 		}
 	}
 
-	commit, err := run(directory, "rev-parse", "HEAD")
+	commit, err := runContext(ctx, directory, "rev-parse", "HEAD")
 	if err != nil {
 		return Source{}, err
 	}
@@ -87,14 +98,23 @@ func SkillRoot(root, name string) string {
 }
 
 func clone(directory, repository, ref string) error {
+	return cloneContext(context.Background(), directory, repository, ref)
+}
+
+func cloneContext(
+	ctx context.Context, directory, repository, ref string,
+) error {
 	arguments := []string{"clone", "--quiet", "--depth", "1"}
 	if ref != "" {
-		arguments = append(arguments, "--branch", ref)
+		arguments = append(arguments, "--branch", cloneTarget(ref))
 	}
 	arguments = append(arguments, "--", repository, directory)
 
-	command := exec.Command("git", arguments...)
+	command := commandContext(ctx, "git", arguments...)
 	if output, err := command.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("cannot clone %s: %w", repository, ctx.Err())
+		}
 		return fmt.Errorf("cannot clone %s: %w: %s", repository, err, strings.TrimSpace(string(output)))
 	}
 	return nil
@@ -104,28 +124,55 @@ func clone(directory, repository, ref string) error {
 // of somebody else's repository, not a place to work; keeping edits there would mean the
 // installed bytes came from a tree only this machine has ever seen.
 func update(directory, ref string) error {
+	return updateContext(context.Background(), directory, ref)
+}
+
+func updateContext(ctx context.Context, directory, ref string) error {
 	target := ref
 	if target == "" {
 		target = "HEAD"
 	}
-	if _, err := run(directory, "fetch", "--quiet", "--depth", "1", "origin", target); err != nil {
+	if _, err := runContext(ctx, directory, "fetch", "--quiet", "--depth", "1", "origin", target); err != nil {
 		return err
 	}
-	if _, err := run(directory, "reset", "--quiet", "--hard", "FETCH_HEAD"); err != nil {
+	if _, err := runContext(ctx, directory, "reset", "--quiet", "--hard", "FETCH_HEAD"); err != nil {
 		return err
 	}
-	_, err := run(directory, "clean", "-qfd")
+	_, err := runContext(ctx, directory, "clean", "-qfd")
 	return err
 }
 
 func run(directory string, arguments ...string) (string, error) {
-	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	return runContext(context.Background(), directory, arguments...)
+}
+
+func runContext(ctx context.Context, directory string, arguments ...string) (string, error) {
+	command := commandContext(ctx, "git", append([]string{"-C", directory}, arguments...)...)
 	output, err := command.CombinedOutput()
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return "", fmt.Errorf("git %s: %w", strings.Join(arguments, " "), ctx.Err())
+		}
 		return "", fmt.Errorf("git %s: %w: %s",
 			strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func commandContext(ctx context.Context, name string, arguments ...string) *exec.Cmd {
+	if ctx == nil {
+		return exec.Command(name, arguments...)
+	}
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.WaitDelay = commandWaitDelay
+	return command
+}
+
+func cloneTarget(ref string) string {
+	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok && branch != "" {
+		return branch
+	}
+	return ref
 }
 
 // checkArgument refuses a value that git would read as an option rather than as data. A URL

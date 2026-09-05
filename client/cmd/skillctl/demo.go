@@ -12,6 +12,7 @@ import (
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/report"
 )
 
 // The demo answers the question every reader of the README arrives with — "what does this
@@ -329,11 +330,32 @@ func showDemoEvidence(home string) int {
 		return exitClean
 	}
 
-	body, err := os.ReadFile(found[0])
+	public, err := attest.LoadPublicKey(filepath.Join(home, "signer.pub"))
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("   filed      %s\n", found[0])
+	trusted := attest.NewTrustedKeys(public)
+	var evidencePath string
+	for _, path := range found {
+		envelope, err := attest.LoadEnvelope(path)
+		if err != nil || envelope.PayloadType != report.PayloadType {
+			continue
+		}
+		event, _, err := report.Verify(envelope, trusted)
+		if err == nil && event.Kind == report.KindRestored {
+			evidencePath = path
+			break
+		}
+	}
+	if evidencePath == "" {
+		fmt.Fprintln(os.Stderr, "skillctl: no signed restore event was filed")
+		return exitFindings
+	}
+	body, err := os.ReadFile(evidencePath)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("   filed      %s\n", evidencePath)
 
 	// The envelope is shown decoded. A DSSE payload is base64, and printing it raw would
 	// end the demo on the one screen nobody can read — at the exact moment the claim being

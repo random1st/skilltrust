@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -446,6 +447,10 @@ func statePath(catalogName string) string {
 	return filepath.Join(Home(), "state", catalogName+".json")
 }
 
+func snapshotStatePath(subscription Subscription) string {
+	return statePath(subscription.Name + ".sequence")
+}
+
 // runSync brings every managed skill back to what its catalog publishes.
 
 // shortCommit renders a commit for a person rather than for git.
@@ -458,7 +463,11 @@ func shortCommit(commit string) string {
 
 // fetchCatalog refreshes one marketplace checkout from its repository.
 func fetchCatalog(subscription Subscription) (source.Source, error) {
-	return source.Fetch(catalogRoot(), subscription.Name,
+	return fetchCatalogContext(context.Background(), subscription)
+}
+
+func fetchCatalogContext(ctx context.Context, subscription Subscription) (source.Source, error) {
+	return source.FetchContext(ctx, catalogRoot(), subscription.Name,
 		subscription.Repository, subscription.Ref)
 }
 
@@ -478,12 +487,22 @@ func fetchCatalog(subscription Subscription) (source.Source, error) {
 func readSnapshot(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time, persist bool,
 ) (*catalog.Snapshot, error) {
-	envelope, err := attest.LoadEnvelope(indexPath(subscription))
+	return readSnapshotPath(indexPath(subscription), subscription, trusted, now, persist)
+}
+
+func readSnapshotPath(
+	path string,
+	subscription Subscription,
+	trusted *attest.TrustedKeys,
+	now time.Time,
+	persist bool,
+) (*catalog.Snapshot, error) {
+	envelope, err := attest.LoadEnvelope(path)
 	if err != nil {
 		return nil, fmt.Errorf("no usable %s: %w", CatalogFileName, err)
 	}
 
-	sequenceState, err := catalog.LoadState(statePath(subscription.Name + ".sequence"))
+	sequenceState, err := catalog.LoadState(snapshotStatePath(subscription))
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +514,7 @@ func readSnapshot(
 		return nil, err
 	}
 	if persist {
-		if err := sequenceState.Save(
-			statePath(subscription.Name+".sequence"), snapshot.Sequence, now); err != nil {
+		if err := sequenceState.Save(snapshotStatePath(subscription), snapshot.Sequence, now); err != nil {
 			return nil, err
 		}
 	}
@@ -511,6 +529,14 @@ func readSnapshotOnly(
 	subscription Subscription, trusted *attest.TrustedKeys, now time.Time,
 ) (*catalog.Snapshot, error) {
 	return readSnapshot(subscription, trusted, now, false)
+}
+
+func saveSnapshotSequence(subscription Subscription, sequence int64, now time.Time) error {
+	state, err := catalog.LoadState(snapshotStatePath(subscription))
+	if err != nil {
+		return err
+	}
+	return state.Save(snapshotStatePath(subscription), sequence, now)
 }
 
 // repeatedString collects a flag given more than once, in the order it was given.

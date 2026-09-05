@@ -10,13 +10,20 @@
 
 <h1>{{.Org}} <small class="muted">· {{.Now.Format "2006-01-02 15:04"}} UTC</small></h1>
 
+{{if .CurrentStateWarnings}}
+<div class="notice bad">
+  <b>Current state unavailable</b>
+  <ul>{{range .CurrentStateWarnings}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{end}}
+
 {{if .Attention}}
 <div class="notice bad">
   <b>Worth a look</b>
   <ul>{{range .Attention}}<li>{{.}}</li>{{end}}</ul>
 </div>
-{{else}}
-<p class="ok">Nothing needs looking at.{{if .AdaptedNote}} {{.AdaptedNote}}{{else}} Every machine that reported found what you published.{{end}}</p>
+{{else if not .CurrentStateWarnings}}
+<p class="ok">Nothing needs looking at.{{if .AdaptedNote}} {{.AdaptedNote}}{{else}} Every registered machine with a fresh signed check matched what you published.{{end}}</p>
 {{end}}
 
 <h2>Marketplaces</h2>
@@ -35,27 +42,35 @@
 </table>
 {{else}}
 <p class="empty">nothing published yet</p>
-<p class="hint">Sign one with <span class="mono">skillctl marketplace sign .</span> and PUT the envelope
-to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using your publish token.</p>
+<p class="hint">Prepare one with <span class="mono">skillctl marketplace prepare</span>. GitHub Actions can
+publish it here with its OIDC identity, and self-hosted setups can still PUT a signed envelope
+to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> with the publish token.</p>
 {{end}}
 
-<h2>Machines</h2>
+<h2>Fleet</h2>
 {{if .Machines}}
-<p class="hint">{{.ActiveMachines}} reported in the last 30 days.</p>
+{{if .CurrentStateWarnings}}
+<p class="hint">Previously received results are shown below. Current status is unavailable.</p>
+{{else}}
+<p class="hint">{{.ActiveMachines}} machine(s) have a current signed check inside its freshness window.</p>
+{{end}}
 <table>
-  <tr><th>machine</th><th>last report</th><th class="n">put back</th><th class="n">still changed</th><th class="n">your own copies</th><th class="n">could not check</th></tr>
+  <tr><th>machine</th><th>status</th><th>checked at</th><th>fresh until</th><th>scope(s)</th><th class="n">checked</th><th class="n">changed</th><th class="n">unapproved</th><th class="n">errors</th></tr>
   {{range .Machines}}
   <tr>
     <td>{{.Name}}</td>
-    <td>{{.Last.Format "2006-01-02 15:04"}}</td>
-    <td class="n">{{if .Restored}}<span class="bad">{{.Restored}}</span>{{else}}0{{end}}</td>
-    <td class="n">{{if .SkillsChanged}}<span class="bad">{{.SkillsChanged}}</span>{{else}}0{{end}}</td>
-    <td class="n">{{if .Adapted}}{{.Adapted}}{{else}}0{{end}}</td>
-    <td class="n">{{if .Unchecked}}<span class="bad">{{.Unchecked}}</span>{{else}}0{{end}}</td>
+    <td>{{if eq .Status "Checked"}}<span class="ok">{{.Status}}</span>{{else if or (eq .Status "Pending") (eq .Status "Unknown")}}<span class="muted">{{.Status}}</span>{{else}}<span class="bad">{{.Status}}</span>{{end}}</td>
+    <td>{{if .Last.IsZero}}—{{else}}{{.Last.Format "2006-01-02 15:04"}}{{end}}</td>
+    <td>{{if .FreshUntil.IsZero}}—{{else}}{{.FreshUntil.Format "2006-01-02 15:04"}}{{end}}</td>
+    <td>{{.ScopeSummary}}</td>
+    <td class="n">{{.Checked}}</td>
+    <td class="n">{{if .Changed}}<span class="bad">{{.Changed}}</span>{{else}}0{{end}}</td>
+    <td class="n">{{if .Unapproved}}<span class="bad">{{.Unapproved}}</span>{{else}}0{{end}}</td>
+    <td class="n">{{if .Errors}}<span class="bad">{{.Errors}}</span>{{else}}0{{end}}</td>
   </tr>
   {{end}}
 </table>
-{{else}}<p class="empty">no machine has reported</p>{{end}}
+{{else if .CurrentStateWarnings}}<p class="empty">Computer status is unavailable. Refresh this page to try again.</p>{{else}}<p class="empty">no machine has registered or reported yet</p>{{end}}
 
 <h2>Events</h2>
 {{if .Events}}
@@ -64,7 +79,7 @@ to <span class="mono">/v1/catalogs/{{.Org}}/&lt;marketplace&gt;</span> using you
   <tr>
     <td class="mono muted">{{.At.Format "01-02 15:04"}}</td>
     <td>{{.Machine}}</td>
-    <td>{{.Summary}}</td>
+    <td>{{.Summary}}{{if .Admission}} <span class="tag">{{if eq .Admission "UNKNOWN"}}Acceptance time unknown{{else}}{{.Admission}}{{end}}</span>{{end}}</td>
   </tr>
   {{end}}
 </table>

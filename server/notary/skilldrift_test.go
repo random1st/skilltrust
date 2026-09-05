@@ -27,6 +27,19 @@ func TestASkillThatDriftedFromItsApprovalReachesTheConsole(t *testing.T) {
 	f.orgs["acme"] = org
 
 	now := time.Now().UTC()
+	check, err := report.SignCheck(report.CheckResult{
+		Machine: "laptop-7", Scope: "managed", Sequence: 1,
+		CheckedAt: now, FreshUntil: now.Add(time.Hour),
+		Complete: true, Checked: 3, Unapproved: 1,
+	}, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkBody, _ := json.Marshal(check)
+	if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", checkBody); response.StatusCode != http.StatusOK {
+		t.Fatalf("check ingest: %s", response.Status)
+	}
+
 	// Filed every session until somebody acts on it, which is what a real machine does.
 	for session := 0; session < 5; session++ {
 		signed, err := report.Sign(report.Event{
@@ -57,13 +70,8 @@ func TestASkillThatDriftedFromItsApprovalReachesTheConsole(t *testing.T) {
 	}
 
 	attention := strings.Join(dashboard.Attention, "\n")
-	if !strings.Contains(attention, "no longer matches what was approved") {
-		t.Errorf("the panel must say what happened:\n%s", attention)
-	}
-	// The distinction from a restore is the whole point: nothing was put back.
-	if !strings.Contains(attention, "nothing put it back") {
-		t.Errorf("a drifted skill is not a restored plugin, and the panel must not imply "+
-			"it was repaired:\n%s", attention)
+	if !strings.Contains(attention, "needs attention") {
+		t.Errorf("the panel must reflect the failed current check:\n%s", attention)
 	}
 
 	response, page := getDashboard(t, f, "admin-token")

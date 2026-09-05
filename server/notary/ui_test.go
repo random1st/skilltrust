@@ -1,10 +1,13 @@
 package notary
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,41 @@ import (
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/report"
 )
+
+type historicalDirectory struct {
+	StaticDirectory
+	keys     *attest.TrustedKeys
+	machines []Machine
+}
+
+func (d historicalDirectory) HistoricalMachineKeys(string) (*attest.TrustedKeys, error) {
+	return d.keys, nil
+}
+
+func (d historicalDirectory) RegisteredMachines(string) ([]Machine, error) {
+	return d.machines, nil
+}
+
+type rosterErrorDirectory struct {
+	StaticDirectory
+	err error
+}
+
+func (d rosterErrorDirectory) RegisteredMachines(string) ([]Machine, error) {
+	return nil, d.err
+}
+
+type checksErrorStorage struct {
+	*FileStorage
+	err error
+}
+
+func (s checksErrorStorage) ListChecks(org string) ([]CheckRecord, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.FileStorage.ListChecks(org)
+}
 
 func getDashboard(t *testing.T, f *fixture, password string) (*http.Response, string) {
 	t.Helper()
@@ -83,6 +121,181 @@ func TestDashboardShowsTheOrganisationsState(t *testing.T) {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("the dashboard does not show %q", expected)
 		}
+	}
+}
+
+func TestDashboardKeepsLegacyEventsVisibleWithUnknownAdmission(t *testing.T) {
+	machinePub, machineKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, notaryKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := Org{
+		Name:        "acme",
+		IngestToken: NewSecret("ingest-token"),
+		AdminToken:  NewSecret("admin-token"),
+		Publishers:  attest.NewTrustedKeys(machinePub),
+	}
+	directory := historicalDirectory{
+		StaticDirectory: StaticDirectory{"acme": org},
+		keys:            attest.NewTrustedKeys(machinePub),
+	}
+	service := NewFrom(NewFileStorage(t.TempDir()), directory, notaryKey)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	envelope, err := report.Sign(report.Event{
+		Kind: report.KindRestored, Machine: "old-laptop", Marketplace: "acme",
+		Plugin: "deploy-runbook", At: time.Now().UTC(),
+	}, machineKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/events/acme", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer ingest-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("legacy ingest answered %s", response.Status)
+	}
+
+	request, err = http.NewRequest(http.MethodGet, server.URL+"/ui/acme", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth("admin", "admin-token")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard answered %s", response.Status)
+	}
+	for _, expected := range []string{"old-laptop", "Acceptance time unknown", "Disabled"} {
+		if !strings.Contains(string(page), expected) {
+			t.Fatalf("legacy page does not show %q:\n%s", expected, page)
+		}
+	}
+}
+
+func TestDashboardKeepsCurrentCheckStateWhenNewerEventsAndOtherScopesArrive(t *testing.T) {
+	machinePub, machineKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, notaryKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	org := Org{
+		Name:        "acme",
+		IngestToken: NewSecret("ingest-token"),
+		AdminToken:  NewSecret("admin-token"),
+		Publishers:  attest.NewTrustedKeys(machinePub),
+		Machines:    attest.NewTrustedKeys(machinePub),
+	}
+	directory := historicalDirectory{
+		StaticDirectory: StaticDirectory{"acme": org},
+		machines: []Machine{{
+			Name:   "Roman's laptop",
+			Signer: attest.KeyID(machinePub),
+		}},
+	}
+	service := NewFrom(NewFileStorage(t.TempDir()), directory, notaryKey)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	for _, check := range []report.CheckResult{
+		{
+			Machine:   "signed-machine-name",
+			Scope:     report.CheckScopeApprovedSkills,
+			Sequence:  1,
+			CheckedAt: now.Add(-time.Minute),
+			Complete:  true,
+			Checked:   2,
+		},
+		{
+			Machine:    "signed-machine-name",
+			Scope:      report.CheckScopeManaged,
+			Sequence:   2,
+			CheckedAt:  now,
+			FreshUntil: now.Add(time.Hour),
+			Complete:   true,
+			Checked:    3,
+		},
+	} {
+		envelope, err := report.SignCheck(check, machineKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response := post(t, server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
+			t.Fatalf("check ingest: %s", response.Status)
+		}
+	}
+
+	eventEnvelope, err := report.Sign(report.Event{
+		Kind:        report.KindRestored,
+		Machine:     "renamed-by-event",
+		Marketplace: "acme",
+		Plugin:      "deploy-runbook",
+		At:          now.Add(2 * time.Minute),
+	}, machineKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBody, err := json.Marshal(eventEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := post(t, server.URL+"/v1/events/acme", "ingest-token", eventBody); response.StatusCode != http.StatusOK {
+		t.Fatalf("event ingest: %s", response.Status)
+	}
+
+	dashboard := service.BuildDashboard(org, now.Add(3*time.Minute))
+	if len(dashboard.Machines) != 1 {
+		t.Fatalf("machines = %d, want 1", len(dashboard.Machines))
+	}
+	machine := dashboard.Machines[0]
+	if machine.Name != "Roman's laptop" {
+		t.Fatalf("fleet row name = %q, want registered display name", machine.Name)
+	}
+	if !machine.Last.Equal(now) {
+		t.Fatalf("checked at = %s, want latest check at %s", machine.Last, now)
+	}
+	if !machine.FreshUntil.IsZero() {
+		t.Fatalf("fresh until = %s, want zero because one required scope omitted it", machine.FreshUntil)
+	}
+	if machine.Status != "Stale" {
+		t.Fatalf("status = %q, want Stale when any required scope is unfresh", machine.Status)
+	}
+	if machine.ScopeSummary() != report.CheckScopeApprovedSkills+", "+report.CheckScopeManaged {
+		t.Fatalf("scope summary = %q", machine.ScopeSummary())
+	}
+	if dashboard.ActiveMachines != 0 {
+		t.Fatalf("active machines = %d, want 0", dashboard.ActiveMachines)
 	}
 }
 
@@ -231,9 +444,8 @@ func TestLandingIsPublicAndSilent(t *testing.T) {
 }
 
 // The active-machine count is the number a per-machine plan meters, so it must count
-// fleets honestly: a machine whose last verified report is older than thirty days is
-// not a seat, and a machine reporting today is.
-func TestActiveMachinesCountsOnlyTheLastThirtyDays(t *testing.T) {
+// fleets honestly: only machines with a fresh signed current check are active.
+func TestActiveMachinesCountsOnlyFreshCurrentChecks(t *testing.T) {
 	f := withEventTokens(newFixture(t))
 
 	freshPub, freshKey, err := attest.GenerateKey()
@@ -249,25 +461,26 @@ func TestActiveMachinesCountsOnlyTheLastThirtyDays(t *testing.T) {
 	org.Machines = attest.NewTrustedKeys(freshPub, stalePub)
 	f.orgs["acme"] = org
 
-	events := []struct {
+	checks := []struct {
 		machine string
 		key     ed25519.PrivateKey
 		at      time.Time
+		until   time.Time
 	}{
-		{"laptop-fresh", freshKey, time.Now().UTC()},
-		{"laptop-stale", staleKey, time.Now().UTC().AddDate(0, 0, -45)},
+		{"laptop-fresh", freshKey, time.Now().UTC(), time.Now().UTC().Add(time.Hour)},
+		{"laptop-stale", staleKey, time.Now().UTC().Add(-2 * time.Hour), time.Now().UTC().Add(-time.Hour)},
 	}
-	for _, e := range events {
-		signed, err := report.Sign(report.Event{
-			Kind: report.KindRestored, Machine: e.machine, Marketplace: "acme",
-			Plugin: "deploy-runbook", At: e.at,
-		}, e.key)
+	for index, check := range checks {
+		signed, err := report.SignCheck(report.CheckResult{
+			Machine: check.machine, Scope: "managed", Sequence: int64(index + 1),
+			CheckedAt: check.at, FreshUntil: check.until, Complete: true, Checked: 4,
+		}, check.key)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body, _ := json.Marshal(signed)
 		if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
-			t.Fatalf("ingest: %s", response.Status)
+			t.Fatalf("check ingest: %s", response.Status)
 		}
 	}
 
@@ -275,11 +488,195 @@ func TestActiveMachinesCountsOnlyTheLastThirtyDays(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("dashboard answered %s", response.Status)
 	}
-	if !strings.Contains(page, "1 reported in the last 30 days") {
+	if !strings.Contains(page, "1 machine(s) have a current signed check inside its freshness window") {
 		t.Fatal("the dashboard must count exactly the fresh machine as active")
 	}
 	if !strings.Contains(page, "laptop-stale") {
 		t.Fatal("the stale machine still belongs in the table; only the active count excludes it")
+	}
+}
+
+func TestDashboardWarnsWhenLiveRosterCannotBeRead(t *testing.T) {
+	machinePub, machineKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, notaryKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	org := Org{
+		Name:        "acme",
+		IngestToken: NewSecret("ingest-token"),
+		AdminToken:  NewSecret("admin-token"),
+		Publishers:  attest.NewTrustedKeys(machinePub),
+		Machines:    attest.NewTrustedKeys(machinePub),
+	}
+	directory := rosterErrorDirectory{
+		StaticDirectory: StaticDirectory{"acme": org},
+		err:             fmt.Errorf("roster offline"),
+	}
+	service := NewFrom(NewFileStorage(t.TempDir()), directory, notaryKey)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	envelope, err := report.SignCheck(report.CheckResult{
+		Machine:    "cached-machine",
+		Scope:      report.CheckScopeManaged,
+		Sequence:   1,
+		CheckedAt:  now,
+		FreshUntil: now.Add(time.Hour),
+		Complete:   true,
+		Checked:    3,
+	}, machineKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := post(t, server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
+		t.Fatalf("check ingest: %s", response.Status)
+	}
+
+	dashboard := service.BuildDashboard(org, now.Add(10*time.Second))
+	if len(dashboard.CurrentStateWarnings) != 1 {
+		t.Fatalf("warnings = %v, want 1 roster warning", dashboard.CurrentStateWarnings)
+	}
+	if got := dashboard.CurrentStateWarnings[0]; !strings.Contains(got, "current list of computers is unavailable") {
+		t.Fatalf("warning = %q", got)
+	}
+	if len(dashboard.Machines) != 1 {
+		t.Fatalf("machines = %d, want 1", len(dashboard.Machines))
+	}
+	if dashboard.Machines[0].Status != "Unknown" {
+		t.Fatalf("status = %q, want Unknown", dashboard.Machines[0].Status)
+	}
+	if dashboard.Machines[0].Checked != 3 {
+		t.Fatalf("checked = %d, want 3", dashboard.Machines[0].Checked)
+	}
+	if dashboard.ActiveMachines != 0 {
+		t.Fatalf("active machines = %d, want 0 when roster is unavailable", dashboard.ActiveMachines)
+	}
+	if len(dashboard.Attention) != 0 {
+		t.Fatalf("attention = %v, want none because warnings replace all-clear", dashboard.Attention)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/ui/acme", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth("admin", "admin-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	page, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard answered %s", response.Status)
+	}
+	text := string(page)
+	for _, expected := range []string{
+		"Current state unavailable",
+		"current list of computers is unavailable",
+		"cached-machine",
+		"Unknown",
+		"Previously received results are shown below. Current status is unavailable.",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("dashboard page does not show %q:\n%s", expected, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"Nothing needs looking at",
+		"Every registered machine with a fresh signed check matched what you published.",
+		">Checked<",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("dashboard page must not claim %q when roster is unavailable:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestDashboardWarnsWhenRosterAndChecksAreUnavailable(t *testing.T) {
+	publisherPub, _, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, notaryKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := Org{
+		Name:       "acme",
+		AdminToken: NewSecret("admin-token"),
+		Publishers: attest.NewTrustedKeys(publisherPub),
+	}
+	directory := rosterErrorDirectory{
+		StaticDirectory: StaticDirectory{"acme": org},
+		err:             fmt.Errorf("roster offline"),
+	}
+	storage := checksErrorStorage{
+		FileStorage: NewFileStorage(t.TempDir()),
+		err:         fmt.Errorf("checks offline"),
+	}
+	service := NewFrom(storage, directory, notaryKey)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	dashboard := service.BuildDashboard(org, time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC))
+	if len(dashboard.CurrentStateWarnings) != 2 {
+		t.Fatalf("warnings = %v, want roster and checks warnings", dashboard.CurrentStateWarnings)
+	}
+	if len(dashboard.Machines) != 0 {
+		t.Fatalf("machines = %d, want 0 when both reads fail", len(dashboard.Machines))
+	}
+	if len(dashboard.Attention) != 0 {
+		t.Fatalf("attention = %v, want none", dashboard.Attention)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/ui/acme", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth("admin", "admin-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	page, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard answered %s", response.Status)
+	}
+	text := string(page)
+	for _, expected := range []string{
+		"Current state unavailable",
+		"current list of computers is unavailable",
+		"The latest checks are unavailable",
+		"Computer status is unavailable. Refresh this page to try again.",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("dashboard page does not show %q:\n%s", expected, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"Nothing needs looking at",
+		"Every registered machine with a fresh signed check matched what you published.",
+		"no machine has registered or reported yet",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("dashboard page must not claim %q when current state is unavailable:\n%s", forbidden, text)
+		}
 	}
 }
 
@@ -302,29 +699,23 @@ func TestTheDashboardSaysWhetherAnythingNeedsLookingAt(t *testing.T) {
 			{Name: "plugins", Expired: true, ValidUntil: now.AddDate(0, 0, -1)},
 		},
 		Machines: []MachineView{
-			{Name: "a", Last: now, Revoked: 1},
-			{Name: "b", Last: now, Restored: 2},
-			{Name: "c", Last: now, Unverifiable: 1},
-			{Name: "d", Last: now.AddDate(0, 0, -40)},
+			{Name: "a", Status: "Needs attention"},
+			{Name: "b", Status: "Pending"},
+			{Name: "c", Status: "Stale"},
+			{Name: "d", Status: "Disabled"},
 		},
 	})
 	joined := strings.Join(busy, " | ")
 	for _, expected := range []string{
-		"plugins expired",   // the catalog nobody accepts any more
-		"revoked",           // the one that means something withdrawn was found
-		"put the published", // a skill was changed and restored
-		"went unchecked",    // and the state that must never read as fine
-		"has not reported",
+		"plugins expired",
+		"needs attention",
+		"has not filed",
+		"is stale",
+		"is disabled",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("nothing says %q; the page reads: %s", expected, joined)
 		}
-	}
-
-	// Revocation is the only line meaning a machine ran into something you withdrew. It
-	// must not be third in a list of counters.
-	if !strings.HasPrefix(busy[1], "1 machine found a skill you revoked") {
-		t.Errorf("revocation must come before the softer counts, got %q", busy[1])
 	}
 }
 

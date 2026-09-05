@@ -139,6 +139,38 @@ func TestCheckIsReportOnly(t *testing.T) {
 	}
 }
 
+func TestConnectUsesTheBrowserHandoffFlowByDefault(t *testing.T) {
+	session, _ := connect(t)
+
+	body := callText(t, session, "skilltrust_connect", map[string]any{
+		"service_url": "https://axela.example",
+		"machine":     "work-laptop",
+	})
+
+	for _, expected := range []string{
+		"connect",
+		"-no-browser",
+		"-wait 0s",
+		"-machine work-laptop",
+		"https://axela.example",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("connect command is missing %q: %s", expected, body)
+		}
+	}
+}
+
+func TestConnectCanWaitBrieflyWhenAsked(t *testing.T) {
+	session, _ := connect(t)
+
+	body := callText(t, session, "skilltrust_connect", map[string]any{
+		"wait_seconds": 15,
+	})
+	if !strings.Contains(body, "-wait 15s") {
+		t.Fatalf("connect must pass the bounded wait through, got: %s", body)
+	}
+}
+
 // The hook is the difference between checking on demand and checking every session. Printing
 // is the default so that an agent that calls it without thinking changes nothing.
 func TestInstallHookDoesNotApplyUnlessAsked(t *testing.T) {
@@ -246,6 +278,35 @@ func TestPromptsRenderWithoutArguments(t *testing.T) {
 	}
 }
 
+func TestSetUpPromptLeadsWithHostedConnectAndBrowserApproval(t *testing.T) {
+	session, _ := connect(t)
+
+	result, err := session.GetPrompt(context.Background(), &mcp.GetPromptParams{
+		Name: "set_up_this_machine",
+		Arguments: map[string]string{
+			"service_url": "https://axela.example",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) == 0 {
+		t.Fatal("setup prompt rendered nothing")
+	}
+	body := strings.Join(strings.Fields(result.Messages[0].Content.(*mcp.TextContent).Text), " ")
+	for _, expected := range []string{
+		"skilltrust_connect with service_url set to https://axela.example",
+		"browser already signed into Axela",
+		"run skilltrust_connect again",
+		"Do not report this machine as protected or fully connected",
+		"local or self-hosted notary",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("setup prompt is missing %q:\n%s", expected, body)
+		}
+	}
+}
+
 // Everything here is detection, and the guide is where an agent learns that. A guide that
 // stopped saying so would be the most damaging edit in this package.
 func TestSetupGuideKeepsTheHonestLimit(t *testing.T) {
@@ -255,6 +316,8 @@ func TestSetupGuideKeepsTheHonestLimit(t *testing.T) {
 	for _, claim := range []string{
 		"does not prove the skill is safe",
 		"This is detection, not enforcement",
+		"normal consumer setup is `skilltrust_connect`",
+		"rerun it after the browser step",
 	} {
 		if !strings.Contains(flat, claim) {
 			t.Fatalf("the guide no longer says %q", claim)
@@ -301,4 +364,62 @@ func TestVerifySkillsIsReadOnly(t *testing.T) {
 		return
 	}
 	t.Fatal("skilltrust_verify_skills is not offered at all")
+}
+
+func TestPreparePublishWorkflowBuildsTheOIDCCommand(t *testing.T) {
+	session, _ := connect(t)
+	repository := t.TempDir()
+
+	body := callText(t, session, "skilltrust_prepare_publish_workflow", map[string]any{
+		"directory":    repository,
+		"organisation": "acme",
+		"marketplace":  "plugins",
+		"branch":       "release",
+		"workflow":     ".github/workflows/publish.yml",
+		"notary_url":   "https://notary.example.com",
+	})
+
+	for _, expected := range []string{
+		"marketplace",
+		"prepare-notary",
+		"-org acme",
+		"-marketplace plugins",
+		"-branch release",
+		"-workflow .github/workflows/publish.yml",
+		"-notary https://notary.example.com",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("prepare workflow command is missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "notary-token") {
+		t.Fatalf("prepare workflow should not ask CI to hold a publish token: %s", body)
+	}
+}
+
+func TestPublishPromptKeepsPreparationSeparateFromPublication(t *testing.T) {
+	session, _ := connect(t)
+	repository := t.TempDir()
+
+	result, err := session.GetPrompt(context.Background(), &mcp.GetPromptParams{
+		Name:      "publish_this_repository",
+		Arguments: map[string]string{"directory": repository},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) == 0 {
+		t.Fatal("publish prompt rendered nothing")
+	}
+	body := result.Messages[0].Content.(*mcp.TextContent).Text
+	for _, expected := range []string{
+		"skilltrust_prepare_publish_workflow",
+		"GitHub Actions OIDC",
+		"Preparing the workflow is not a publish.",
+		"publish token is the recovery path",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("publish prompt is missing %q:\n%s", expected, body)
+		}
+	}
 }

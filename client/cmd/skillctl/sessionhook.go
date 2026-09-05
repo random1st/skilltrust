@@ -8,17 +8,17 @@ import (
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/report"
 )
 
 // runHookSessionStart reconciles signed plugins as a session begins.
 //
 // Three properties make it safe to run automatically, and each is a decision:
 //
-// It does not touch the network. A session must not wait on a fetch to a server behind a VPN
-// that is not up yet; a hook that adds seconds to every session start is a hook that gets
-// removed. It works from the marketplace already on disk, which still catches the case that
-// matters most — a plugin edited on this machine — and still enforces every revocation the
-// machine has been told about. Refreshing is `skillctl sync`.
+// It keeps the network on a short leash. A session may refresh signed catalogs first, because
+// fresh revocations matter the moment they are published, but the whole refresh budget is
+// three seconds and the local check still runs from the cache when the network is slow or
+// gone. A hook that waits on a VPN forever is a hook people remove.
 //
 // It says nothing when nothing changed. A hook that speaks every session is one people stop
 // reading, and this one has to be read on the day it matters.
@@ -30,9 +30,9 @@ func runHookSessionStart(args []string) int {
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(),
 			"Usage: skillctl hook session-start [flags]\n\n"+
-				"Restores any signed plugin that was changed on this machine, and reports it.\n"+
-				"Offline: it uses the marketplaces already fetched. Prints nothing when\n"+
-				"nothing changed.\n\n"+
+				"Refreshes signed catalogs briefly, falls back to the cached ones when\n"+
+				"offline, restores any signed plugin that was changed on this machine,\n"+
+				"and reports it. Prints nothing when nothing changed.\n\n"+
 				"Exit code: %d always. A session-start hook cannot refuse anything, and\n"+
 				"pretending otherwise would misdescribe what this is.\n\nFlags:\n", exitClean)
 		flags.PrintDefaults()
@@ -41,11 +41,26 @@ func runHookSessionStart(args []string) int {
 	agentName := flags.String("agent", "claude", "which client's plugins to check: claude or codex")
 	claudeHome := flags.String("claude-home", "", "the client's directory (default the agent's own)")
 	verbose := flags.Bool("verbose", false, "also report when everything already matched")
-	fetch := flags.Bool("fetch", false, "refresh first; adds network latency to the session")
+	fetch := flags.Bool("fetch", true, "refresh signed catalogs first; pass -fetch=false to stay fully offline")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitClean
 	}
+	now := time.Now().UTC()
+	var events []report.Event
+	var checks []CurrentCheck
+	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
+		skills, drift, _ := verifyEverySkillReporting(trusted, true)
+		if shouldReportLooseSkillCheck(skills) {
+			checks = append(checks, looseSkillCurrentCheck(skills))
+		}
+		events = append(events, skillDriftEvents(drift, now)...)
+	}
+
+	managedRan := false
+	var results []marketplace.Result
+	var unusable []string
+
 	// Reconciling reads <home>/plugins/cache, so a client that installs nothing from a
 	// marketplace would produce an empty walk and the same silence as a clean machine. The
 	// two must not look alike: "checked, nothing had changed" is safe to read as fine and
@@ -53,49 +68,215 @@ func runHookSessionStart(args []string) int {
 	if known, err := lookupAgent(*agentName); err == nil && !known.Managed {
 		fmt.Fprintf(os.Stderr, "skillctl: %s installs no plugins from a marketplace, so "+
 			"there is nothing here to reconcile\n", known.Name)
-		return exitClean
-	}
-
-	home, err := resolveAgentHome(*agentName, *claudeHome)
-	if err != nil {
+	} else if homes, err := managedSessionHomes(*agentName, *claudeHome); err != nil {
 		// A hook that fails loudly at the start of every session is a hook people remove,
 		// so this reports and stands aside rather than taking the session down with it.
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
-		return exitClean
+	} else if subscriptions, err := loadSubscriptions(); err != nil {
+		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+	} else if len(subscriptions) > 0 {
+		release, held := takeLock()
+		if held {
+			defer release()
+
+			managed, code := runSessionManagedChecks(homes, *fetch)
+			if code == exitClean {
+				managedRan = true
+				results, unusable = managed.Results, managed.Unusable
+				events = append(events, collectEvents(results, unusable, now)...)
+				checks = append(checks, managedCurrentCheck(managed))
+				for _, line := range pruneDeadAdoptions(results) {
+					fmt.Printf("skillctl: %s\n", line)
+				}
+			}
+		}
 	}
 
-	// Before the marketplace half, and deliberately not behind it. A machine following no
-	// signed marketplace used to return here — which is every machine running Cursor or
-	// Antigravity, since those install from no marketplace at all. The skills those people
-	// actually run would have been checked by nothing, on the one path that runs without
-	// anybody remembering.
-	now := time.Now().UTC()
-	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
-		drift, _ := verifyEverySkillReporting(trusted, true)
-		recordSkillDrift(drift, now)
+	_, _ = recordReports(events, checks, 2*time.Second)
+	if managedRan {
+		writeSessionReport(results, unusable, *verbose)
 	}
-
-	subscriptions, err := loadSubscriptions()
-	if err != nil || len(subscriptions) == 0 {
-		return exitClean // this machine follows no signed marketplace
-	}
-
-	release, held := takeLock()
-	if !held {
-		return exitClean // another session is already reconciling
-	}
-	defer release()
-
-	results, unusable, code := reconcileAll(home, true, !*fetch)
-	if code != exitClean {
-		return exitClean
-	}
-	recordEvents(results, unusable, now)
-	for _, line := range pruneDeadAdoptions(results) {
-		fmt.Printf("skillctl: %s\n", line)
-	}
-	writeSessionReport(results, unusable, *verbose)
 	return exitClean
+}
+
+func managedSessionHomes(agentName, explicitHome string) ([]string, error) {
+	if explicitHome != "" {
+		return []string{explicitHome}, nil
+	}
+	detected := detectManagedAgents()
+	if len(detected) == 0 {
+		home, err := resolveAgentHome(agentName, "")
+		if err != nil {
+			return nil, err
+		}
+		return []string{home}, nil
+	}
+	seen := map[string]bool{}
+	homes := make([]string, 0, len(detected))
+	for _, known := range detected {
+		home := known.Home()
+		if seen[home] {
+			continue
+		}
+		seen[home] = true
+		homes = append(homes, home)
+	}
+	return homes, nil
+}
+
+func runSessionManagedChecks(homes []string, fetch bool) (ManagedCheck, int) {
+	options := ManagedCheckOptions{
+		Restore: true, Offline: !fetch, UpdateSource: fetch, RefreshBudget: 3 * time.Second,
+	}
+	var combined ManagedCheck
+	for i, home := range homes {
+		managed, code := RunManagedCheck(home, options)
+		if code != exitClean {
+			return managed, code
+		}
+		if i == 0 {
+			combined = managed
+		} else {
+			combined = mergeManagedChecks(combined, managed)
+		}
+		options.Offline = true
+		options.UpdateSource = false
+		options.RefreshBudget = 0
+	}
+	if len(homes) == 0 {
+		return ManagedCheck{
+			Scope:     CheckScopeManaged,
+			Coverage:  "empty",
+			CheckedAt: time.Now().UTC(),
+		}, exitClean
+	}
+	return combined, exitClean
+}
+
+func aggregateManagedReportCheck(
+	managed ManagedCheck, primaryHome, agentName, explicitHome string,
+) ManagedCheck {
+	homes, err := managedSessionHomes(agentName, explicitHome)
+	if err != nil {
+		return mergeManagedChecks(managed, managedCheckFailure(err.Error()))
+	}
+
+	seen := map[string]bool{}
+	if primaryHome != "" {
+		seen[primaryHome] = true
+	}
+
+	combined := managed
+	for _, home := range homes {
+		if seen[home] {
+			continue
+		}
+		seen[home] = true
+
+		extra, code := RunManagedCheck(home, ManagedCheckOptions{
+			Restore: false, Offline: true, UpdateSource: false,
+		})
+		if code != exitClean && len(extra.Unusable) == 0 {
+			extra = managedCheckFailure(fmt.Sprintf("%s could not be checked", home))
+		}
+		combined = mergeManagedChecks(combined, extra)
+	}
+	return combined
+}
+
+func managedCheckFailure(detail string) ManagedCheck {
+	check := ManagedCheck{
+		Scope:     CheckScopeManaged,
+		CheckedAt: time.Now().UTC(),
+	}
+	if detail != "" {
+		check.Unusable = append(check.Unusable, detail)
+	}
+	check.Coverage, check.Complete = managedCoverage(check.Results, check.Unusable)
+	return check
+}
+
+func mergeManagedChecks(left, right ManagedCheck) ManagedCheck {
+	if left.CheckedAt.IsZero() {
+		return right
+	}
+	out := left
+	if right.CheckedAt.After(out.CheckedAt) {
+		out.CheckedAt = right.CheckedAt
+	}
+	if out.Scope == "" {
+		out.Scope = CheckScopeManaged
+	}
+	if out.Coverage == "" {
+		out.Coverage = right.Coverage
+	}
+	if right.Coverage == "partial" || right.Coverage == "empty" && out.Coverage == "full" {
+		out.Coverage = right.Coverage
+	}
+	out.Results = append(out.Results, right.Results...)
+	for _, failure := range right.Unusable {
+		if !containsString(out.Unusable, failure) {
+			out.Unusable = append(out.Unusable, failure)
+		}
+	}
+	for _, catalogCheck := range right.Catalogs {
+		mergeManagedCatalogCheck(&out.Catalogs, catalogCheck)
+	}
+	out.Coverage, out.Complete = managedCoverage(out.Results, out.Unusable)
+	return out
+}
+
+func mergeManagedCatalogCheck(merged *[]ManagedCatalogCheck, incoming ManagedCatalogCheck) {
+	for i := range *merged {
+		current := &(*merged)[i]
+		if current.Name != incoming.Name {
+			continue
+		}
+		current.Sequence = moreConservativeCatalogSequence(current.Sequence, incoming.Sequence)
+		current.ValidUntil = earlierCatalogExpiry(current.ValidUntil, incoming.ValidUntil)
+		current.Refreshed = current.Refreshed || incoming.Refreshed
+		current.UsedCached = current.UsedCached || incoming.UsedCached
+		if incoming.Detail != "" && incoming.Detail != current.Detail {
+			appendManagedDetail(current, "%s", incoming.Detail)
+		}
+		return
+	}
+	*merged = append(*merged, incoming)
+}
+
+func moreConservativeCatalogSequence(current, incoming int64) int64 {
+	switch {
+	case current <= 0:
+		return incoming
+	case incoming <= 0:
+		return current
+	case incoming < current:
+		return incoming
+	default:
+		return current
+	}
+}
+
+func earlierCatalogExpiry(current, incoming time.Time) time.Time {
+	switch {
+	case current.IsZero():
+		return incoming
+	case incoming.IsZero():
+		return current
+	case incoming.Before(current):
+		return incoming
+	default:
+		return current
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, one := range haystack {
+		if one == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func writeSessionReport(results []marketplace.Result, unusable []string, verbose bool) {

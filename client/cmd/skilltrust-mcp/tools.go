@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -27,6 +28,13 @@ func (s *server) addTools(m *mcp.Server) {
 		Description: "Creates the signing key and pinned-key set under the SkillTrust home, if they are not there. Returns the public half. Safe to call twice; an existing key is never replaced, because replacing it would silently unpin this machine everywhere it is trusted.",
 		Annotations: writes,
 	}, s.init)
+
+	mcp.AddTool(m, &mcp.Tool{
+		Name:        "skilltrust_connect",
+		Title:       "Connect this machine to Axela",
+		Description: "Starts or resumes the browser-approved Axela connection with the real skillctl connect flow. It returns only safe status fields such as the machine key fingerprint, approval URL, dashboard URL, and next steps; it never returns the private key or the reporting token. The MCP tool keeps browser approval explicit by printing the approval URL instead of opening a browser tab itself.",
+		Annotations: writes,
+	}, s.connect)
 
 	mcp.AddTool(m, &mcp.Tool{
 		Name:        "skilltrust_trust_key",
@@ -94,6 +102,16 @@ func (s *server) addTools(m *mcp.Server) {
 		Description: "Signs the plugins a Claude Code marketplace owns, writing the signed index into the repository. Run in the repository that publishes the skills, with this machine's key.",
 		Annotations: writes,
 	}, s.signMarketplace)
+
+	mcp.AddTool(m, &mcp.Tool{
+		Name:  "skilltrust_prepare_publish_workflow",
+		Title: "Prepare the GitHub Actions publish workflow",
+		Description: "Writes the GitHub Actions workflow that submits an already-signed " +
+			"catalog to a SkillTrust notary with the job's OIDC token. This changes files " +
+			"locally, but it does not publish anything: the first real publish is the first " +
+			"accepted workflow run that uploads a signed non-empty catalog.",
+		Annotations: writes,
+	}, s.preparePublishWorkflow)
 }
 
 type emptyInput struct{}
@@ -106,6 +124,26 @@ func (s *server) init(ctx context.Context, _ *mcp.CallToolRequest, in initInput)
 	args := []string{"init"}
 	if in.As != "" {
 		args = append(args, "-as", in.As)
+	}
+	return s.call(ctx, "", args...)
+}
+
+type connectInput struct {
+	ServiceURL  string `json:"service_url,omitempty" jsonschema:"Axela base URL. Pass it on the first run; omit it when resuming a pending or already connected machine."`
+	Machine     string `json:"machine,omitempty" jsonschema:"short name for this computer; defaults to the hostname"`
+	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"how many seconds to wait for browser approval before returning. Defaults to 0 for an immediate browser handoff; max 60"`
+}
+
+func (s *server) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectInput) (*mcp.CallToolResult, result, error) {
+	if in.WaitSeconds < 0 || in.WaitSeconds > 60 {
+		return nil, result{}, fmt.Errorf("wait_seconds must be between 0 and 60")
+	}
+	args := []string{"connect", "-no-browser", "-wait", (time.Duration(in.WaitSeconds) * time.Second).String()}
+	if in.Machine != "" {
+		args = append(args, "-machine", in.Machine)
+	}
+	if in.ServiceURL != "" {
+		args = append(args, in.ServiceURL)
 	}
 	return s.call(ctx, "", args...)
 }
@@ -278,6 +316,39 @@ func (s *server) signMarketplace(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, result{}, fmt.Errorf("a directory is required: signing whatever the server's working directory happens to be is how the wrong tree gets signed")
 	}
 	return s.call(ctx, in.Directory, "marketplace", "sign", ".")
+}
+
+type preparePublishWorkflowInput struct {
+	Directory    string `json:"directory" jsonschema:"the repository holding the marketplace and the workflow to write"`
+	Organisation string `json:"organisation" jsonschema:"the hosted-notary organisation name already registered in the console"`
+	Marketplace  string `json:"marketplace,omitempty" jsonschema:"marketplace name at the notary; defaults to the repository's .claude-plugin/marketplace.json name"`
+	Branch       string `json:"branch,omitempty" jsonschema:"branch that should trigger publication; defaults to main"`
+	Workflow     string `json:"workflow,omitempty" jsonschema:"workflow file to write; defaults to .github/workflows/notarize.yml"`
+	NotaryURL    string `json:"notary_url,omitempty" jsonschema:"SkillTrust notary base URL; defaults to https://notary.axela.app"`
+}
+
+func (s *server) preparePublishWorkflow(ctx context.Context, _ *mcp.CallToolRequest, in preparePublishWorkflowInput) (*mcp.CallToolResult, result, error) {
+	if in.Directory == "" {
+		return nil, result{}, fmt.Errorf("a directory is required: the workflow must be written into the repository it will publish from")
+	}
+	if strings.TrimSpace(in.Organisation) == "" {
+		return nil, result{}, fmt.Errorf("an organisation is required")
+	}
+	args := []string{"marketplace", "prepare-notary", "-org", in.Organisation}
+	if in.Marketplace != "" {
+		args = append(args, "-marketplace", in.Marketplace)
+	}
+	if in.Branch != "" {
+		args = append(args, "-branch", in.Branch)
+	}
+	if in.Workflow != "" {
+		args = append(args, "-workflow", in.Workflow)
+	}
+	if in.NotaryURL != "" {
+		args = append(args, "-notary", in.NotaryURL)
+	}
+	args = append(args, ".")
+	return s.call(ctx, in.Directory, args...)
 }
 
 // call runs skillctl and shapes the result. The output is returned as the content an agent

@@ -11,6 +11,7 @@ import (
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/internal/source"
+	"github.com/random1st/skilltrust/report"
 )
 
 // Handler is the notary's HTTP surface: publish with a token, fetch without one.
@@ -24,6 +25,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/catalogs/{org}/{marketplace}", s.handleFetch)
 	mux.HandleFunc("POST /v1/events/{org}", s.handleIngest)
 	mux.HandleFunc("GET /v1/events/{org}", s.handleEvents)
+	mux.HandleFunc("GET /v1/checks/{org}", s.handleChecks)
 	mux.HandleFunc("GET /ui/{org}", s.handleDashboard)
 	mux.HandleFunc("GET /{$}", s.handleLanding)
 	mux.HandleFunc("GET /login", s.handleLoginForm)
@@ -83,14 +85,54 @@ func bearer(r *http.Request) string {
 }
 
 func (s *Service) handleIngest(w http.ResponseWriter, r *http.Request) {
-	org, err := s.AuthorizeIngest(r.PathValue("org"), bearer(r))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxEventBytes+1))
 	if err != nil || len(body) > MaxEventBytes {
 		http.Error(w, "the event could not be read, or is too large", http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+	token := bearer(r)
+	if payloadType(body) == report.CheckPayloadType {
+		org, trusted, err := s.authorizeCheckIngest(r.PathValue("org"), token, now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		receipt, err := s.AcceptCheck(org, body, trusted, now)
+		if err != nil {
+			if errors.Is(err, ErrRefused) {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+			http.Error(w, "the check could not be stored", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"receipt": receipt})
+		return
+	}
+
+	if s.checkAdmission != nil {
+		org, trusted, err := s.checkAdmission.AuthorizeCheck(r.PathValue("org"), token, now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if _, err := s.AcceptVerifiedEvent(org, body, trusted, now); err != nil {
+			if errors.Is(err, ErrRefused) {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+			http.Error(w, "the event could not be stored", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	org, authErr := s.AuthorizeIngest(r.PathValue("org"), token)
+	if authErr != nil {
+		http.Error(w, authErr.Error(), http.StatusUnauthorized)
 		return
 	}
 	if _, err := s.AcceptEvent(org, body); err != nil {
@@ -102,6 +144,17 @@ func (s *Service) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Service) authorizeCheckIngest(orgName, token string, now time.Time) (Org, *attest.TrustedKeys, error) {
+	if s.checkAdmission != nil {
+		return s.checkAdmission.AuthorizeCheck(orgName, token, now)
+	}
+	org, authErr := s.AuthorizeIngest(orgName, token)
+	if authErr != nil {
+		return Org{}, nil, authErr
+	}
+	return org, org.Machines, nil
 }
 
 func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +170,21 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"events": events})
+}
+
+func (s *Service) handleChecks(w http.ResponseWriter, r *http.Request) {
+	org, err := s.AuthorizeAdmin(r.PathValue("org"), bearer(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	checks, err := s.ServeChecks(org)
+	if err != nil {
+		http.Error(w, "checks could not be read", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"checks": checks})
 }
 
 func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
@@ -176,4 +244,16 @@ func (s *Service) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
+}
+
+func payloadType(body []byte) string {
+	envelope := extractEnvelope(body)
+	if envelope == nil {
+		return ""
+	}
+	var parsed attest.Envelope
+	if err := json.Unmarshal(envelope, &parsed); err != nil {
+		return ""
+	}
+	return parsed.PayloadType
 }

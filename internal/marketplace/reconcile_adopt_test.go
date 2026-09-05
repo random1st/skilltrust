@@ -181,6 +181,91 @@ func TestEveryRestoringPathMustHonourAdoptions(t *testing.T) {
 	}
 }
 
+// Restoring from a moving checkout is only safe while the checkout still packages to the
+// digest the catalog signed. Otherwise the reconciler would bless unsigned branch changes
+// and overwrite the installed copy with them.
+func TestRestoreRefusesAChangedSourceCheckout(t *testing.T) {
+	home := t.TempDir()
+	repository := t.TempDir()
+	source := writePlugin(t, repository, "runbook", "1.0.0")
+	writeMarketplace(t, repository, Manifest{Name: "acme", Plugins: []Entry{
+		{Name: "runbook", Source: raw(t, "./plugins/runbook"), Version: "1.0.0"},
+	}})
+
+	signed, _, err := DigestPlugin(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installed := InstalledPath(home, "acme", "runbook", "1.0.0")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyTree(t, source, installed)
+	if err := os.WriteFile(filepath.Join(installed, "README.md"), []byte("edited on disk\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(installed, ".in_use"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installed, ".in_use", "1234"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(installed, "node_modules", "left-pad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installed, "node_modules", "left-pad", "index.js"), []byte("dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := DigestInstalled(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("unsigned branch change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	quarantineRoot := filepath.Join(t.TempDir(), "q")
+	results := Reconcile(snapshotOf("acme", "runbook", "1.0.0", signed), Options{
+		ClaudeHome: home, Restore: true, Source: repository, QuarantineRoot: quarantineRoot,
+	})
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	if results[0].Outcome != OutcomeUnverifiable {
+		t.Fatalf("outcome = %q, want %q", results[0].Outcome, OutcomeUnverifiable)
+	}
+	if !strings.Contains(results[0].Detail, "does not match the signed") {
+		t.Fatalf("detail = %q, want digest mismatch", results[0].Detail)
+	}
+
+	body, err := os.ReadFile(filepath.Join(installed, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "edited on disk\n" {
+		t.Fatalf("installed copy changed to %q", body)
+	}
+	after, _, err := DigestInstalled(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("installed digest changed:\n  before %s\n  after  %s", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(installed, ".in_use", "1234")); err != nil {
+		t.Fatalf("session lock changed: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(installed, "node_modules", "left-pad", "index.js")); err != nil ||
+		string(body) != "dep" {
+		t.Fatalf("client-managed dependencies changed: %v", err)
+	}
+	if _, err := os.Stat(quarantineRoot); !os.IsNotExist(err) {
+		t.Fatalf("quarantine should stay untouched on digest mismatch, stat err=%v", err)
+	}
+}
+
 // An adoption's age is reported and never enforced. A record that expired on a timer would
 // ask for a re-approval carrying no new information — nothing about the bytes changed —
 // and a re-approval that says nothing is one people learn to click through. What the date

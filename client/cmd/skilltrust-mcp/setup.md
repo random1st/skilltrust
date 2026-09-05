@@ -13,9 +13,25 @@ prove the skill is safe, correct, or does what its description says. Nothing her
 what a skill does. Reporting a verified skill as "safe" is the one wrong sentence to say
 about this tool.
 
+## The normal hosted path
+
+On hosted Axela, the normal consumer setup is `skilltrust_connect`. It wraps the real
+`skillctl connect` flow: creates or reuses the machine key, returns the public approval URL,
+stores the reporting credential locally only after approval, bootstraps the catalog
+subscriptions, installs the managed session hooks it can see, and runs the first check.
+
+Approval still happens in a browser already signed into Axela. The MCP tool should usually
+return immediately with the approval URL so the browser step stays explicit. If the tool says
+`pending`, approval or the first acknowledgement has not finished yet; rerun it after the
+browser step. Do not say this machine is fully connected or protected until it says
+`connected`, because before that Axela has not yet acknowledged the exact first check.
+
 ## The order, and why it is not arbitrary
 
 Every step succeeds out of order. That is why the order is written down.
+If you are using hosted Axela, that order is normally wrapped inside `skilltrust_connect`.
+The manual steps below are for local or self-hosted setups, and for understanding what the
+hosted flow is doing on the machine.
 
 **Key before anything.** `skilltrust_init` creates the signing key. Its public half is what a
 publisher registers and an administrator pins. Running init twice is safe; it will not
@@ -52,10 +68,16 @@ publisher whose key was stolen would declare a threshold of 1.
 
 ## What an agent cannot do
 
-Registering an organisation happens in a browser, behind a sign-in, and returns three tokens
-shown once. There is no API to call and no credential to hold. Hand the human the public key
-and the console URL, and ask for the publish token in the environment rather than in the
-conversation.
+Browser approval still happens in a browser, behind an existing Axela sign-in. An agent can
+start or resume the connection and hand over the approval URL; it cannot manufacture that
+consent.
+
+Publisher registration is a separate browser flow. Registering an organisation and binding a
+publishing repository happen behind a sign-in and return credentials shown once. There is no
+API to call and no credential to hold in the conversation. Hand the human the public key and
+the console URL, and tell them the normal non-empty publish path is GitHub Actions OIDC from
+that registered repository. The publish token is for empty or revocation-only catalogs, or
+for recovery; if they need it, ask for it in the environment rather than in the conversation.
 
 ## Where things live
 

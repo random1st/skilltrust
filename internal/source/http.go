@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +33,11 @@ var indexClient = &http.Client{
 // transport for documents that are verified in memory rather than stored, such as a
 // notary's signed key-set announcement.
 func FetchJSON(address string) ([]byte, error) {
+	return FetchJSONContext(context.Background(), address)
+}
+
+// FetchJSONContext is FetchJSON with a caller-provided context.
+func FetchJSONContext(ctx context.Context, address string) ([]byte, error) {
 	parsed, err := url.Parse(address)
 	if err != nil {
 		return nil, fmt.Errorf("%q is not a URL: %w", address, err)
@@ -41,7 +47,11 @@ func FetchJSON(address string) ([]byte, error) {
 			"clear invites the substitution the signature exists to catch", address)
 	}
 
-	response, err := indexClient.Get(address)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := indexClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("cannot fetch %s: %w", address, err)
 	}
@@ -71,6 +81,11 @@ func FetchJSON(address string) ([]byte, error) {
 // and writing atomically so a failure mid-download cannot leave half an index where the
 // verifier will look.
 func FetchIndex(address, destination string) error {
+	return FetchIndexContext(context.Background(), address, destination)
+}
+
+// FetchIndexContext is FetchIndex with a caller-provided context.
+func FetchIndexContext(ctx context.Context, address, destination string) error {
 	parsed, err := url.Parse(address)
 	if err != nil {
 		return fmt.Errorf("catalog URL %q is not a URL: %w", address, err)
@@ -80,7 +95,11 @@ func FetchIndex(address, destination string) error {
 			"clear invites the substitution the signature exists to catch", address)
 	}
 
-	response, err := indexClient.Get(address)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return err
+	}
+	response, err := indexClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("cannot fetch the catalog index: %w", err)
 	}

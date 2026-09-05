@@ -323,7 +323,7 @@ func runAttestVerify(args []string) int {
 // sibling is honoured anyway, because it is what `attest sign` writes by default and
 // stranding those would make the two halves of one command disagree.
 func verifyEverySkill(trusted *attest.TrustedKeys) int {
-	_, code := verifyEverySkillReporting(trusted, false)
+	_, _, code := verifyEverySkillReporting(trusted, false)
 	return code
 }
 
@@ -335,21 +335,37 @@ func verifyEverySkill(trusted *attest.TrustedKeys) int {
 // What survives quiet is a skill that drifted and an attestation that will not verify; what
 // does not is the tally and the advice about names, which are answers to a question somebody
 // asked rather than something that just happened.
-func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skillDrift, int) {
+type LooseSkillCheck struct {
+	Scope      string    `json:"scope"`
+	Coverage   string    `json:"coverage"`
+	Complete   bool      `json:"complete"`
+	CheckedAt  time.Time `json:"checked_at"`
+	Checked    int       `json:"checked"`
+	Changed    int       `json:"changed,omitempty"`
+	Unapproved int       `json:"unapproved,omitempty"`
+	Errors     int       `json:"errors,omitempty"`
+}
+
+func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) (LooseSkillCheck, []skillDrift, int) {
+	summary := LooseSkillCheck{
+		Scope:     CheckScopeApprovedSkills,
+		CheckedAt: time.Now().UTC(),
+	}
 	var drift []skillDrift
 
 	roots, err := resolveSkillRoots("")
 	if err != nil {
-		return nil, fail(err)
+		return summary, nil, fail(err)
 	}
 
 	approvals, notes, err := attest.LoadStore(homePath(attest.StoreDirectory), trusted)
 	if err != nil {
-		return nil, fail(err)
+		return summary, nil, fail(err)
 	}
 	// First, and on stderr. An attestation that does not verify is the single most
 	// interesting file in the store — corrupt or forged — and burying it under a list of
 	// skills that were fine is how the strongest available signal gets read as noise.
+	summary.Errors += len(notes)
 	for _, note := range notes {
 		fmt.Fprintf(os.Stderr, "skillctl: %s\n", note)
 	}
@@ -389,7 +405,7 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 	}
 	sort.Strings(order)
 
-	verified, changed, unapproved, ambiguous := 0, 0, 0, 0
+	verified, unapproved, ambiguous := 0, 0, 0
 	for _, name := range order {
 		copies := byName[name]
 
@@ -438,20 +454,26 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 				Name: name, ApprovedBy: against.ApprovedBy,
 				Approved: against.Digest, OnDisk: one.digest,
 			})
-			changed++
+			summary.Checked++
+			summary.Changed++
 		}
 
 		for _, one := range copies {
+			here := approvedAt(one.directory, name, trusted)
 			if one.err != nil {
 				fmt.Fprintf(os.Stderr, "skillctl: %s could not be read: %v\n", one.directory, one.err)
-				changed++
+				if here != nil || !matched {
+					summary.Checked++
+				}
+				summary.Errors++
 				continue
 			}
 			if covering(one.digest) != nil {
 				verified++
+				summary.Checked++
 				continue
 			}
-			if here := approvedAt(one.directory, name, trusted); here != nil {
+			if here != nil {
 				// This directory itself was approved — the store file is keyed by where the
 				// skill lives — and its bytes no longer match. Without that key this copy
 				// hid in the "same name" bucket whenever its twin still matched, which let
@@ -478,6 +500,16 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 			reportChanged(one, held[0])
 		}
 	}
+	summary.Unapproved = unapproved + ambiguous
+	switch {
+	case summary.Checked == 0 && summary.Errors == 0:
+		summary.Coverage = "empty"
+	case summary.Errors > 0:
+		summary.Coverage = "partial"
+	default:
+		summary.Coverage = "full"
+		summary.Complete = true
+	}
 
 	// Unapproved is a count and not a list, and not a failure. Most skills on a laptop are
 	// somebody's own, and a check that treats every personal skill as a finding is one that
@@ -485,16 +517,19 @@ func verifyEverySkillReporting(trusted *attest.TrustedKeys, quiet bool) ([]skill
 	// nobody signed reads as a skill that was approved.
 	if !quiet {
 		fmt.Printf("%d verified · %d changed · %d with no approval on this machine",
-			verified, changed, unapproved)
+			verified, summary.Changed, summary.Unapproved)
 		if ambiguous > 0 {
 			fmt.Printf(" · %d sharing a name with an approved skill", ambiguous)
 		}
+		if summary.Errors > 0 {
+			fmt.Printf(" · %d error%s", summary.Errors, plural(summary.Errors, "", "s"))
+		}
 		fmt.Println()
 	}
-	if changed > 0 {
-		return drift, exitFindings
+	if summary.Changed > 0 || summary.Errors > 0 {
+		return summary, drift, exitFindings
 	}
-	return drift, exitClean
+	return summary, drift, exitClean
 }
 
 // approvedAt returns the approval recorded for the skill at this directory, if any: the
