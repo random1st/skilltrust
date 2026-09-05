@@ -117,31 +117,29 @@ func (s *server) publishRepository(_ context.Context, request *mcp.GetPromptRequ
 
 Read skilltrust://state and skilltrust://guide/setup first.
 
-1. skilltrust_init if there is no key yet. The private half never leaves this machine, and
-   nothing you do later should copy it anywhere, including into CI.
+1. Call skilltrust_publish with directory and the team name. It remembers setup and the
+   original signer. If it returns approval_pending, show the browser link. The owner signs
+   in and confirms the team and repository; no copying keys or recovery tokens is needed.
+   Call the same tool again after consent to continue.
 
-2. Read skilltrust://identity and give the human that PEM public key. Registering it is a
-   step you cannot do: it happens in a browser, behind a sign-in, and the registration hands
-   back three tokens shown exactly once. If the organisation already exists but this
-   repository is new, ask them to add the repository there too.
+2. If source changes need a commit, review them through the repository's normal Git workflow
+   first. The publishing tool commits only its catalog and workflow.
 
-   Tell them plainly: open the console, register the organisation or add this repository,
-   paste that public key, and keep the tokens somewhere they will still exist tomorrow. The
-   publish token is the recovery path and the empty-catalog path; regular catalogs with
-   skills should go through GitHub Actions OIDC from a repository the console registered.
+3. When status is prepared, show the files, covered skills, any coverage limitations and
+   the diff. Preparing the workflow is not a publish. Get approval of this concrete revision
+   unless the user has already authorized these exact changes.
 
-3. skilltrust_sign_marketplace on the directory. This signs the plugins the marketplace owns
-   and writes the signed index into the repository. Commit it.
+4. After approval, call skilltrust_publish with submit=true and approve set to that exact
+   review_id. It commits and pushes the reviewed files through GitHub Actions OIDC.
+   If submission fails, repeat with the same review_id; it reuses the saved commit.
 
-4. skilltrust_prepare_publish_workflow on the directory. This writes the reviewable GitHub
-   Actions workflow that will submit the signed index with OIDC. Commit that workflow too.
+5. Call skilltrust_publish with status=true to verify the outcome. Only status published
+   means the exact hosted catalog verified against both publisher and notary signatures.
+   A successful push or workflow preparation alone is not publication.
 
-5. Let GitHub Actions run from the registered repository. That run is the publish.
-   Preparing the workflow is not a publish. A signed index committed locally is not
-   published until the first accepted catalog with skills reaches the notary.
-
-The signature is always made here, by the key registered. Nothing GitHub uploads later can
-be accepted if this key did not sign it, which is what makes step 5 safe to automate.`, directory))
+For renewal use the same tool with renew=true. It extends unchanged approvals with the
+existing signing key and preserves revocations. Changed skill contents need a normal
+publication review. Never replace the signing key to work around a missing original key.`, directory))
 }
 
 func (s *server) investigateChange(_ context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {

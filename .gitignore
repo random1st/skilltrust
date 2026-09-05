@@ -10,5 +10,6 @@ build/
 dist/
 htmlcov/
 .skilltrust/
+mutation-results.json
 
 plugin/bin/skillctl-*

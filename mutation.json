@@ -1,0 +1,212 @@
+{
+  "mutations": [
+    {
+      "id": "status_review_binding",
+      "file": "client/cmd/skillctl/publish_submit.go",
+      "before": "if err != nil || reviewID != record.ReviewID {",
+      "after": "if err != nil || reviewID != record.ReviewID && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishStatusRejects"
+    },
+    {
+      "id": "per_scope_receipt",
+      "file": "client/cmd/skillctl/events.go",
+      "before": "return writeOwnerOnlyFileAtomically(latestCheckReceiptPath(queued.check.Scope), body)",
+      "after": "return nil",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusKeeps"
+    },
+    {
+      "id": "renewal_warning",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "!c.ValidUntil.After(now.Add(catalog.RenewalWindow))",
+      "after": "c.ValidUntil.After(now.Add(catalog.RenewalWindow))",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusWarns"
+    },
+    {
+      "id": "native_environment",
+      "file": "client/cmd/skillctl/setup.go",
+      "before": "fields[name] = value",
+      "after": "fields[name] = value + \"wrong\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestSetupUses"
+    },
+    {
+      "id": "structured_continuation",
+      "file": "client/cmd/skilltrust-mcp/skillctl.go",
+      "before": "if json.Valid(out.Bytes()) {",
+      "after": "if json.Valid(append(out.Bytes(), diagnostics.Bytes()...)) {",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestDiagnostics"
+    },
+    {
+      "id": "catalog_expiry",
+      "file": "catalog/publication.go",
+      "before": "out.Expired = !now.Before(until)",
+      "after": "out.Expired = false",
+      "package": "./catalog",
+      "run": "^TestPublication"
+    },
+    {
+      "id": "catalog_warning_boundary",
+      "file": "catalog/publication.go",
+      "before": "case !until.After(now.Add(RenewalWindow)):",
+      "after": "case until.After(now.Add(RenewalWindow)):",
+      "package": "./catalog",
+      "run": "^TestPublication"
+    },
+    {
+      "id": "catalog_source_priority",
+      "file": "catalog/publication.go",
+      "before": "p.Status == \"published\" &&",
+      "after": "p.Status != \"\" &&",
+      "package": "./catalog",
+      "run": "^TestPublication"
+    },
+    {
+      "id": "catalog_malformed_validity",
+      "file": "catalog/publication.go",
+      "before": "err != nil || until.IsZero() || snapshot.Sequence < 1",
+      "after": "snapshot.Sequence < 1",
+      "package": "./catalog",
+      "run": "^TestPublication"
+    },
+    {
+      "id": "publisher_proof_signature",
+      "file": "enrollment/publishing.go",
+      "before": "attest.NewTrustedKeys(key)); err != nil {",
+      "after": "attest.NewTrustedKeys(key)); err != nil && false {",
+      "package": "./enrollment",
+      "run": "^TestPublishingProof"
+    },
+    {
+      "id": "publisher_proof_audience",
+      "file": "enrollment/publishing.go",
+      "before": "base != audience",
+      "after": "len(audience) == 0",
+      "package": "./enrollment",
+      "run": "^TestPublishingProof"
+    },
+    {
+      "id": "publisher_proof_expiry",
+      "file": "enrollment/publishing.go",
+      "before": "!request.ExpiresAt.After(now) || ",
+      "after": "",
+      "package": "./enrollment",
+      "run": "^TestPublishingProof"
+    },
+    {
+      "id": "publisher_proof_lifetime",
+      "file": "enrollment/publishing.go",
+      "before": "request.ExpiresAt.Sub(request.IssuedAt) > Lifetime",
+      "after": "request.ExpiresAt.Sub(request.IssuedAt) > Lifetime && false",
+      "package": "./enrollment",
+      "run": "^TestPublishingProof"
+    },
+    {
+      "id": "receipt_signer",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "receipt.Signer == signer",
+      "after": "len(signer) >= 0",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRequires"
+    },
+    {
+      "id": "receipt_digest",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "receipt.Digest == digestHex(body)",
+      "after": "len(body) >= 0",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRequires"
+    },
+    {
+      "id": "receipt_destination",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "receipt.AcceptedURL == current.IngestURL",
+      "after": "current.IngestURL != \"\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRequires"
+    },
+    {
+      "id": "receipt_age",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "!acceptedAt.Before(check.CheckedAt.Add(-5*time.Minute))",
+      "after": "!acceptedAt.IsZero()",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRequires"
+    },
+    {
+      "id": "receipt_future",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "!acceptedAt.After(now.Add(5*time.Minute))",
+      "after": "!acceptedAt.IsZero()",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRequires"
+    },
+    {
+      "id": "empty_or_failed_check",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "if !check.HealthyAt(now) {",
+      "after": "if check.HealthyAt(now) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusRejects"
+    },
+    {
+      "id": "expired_machine_catalog",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "!c.ValidUntil.IsZero() && !now.Before(c.ValidUntil)",
+      "after": "!c.ValidUntil.IsZero() && !now.Before(c.ValidUntil) && false",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestMachineStatusGives"
+    },
+    {
+      "id": "original_publisher",
+      "file": "client/cmd/skillctl/publish.go",
+      "before": "record.PublisherKeyID != \"\" && record.PublisherKeyID != keyID",
+      "after": "record.PublisherKeyID != \"\" && record.PublisherKeyID != keyID && false",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishSavedSigner"
+    },
+    {
+      "id": "renewal_changed_source",
+      "file": "client/cmd/skillctl/publish.go",
+      "before": "if opts.Renew && (previous == nil || !reflect.DeepEqual(previous.Skills, coverage.Signed)) {",
+      "after": "if opts.Renew && (previous == nil || !reflect.DeepEqual(previous.Skills, coverage.Signed)) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishRenewal"
+    },
+    {
+      "id": "approval_binding",
+      "file": "client/cmd/skillctl/publish_submit.go",
+      "before": "opts.Approve != record.ReviewID",
+      "after": "opts.Approve != record.ReviewID && false",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishSubmit"
+    },
+    {
+      "id": "reviewed_file_binding",
+      "file": "client/cmd/skillctl/publish_submit.go",
+      "before": "if reviewID != record.ReviewID {",
+      "after": "if reviewID == \"\" {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishSubmit"
+    },
+    {
+      "id": "exact_hosted_payload",
+      "file": "client/cmd/skillctl/publish_submit.go",
+      "before": "hosted.Payload != expected.Payload",
+      "after": "hosted.Payload != expected.Payload && false",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishStatus"
+    },
+    {
+      "id": "independent_notary",
+      "file": "client/cmd/skillctl/publish_submit.go",
+      "before": "attest.NewTrustedKeys(notaries...), nil, connectNow()); err != nil {",
+      "after": "attest.NewTrustedKeys(notaries...), nil, connectNow()); err != nil && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublishStatus"
+    }
+  ]
+}

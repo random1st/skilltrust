@@ -44,6 +44,26 @@ to look through what it built.
 
 ## For the organisation
 
+With Axela, install SkillTrust, run `skillctl setup`, restart your agent and ask:
+"Publish this repository's skills to Axela for my team." The agent prepares the
+publication, opens browser approval and shows the changes for your review. After
+approval it submits the catalog and verifies the exact hosted result.
+
+The same flow is available in the terminal:
+
+```bash
+skillctl publish ./acme-marketplace --org acme
+# Review the prepared changes, then use the review ID returned above:
+skillctl publish ./acme-marketplace --submit --approve <review-id>
+skillctl publish ./acme-marketplace --status
+```
+
+Renew with `skillctl publish --renew` in the repository, then review and submit.
+The original publisher key stays on your computer. Renewal preserves approvals
+and revocations; changed skills require a normal publication review.
+
+For a manual or self-hosted publication:
+
 ```bash
 skillctl init --as ops@acme                  # once: the key this marketplace signs with
 skillctl marketplace sign ./acme-marketplace
@@ -78,10 +98,13 @@ skillctl marketplace sign ./acme-marketplace
 If your team uses Axela, start with:
 
 ```bash
-skillctl connect
+brew install random1st/tap/skillctl
+skillctl setup
 ```
 
-Sign in, choose your team and confirm the computer in the browser. SkillTrust
+Restart your agent and ask "Connect this computer to Axela". The terminal
+alternative is `skillctl connect`. Sign in, choose your team and confirm the
+computer in the browser. SkillTrust
 sets up its local key, follows the team's signed catalogs and installs supported
 session hooks. It can install the first approved Claude Code plugin through the
 native CLI. A Codex installation or hook approval that needs your action is
@@ -91,6 +114,10 @@ The command says `connected` only after a real, nonempty check receives the
 matching cloud receipt. If approval, installation or delivery is still pending,
 it says what to do next; rerun the same command to continue. This connection flow
 requires the matching Axela server and client release.
+
+Ask the agent for connection status, or run `skillctl status --refresh`. It checks
+installed skills and delivery without restoring files, and names who needs to
+act when a catalog is expiring or a check needs attention.
 
 ### Manual and self-hosted setup
 
@@ -404,6 +431,10 @@ certify prose an agent will follow.
 
 | Command | Side | What it does |
 | --- | --- | --- |
+| `setup` | either | Add the local MCP integration through Claude Code or Codex's native CLI. |
+| `connect` | machine | Connect through browser approval and verify installation and report delivery. |
+| `status` | machine | Show the verified connection state and next action; `--refresh` runs a current check. |
+| `publish` | publisher | Prepare, review, submit and verify a publication; `--renew` renews unchanged skills. |
 | `subscribe` | machine | Follow a marketplace, pinning the publisher's key. |
 | `sync` | machine | Fetch, verify, and put back anything that changed. |
 | `hook` | machine | Run or install the two reconciler hooks. |
@@ -461,12 +492,8 @@ order fails silently — pinning after subscribing, or two pinned keys with a th
 `skilltrust-mcp` serves that sequence over the Model Context Protocol, so an agent follows it
 rather than reconstructing it from this file.
 
-```jsonc
-{
-  "mcpServers": {
-    "skilltrust": { "command": "skilltrust-mcp" }
-  }
-}
+```bash
+skillctl setup
 ```
 
 It offers three things, and the tools are the least interesting of them:
@@ -489,9 +516,10 @@ every session start; the MCP SDK brings nine dependencies, and a verifier whose 
 grows to serve a convenience is arguing against itself. `go version -m` on a built `skillctl`
 still lists two.
 
-Registering an organisation with a hosted notary is not among the tools, because it happens
-in a browser behind a sign-in and returns tokens shown once. The prompt says so and hands
-that step to a person.
+`skilltrust_connect`, `skilltrust_status` and `skilltrust_publish` are the normal
+journey tools. Public structured state carries the next action and review ID.
+An owner approves team and repository setup in the browser; credentials stay
+local and are not copied through the conversation.
 
 ## How identity is computed
 
@@ -541,6 +569,13 @@ runner lives. Publishing is therefore one path — `make release` locally. Pushi
 longer starts a second, unsigned release racing the first under the same version.
 
 ## Status
+
+Run `make check` for formatting, vet and the complete race-enabled test suite.
+Run `make mutation` for the reviewed trust and user-journey fault injections in
+`mutation.json`. Each injection must fail a behavioral test; compilation errors,
+timeouts and missing tests fail the run. The temporary copy leaves your checkout
+unchanged. `mutation-results.json` records the tested source hash and failing
+test names; this is targeted mutation coverage, not a whole-repository score.
 
 Working: marketplace signing with honest coverage reporting, verification of the Claude Code
 plugin cache, restore with quarantine, revocation by digest, subscription with pinned keys

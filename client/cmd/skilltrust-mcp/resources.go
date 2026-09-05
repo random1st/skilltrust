@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -78,10 +79,11 @@ type state struct {
 	// machine that had been set up and then abandoned. Most skills on most machines come
 	// from a repository or a copy rather than a marketplace, and on Cursor and Antigravity
 	// there is no marketplace to come from at all.
-	Approvals       int    `json:"skill_approvals"`
-	SkillctlPath    string `json:"skillctl_path"`
-	SkillctlVersion string `json:"skillctl_version"`
-	NextStep        string `json:"next_step"`
+	Approvals       int             `json:"skill_approvals"`
+	SkillctlPath    string          `json:"skillctl_path"`
+	SkillctlVersion string          `json:"skillctl_version"`
+	NextStep        string          `json:"next_step"`
+	Connection      json.RawMessage `json:"connection,omitempty"`
 }
 
 type stateSubscription struct {
@@ -96,7 +98,9 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 	current := state{Home: s.home, SkillctlPath: s.run.binary}
 
 	if key, err := os.ReadFile(filepath.Join(s.home, "signer.pub")); err == nil {
-		current.HasSigningKey = true
+		if info, err := os.Stat(filepath.Join(s.home, "signer.key")); err == nil && !info.IsDir() {
+			current.HasSigningKey = true
+		}
 		current.PublicKey = string(key)
 	}
 
@@ -160,6 +164,22 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 	}
 
 	current.NextStep = nextStep(current)
+	if result, err := s.run.run(ctx, "", "status", "--json"); err == nil && json.Valid(result.State) {
+		current.Connection = result.State
+		var status struct {
+			Status     string `json:"status"`
+			NextAction *struct {
+				Detail string `json:"detail"`
+			} `json:"next_action"`
+		}
+		if json.Unmarshal(current.Connection, &status) == nil {
+			if status.NextAction != nil {
+				current.NextStep = mcpNextStep(status.NextAction.Detail)
+			} else if status.Status == "connected" {
+				current.NextStep = "The last check passed and Axela acknowledged it. Use skilltrust_status with refresh=true for a current check."
+			}
+		}
+	}
 
 	body, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
@@ -174,23 +194,11 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 // steps here are order-dependent in a way the command names do not show: subscribing before
 // pinning the publisher's key succeeds and follows a catalog nothing can verify.
 func nextStep(current state) string {
-	switch {
-	case !current.HasSigningKey:
-		return "Run skilltrust_init. Nothing else works until this machine has a key: it is " +
-			"what signs the events a machine files, and its public half is what a publisher registers."
-	case len(current.Subscriptions) == 0:
-		// Deliberately not keyed on whether anything is pinned. init pins the operator's own
-		// key, so a freshly initialised machine already has one label and none of it belongs
-		// to a publisher — counting pins would report the next step as done.
-		return "Pin the key of the organisation whose catalog you will follow with " +
-			"skilltrust_trust_key, then follow it with skilltrust_subscribe. The key has to come " +
-			"from somewhere you already trust: a catalog that supplied its own key could replace " +
-			"itself, so pinning is what makes the signature mean anything."
-	default:
-		return "Run skilltrust_check for the plugins your marketplaces sign and " +
-			"skilltrust_verify_skills for everything else, then skilltrust_install_hook so it " +
-			"happens at the start of every session rather than only when someone remembers."
-	}
+	return "Run skilltrust_connect to start or resume the browser-approved team connection. It creates the key, pins the approved team keys, follows catalogs and verifies the first installed skill and report. Use manual pinning only for an explicitly requested self-hosted setup."
+}
+
+func mcpNextStep(detail string) string {
+	return strings.NewReplacer("skillctl status --refresh", "skilltrust_status with refresh=true", "skillctl connect", "skilltrust_connect", "skillctl publish --renew", "skilltrust_publish with renew=true", "skillctl report flush", "skilltrust_status with refresh=true").Replace(detail)
 }
 
 // readFile serves a file under the home, and serves the empty document rather than an error

@@ -36,6 +36,8 @@ Seeing what it does (about a minute, in a sandbox, no account):
   skillctl demo                  publish, install, tamper, detect, restore, file
 
 Following a catalog (on a machine):
+  skillctl setup                add SkillTrust to installed Claude Code or Codex
+  skillctl status --refresh      check skills and confirm the report reached your team
   skillctl connect [https://axela.example]
                                  browser-approved Axela setup for this machine; defaults to https://axela.app
   skillctl subscribe <git-url> --key <pub>
@@ -47,6 +49,8 @@ Following a catalog (on a machine):
   skillctl hook <subcommand>     run or install the session-start reconciler
 
 Publishing a catalog (in a repository of skills):
+  skillctl publish --org <team>  prepare, review, submit and verify publication
+  skillctl publish --renew       renew unchanged skills with the original signer
   skillctl init                  create the signing key this machine publishes with
   skillctl marketplace sign      sign the plugins a Claude Code marketplace owns
   skillctl policy                print the managed settings that make this binding
@@ -81,10 +85,16 @@ func main() {
 		os.Exit(runPolicy(os.Args[2:]))
 	case "marketplace":
 		os.Exit(runMarketplace(os.Args[2:]))
+	case "publish":
+		os.Exit(runPublish(os.Args[2:]))
 	case "subscribe":
 		os.Exit(runSubscribe(os.Args[2:]))
 	case "connect":
 		os.Exit(runConnect(os.Args[2:]))
+	case "setup":
+		os.Exit(runSetup(os.Args[2:]))
+	case "status":
+		os.Exit(runStatus(os.Args[2:]))
 	case "trust":
 		os.Exit(runTrust(os.Args[2:]))
 	case "init":

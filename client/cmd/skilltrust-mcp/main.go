@@ -70,9 +70,11 @@ func serve() error {
 		Instructions: "SkillTrust proves who published a skill's bytes and that they have " +
 			"not changed. It does not prove a skill is safe, and does not inspect what one " +
 			"does. Read skilltrust://state before acting: it reports what is already set up " +
-			"and names the next step. The steps are order-dependent and every one of them " +
-			"succeeds out of order, so use the set_up_this_machine prompt rather than " +
-			"calling tools in the order they are listed.",
+			"and names the next step. Use skilltrust_connect for browser-approved machine " +
+			"setup, skilltrust_status for verification and report delivery, and " +
+			"skilltrust_publish for preparation, review, submission and renewal. Never " +
+			"claim success from configuration or submission alone. Keep user approval " +
+			"bound to the exact publication review ID.",
 	})
 
 	s.addResources(m)

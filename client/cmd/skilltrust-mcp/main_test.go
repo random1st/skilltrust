@@ -218,8 +218,8 @@ func TestStateOnAnEmptyMachine(t *testing.T) {
 	if current.HasSigningKey {
 		t.Fatal("an empty home has no signing key")
 	}
-	if !strings.Contains(current.NextStep, "skilltrust_init") {
-		t.Fatalf("the first step on an empty machine is init, got: %s", current.NextStep)
+	if !strings.Contains(current.NextStep, "skilltrust_connect") {
+		t.Fatalf("the first step on an empty machine is the connection journey, got: %s", current.NextStep)
 	}
 }
 
@@ -413,13 +413,54 @@ func TestPublishPromptKeepsPreparationSeparateFromPublication(t *testing.T) {
 	}
 	body := result.Messages[0].Content.(*mcp.TextContent).Text
 	for _, expected := range []string{
-		"skilltrust_prepare_publish_workflow",
+		"skilltrust_publish",
 		"GitHub Actions OIDC",
 		"Preparing the workflow is not a publish.",
-		"publish token is the recovery path",
+		"review_id",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("publish prompt is missing %q:\n%s", expected, body)
 		}
+	}
+}
+
+func TestPublishMacroPassesTheExactApprovalAndBoundedWait(t *testing.T) {
+	session, _ := connect(t)
+	body := callText(t, session, "skilltrust_publish", map[string]any{
+		"directory": t.TempDir(), "organisation": "acme", "service_url": "https://axela.example",
+		"branch": "main", "renew": true, "submit": true, "approve": "review-123", "wait_seconds": 15,
+	})
+	for _, expected := range []string{"publish", "--json", "--no-browser", "--org acme", "--notary https://axela.example", "--branch main", "--renew", "--submit", "--approve review-123", "--wait 15s"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %s: %s", expected, body)
+		}
+	}
+}
+
+func TestStatusOnlyRefreshesWhenRequested(t *testing.T) {
+	session, _ := connect(t)
+	plain := callText(t, session, "skilltrust_status", nil)
+	if !strings.Contains(plain, "status --json") || strings.Contains(plain, "--refresh") {
+		t.Fatal(plain)
+	}
+	refreshed := callText(t, session, "skilltrust_status", map[string]any{"refresh": true})
+	if !strings.Contains(refreshed, "--refresh") {
+		t.Fatal(refreshed)
+	}
+}
+
+func TestDiagnosticsCannotEraseStructuredContinuationState(t *testing.T) {
+	name, script := "skillctl", "#!/bin/sh\necho '{\"status\":\"approval_pending\"}'\necho 'retry diagnostics' >&2\nexit 1\n"
+	if runtime.GOOS == "windows" {
+		name, script = "skillctl.cmd", "@echo off\r\necho {\"status\":\"approval_pending\"}\r\necho retry diagnostics 1>&2\r\nexit /b 1\r\n"
+	}
+	binary := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := (runner{binary: binary, home: t.TempDir()}).run(t.Context(), "", "status", "--json")
+	var state map[string]string
+	if err != nil || out.ExitCode != 1 || json.Unmarshal(out.State, &state) != nil || state["status"] != "approval_pending" || !strings.Contains(out.Output, "retry diagnostics") {
+		t.Fatalf("continuation state lost: %+v / %v", out, err)
 	}
 }

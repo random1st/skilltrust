@@ -190,6 +190,15 @@ func TestPrepareNotaryUsesTheCommitWhenBuiltFromDev(t *testing.T) {
 	}
 }
 
+func TestReleaseVersionPinsThePublishedTag(t *testing.T) {
+	oldVersion, oldCommit := version, commit
+	version, commit = "0.3.0", "ignored"
+	t.Cleanup(func() { version, commit = oldVersion, oldCommit })
+	if got := workflowActionRef(); got != "v0.3.0" {
+		t.Fatalf("release version must resolve to the published tag, got %q", got)
+	}
+}
+
 func TestPrepareNotaryRejectsABranchGitCannotUse(t *testing.T) {
 	repository, _ := signedMarketplace(t)
 	for _, branch := range []string{

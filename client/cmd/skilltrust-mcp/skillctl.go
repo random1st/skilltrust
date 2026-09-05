@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -76,9 +77,10 @@ func skilltrustHome() string {
 
 // result is what a command did, in the shape a tool reports it.
 type result struct {
-	Command  string `json:"command"`
-	ExitCode int    `json:"exit_code"`
-	Output   string `json:"output"`
+	Command  string          `json:"command"`
+	ExitCode int             `json:"exit_code"`
+	Output   string          `json:"output"`
+	State    json.RawMessage `json:"state,omitempty"`
 }
 
 // run executes skillctl and returns its output whatever the exit code.
@@ -92,17 +94,25 @@ func (r runner) run(ctx context.Context, dir string, args ...string) (result, er
 
 	command := exec.CommandContext(ctx, r.binary, args...)
 	command.Dir = dir
-	// Combined, because skillctl says which directory it chose and what it skipped on
-	// stderr. Dropping that leaves an agent reading a clean report about somewhere it was
-	// not asking about.
-	var out bytes.Buffer
+	if r.home != "" {
+		command.Env = append(os.Environ(), "SKILLTRUST_HOME="+r.home)
+	}
+	// Keep diagnostics visible, while parsing structured state from stdout alone.
+	// A refresh can report a fetch problem on stderr and still return useful JSON.
+	var out, diagnostics bytes.Buffer
 	command.Stdout = &out
-	command.Stderr = &out
+	command.Stderr = &diagnostics
 
 	err := command.Run()
 	shown := result{
 		Command: "skillctl " + strings.Join(args, " "),
 		Output:  strings.TrimRight(out.String(), "\n"),
+	}
+	if json.Valid(out.Bytes()) {
+		shown.State = append(json.RawMessage{}, out.Bytes()...)
+	}
+	if diagnostics.Len() > 0 {
+		shown.Output += "\n" + strings.TrimRight(diagnostics.String(), "\n")
 	}
 	var exit *exec.ExitError
 	switch {

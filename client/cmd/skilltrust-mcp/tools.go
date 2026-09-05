@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,6 +22,16 @@ import (
 func (s *server) addTools(m *mcp.Server) {
 	safe := &mcp.ToolAnnotations{ReadOnlyHint: true}
 	writes := &mcp.ToolAnnotations{IdempotentHint: true}
+	mcp.AddTool(m, &mcp.Tool{
+		Name: "skilltrust_publish", Title: "Publish or renew this repository's skills",
+		Description: "Starts or resumes publishing with the original local signer. Handles browser team approval, prepares the catalog and workflow and returns a review ID. After the user approves that exact review, submit=true and approve=<review ID> commit those two files, push the branch and verify both publisher and notary signatures on the exact hosted catalog. renew=true only extends unchanged approvals. Never returns keys, key paths or tokens.",
+		Annotations: writes,
+	}, s.publish)
+	mcp.AddTool(m, &mcp.Tool{
+		Name: "skilltrust_status", Title: "Check connection, skills and report delivery",
+		Description: "Shows public machine state and one next action with its responsible person. With refresh=true, checks installed skills and sends a signed report; never installs or restores skills. Without refresh, describes the last recorded check, not a new verification.",
+		Annotations: writes,
+	}, s.status)
 
 	mcp.AddTool(m, &mcp.Tool{
 		Name:        "skilltrust_init",
@@ -100,7 +111,7 @@ func (s *server) addTools(m *mcp.Server) {
 		Name:        "skilltrust_sign_marketplace",
 		Title:       "Sign the skills a repository publishes",
 		Description: "Signs the plugins a Claude Code marketplace owns, writing the signed index into the repository. Run in the repository that publishes the skills, with this machine's key.",
-		Annotations: writes,
+		Annotations: &mcp.ToolAnnotations{IdempotentHint: false},
 	}, s.signMarketplace)
 
 	mcp.AddTool(m, &mcp.Tool{
@@ -145,7 +156,67 @@ func (s *server) connect(ctx context.Context, _ *mcp.CallToolRequest, in connect
 	if in.ServiceURL != "" {
 		args = append(args, in.ServiceURL)
 	}
-	return s.call(ctx, "", args...)
+	reply, result, err := s.call(ctx, "", args...)
+	if err == nil {
+		if status, statusErr := s.run.run(ctx, "", "status", "--json"); statusErr == nil && json.Valid(status.State) {
+			result.State = status.State
+		}
+	}
+	return reply, result, err
+}
+
+type statusInput struct {
+	Refresh bool `json:"refresh,omitempty" jsonschema:"run a current check and deliver its report; otherwise read the last recorded state"`
+}
+
+type publishInput struct {
+	Directory    string `json:"directory" jsonschema:"local Git repository containing the marketplace"`
+	Organisation string `json:"organisation,omitempty" jsonschema:"team name on the first run; remembered for later runs"`
+	ServiceURL   string `json:"service_url,omitempty" jsonschema:"Axela URL on first run; defaults to https://axela.app"`
+	Branch       string `json:"branch,omitempty" jsonschema:"publishing branch; defaults to the checked-out branch"`
+	Renew        bool   `json:"renew,omitempty" jsonschema:"extend unchanged approvals with the original signing key"`
+	Submit       bool   `json:"submit,omitempty" jsonschema:"commit and push only after the user approves the returned review"`
+	Approve      string `json:"approve,omitempty" jsonschema:"exact review ID approved by the user; required for submit"`
+	Status       bool   `json:"status,omitempty" jsonschema:"verify the saved hosted revision without preparing or pushing"`
+	WaitSeconds  int    `json:"wait_seconds,omitempty" jsonschema:"wait for publication, from 0 to 60 seconds"`
+}
+
+func (s *server) publish(ctx context.Context, _ *mcp.CallToolRequest, in publishInput) (*mcp.CallToolResult, result, error) {
+	if strings.TrimSpace(in.Directory) == "" {
+		return nil, result{}, fmt.Errorf("directory is required")
+	}
+	if in.WaitSeconds < 0 || in.WaitSeconds > 60 {
+		return nil, result{}, fmt.Errorf("wait_seconds must be between 0 and 60")
+	}
+	args := []string{"publish", "--json", "--no-browser", "--wait", strconv.Itoa(in.WaitSeconds) + "s"}
+	for _, option := range [][2]string{{"--org", in.Organisation}, {"--notary", in.ServiceURL}, {"--branch", in.Branch}, {"--approve", in.Approve}} {
+		if option[1] != "" {
+			args = append(args, option[0], option[1])
+		}
+	}
+	if in.Renew {
+		args = append(args, "--renew")
+	}
+	if in.Submit {
+		args = append(args, "--submit")
+	}
+	if in.Status {
+		args = append(args, "--status")
+	}
+	args = append(args, "--", in.Directory)
+	return s.call(ctx, in.Directory, args...)
+}
+
+func (s *server) status(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, result, error) {
+	args := []string{"status", "--json"}
+	if in.Refresh {
+		args = append(args, "--refresh")
+	}
+	reply, out, err := s.call(ctx, "", args...)
+	if json.Valid([]byte(out.Output)) {
+		out.State = json.RawMessage(out.Output)
+	}
+	return reply, out, err
 }
 
 type trustKeyInput struct {

@@ -72,12 +72,24 @@ Browser approval still happens in a browser, behind an existing Axela sign-in. A
 start or resume the connection and hand over the approval URL; it cannot manufacture that
 consent.
 
-Publisher registration is a separate browser flow. Registering an organisation and binding a
-publishing repository happen behind a sign-in and return credentials shown once. There is no
-API to call and no credential to hold in the conversation. Hand the human the public key and
-the console URL, and tell them the normal non-empty publish path is GitHub Actions OIDC from
-that registered repository. The publish token is for empty or revocation-only catalogs, or
-for recovery; if they need it, ask for it in the environment rather than in the conversation.
+For publishing, use `skilltrust_publish` with the local repository and team. The browser
+link already contains the public setup details. The signed-in owner confirms them; no PEM
+copying or recovery token is needed. Continue with the same tool after that consent.
+
+The tool prepares a catalog and GitHub Actions OIDC workflow for review. After the user
+approves that concrete revision, pass `submit=true` and its exact `review_id` as `approve`.
+The tool commits those two files, pushes and verifies the hosted catalog. Retry the same
+review after a failed push. Use `status=true` to check progress. Only `published` means the
+exact catalog verified against both independent signers.
+
+Use `renew=true` before the catalog expires. The original signer is remembered locally;
+unchanged approvals and revocations are preserved. Source changes require a new publication
+review. Never replace a missing key as a shortcut.
+
+`skillctl setup` registers this local MCP integration through Claude Code or Codex's native
+CLI. This one integration handles machine setup and publishing. The cloud MCP is optional.
+Use `skilltrust_status` to read the last check, or `refresh=true` for a current check and
+report. An empty installation or an unacknowledged report is not successful setup.
 
 ## Where things live
 

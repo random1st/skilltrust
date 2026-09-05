@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -267,6 +268,12 @@ func queueChecks(
 			status.CheckDigests = map[string]string{}
 		}
 		status.CheckDigests[result.Scope] = digestHex(body)
+		// Keep the exact signed bytes after the queue removes a delivered check.
+		// Status can then bind the receipt to this result instead of trusting a
+		// receipt alone or counting configured subscriptions as successful setup.
+		if err := writeOwnerOnlyFileAtomically(latestCheckPath(result.Scope), body); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return status, errors.Join(errs...)
 }
@@ -534,7 +541,19 @@ func readQueuedReport(path string, trusted *attest.TrustedKeys) (queuedReport, e
 
 func deliverQueuedReport(config *report.Config, queued queuedReport, timeout time.Duration) error {
 	if queued.check != nil {
-		return report.DeliverQueuedCheck(queued.path, config, *queued.check, queued.body, timeout)
+		if err := report.DeliverQueuedCheck(queued.path, config, *queued.check, queued.body, timeout); err != nil {
+			return err
+		}
+		// An approved-skills check or event may be delivered next. Preserve the
+		// exact receipt for this scope so that delivery cannot erase another
+		// scope's evidence and make a healthy connection appear unfinished.
+		if body, err := os.ReadFile(connectStatusPath()); err == nil {
+			var receipt connectStatusFile
+			if json.Unmarshal(body, &receipt) == nil && receipt.Digest == digestHex(queued.body) {
+				return writeOwnerOnlyFileAtomically(latestCheckReceiptPath(queued.check.Scope), body)
+			}
+		}
+		return nil
 	}
 	return report.DeliverQueuedEvent(queued.path, config, *queued.event, queued.body, timeout)
 }

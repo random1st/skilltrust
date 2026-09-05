@@ -126,6 +126,9 @@ func runMarketplaceSign(args []string) int {
 	if err := envelope.Save(indexPath); err != nil {
 		return fail(err)
 	}
+	if err := rememberPublisher(repository, *keyPath, key); err != nil {
+		return fail(err)
+	}
 
 	fmt.Printf("marketplace %s\n", manifest.Name)
 	fmt.Printf("signature   %s\n", indexPath)
@@ -245,7 +248,7 @@ func runMarketplacePrepareNotary(args []string) int {
 func workflowActionRef() string {
 	switch {
 	case strings.TrimSpace(version) != "" && strings.TrimSpace(version) != "dev":
-		return strings.TrimSpace(version)
+		return "v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
 	case strings.TrimSpace(commit) != "":
 		return strings.TrimSpace(commit)
 	default:
