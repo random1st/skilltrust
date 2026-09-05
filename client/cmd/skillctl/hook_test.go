@@ -190,10 +190,9 @@ func TestSessionStartFlushesPendingEventsEvenWithoutNewIncidents(t *testing.T) {
 	}}, nil, time.Now().UTC())
 
 	delivery := filepath.Join(t.TempDir(), "delivered")
-	if err := os.WriteFile(reportConfigPath(), []byte(`{
-  "destinations": [{"kind":"file","directory":"`+delivery+`"}]
-}
-`), 0o600); err != nil {
+	if err := saveHomeJSON(reportConfigPath(), report.Config{
+		Destinations: []report.Destination{{Kind: "file", Directory: delivery}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,6 +281,7 @@ func TestSessionStartAggregatesManagedChecksAcrossManagedHomes(t *testing.T) {
 	}, publisherPrivate)
 
 	t.Setenv("HOME", rootHome)
+	t.Setenv("USERPROFILE", rootHome)
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 
 	if code := runHookSessionStart([]string{"--fetch=false"}); code != exitClean {

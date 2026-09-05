@@ -250,15 +250,11 @@ func TestRecordCurrentChecksReturnsDigestAfterDelivery(t *testing.T) {
 	}
 
 	sink := filepath.Join(home, "delivered")
-	if err := os.WriteFile(reportConfigPath(), []byte(`{
-  "destinations": [{
-    "kind":"file",
-    "directory":"`+sink+`",
-    "payloads":["checks"],
-    "healthy_checks":true
-  }]
-}
-`), 0o600); err != nil {
+	if err := saveHomeJSON(reportConfigPath(), report.Config{
+		Destinations: []report.Destination{{
+			Kind: "file", Directory: sink, Payloads: []string{"checks"}, HealthyChecks: true,
+		}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 

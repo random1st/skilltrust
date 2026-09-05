@@ -422,6 +422,7 @@ func TestSyncReportsManagedChecksAcrossManagedHomesWithoutRestoringTheOtherHome(
 	}, publisherPrivate)
 
 	t.Setenv("HOME", rootHome)
+	t.Setenv("USERPROFILE", rootHome)
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 
 	if code := runSync([]string{"--agent", "claude", "--offline", "--report-only"}); code != exitClean {
