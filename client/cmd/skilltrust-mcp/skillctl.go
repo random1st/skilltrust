@@ -77,10 +77,12 @@ func skilltrustHome() string {
 
 // result is what a command did, in the shape a tool reports it.
 type result struct {
-	Command  string          `json:"command"`
-	ExitCode int             `json:"exit_code"`
-	Output   string          `json:"output"`
-	State    json.RawMessage `json:"state,omitempty"`
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output"`
+	// Keep the Go type an object too: the MCP SDK infers the output schema from
+	// it, and json.RawMessage is inferred as an array despite marshaling as JSON.
+	State map[string]any `json:"state,omitempty"`
 }
 
 // run executes skillctl and returns its output whatever the exit code.
@@ -108,8 +110,11 @@ func (r runner) run(ctx context.Context, dir string, args ...string) (result, er
 		Command: "skillctl " + strings.Join(args, " "),
 		Output:  strings.TrimRight(out.String(), "\n"),
 	}
-	if json.Valid(out.Bytes()) {
-		shown.State = append(json.RawMessage{}, out.Bytes()...)
+	var state map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	decoder.UseNumber()
+	if json.Valid(out.Bytes()) && decoder.Decode(&state) == nil {
+		shown.State = state
 	}
 	if diagnostics.Len() > 0 {
 		shown.Output += "\n" + strings.TrimRight(diagnostics.String(), "\n")

@@ -71,7 +71,7 @@ func executablePath() string {
 	if err != nil {
 		return "skillctl"
 	}
-	return path
+	return preferExecutableLauncher(path)
 }
 
 func runHookInstall(args []string) int {

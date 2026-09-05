@@ -34,8 +34,12 @@ func connect(t *testing.T) (*mcp.ClientSession, string) {
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return connectRunner(t, runner{binary: fake, home: home}), home
+}
 
-	s := &server{run: runner{binary: fake, home: home}, home: home}
+func connectRunner(t *testing.T, run runner) *mcp.ClientSession {
+	t.Helper()
+	s := &server{run: run, home: run.home}
 	m := mcp.NewServer(&mcp.Implementation{Name: "skilltrust", Version: "test"}, nil)
 	s.addResources(m)
 	s.addPrompts(m)
@@ -55,7 +59,7 @@ func connect(t *testing.T) (*mcp.ClientSession, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { session.Close() })
-	return session, home
+	return session
 }
 
 func callText(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) string {
@@ -459,8 +463,61 @@ func TestDiagnosticsCannotEraseStructuredContinuationState(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := (runner{binary: binary, home: t.TempDir()}).run(t.Context(), "", "status", "--json")
-	var state map[string]string
-	if err != nil || out.ExitCode != 1 || json.Unmarshal(out.State, &state) != nil || state["status"] != "approval_pending" || !strings.Contains(out.Output, "retry diagnostics") {
+	if err != nil || out.ExitCode != 1 || out.State["status"] != "approval_pending" || !strings.Contains(out.Output, "retry diagnostics") {
 		t.Fatalf("continuation state lost: %+v / %v", out, err)
+	}
+}
+
+// Exercise the SDK's output validation, not just the handler's Go value. Raw JSON
+// bytes can marshal as an object while generating an array schema, which makes
+// every real structured tool call fail even though direct handler tests pass.
+func TestStructuredToolsReturnObjectsThroughMCP(t *testing.T) {
+	for _, tc := range []struct {
+		tool   string
+		status string
+		args   map[string]any
+	}{
+		{"skilltrust_status", "not_connected", nil},
+		{"skilltrust_connect", "approval_pending", nil},
+		{"skilltrust_publish", "review_required", map[string]any{"directory": t.TempDir()}},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			body := `{"status":"` + tc.status + `","next_action":{"actor":"user","code":"approve"},"items":[{"name":"example"}]}`
+			name, script := "skillctl", "#!/bin/sh\necho '"+body+"'\necho 'retry diagnostics' >&2\nexit 1\n"
+			if runtime.GOOS == "windows" {
+				name, script = "skillctl.cmd", "@echo off\r\necho "+body+"\r\necho retry diagnostics 1>&2\r\nexit /b 1\r\n"
+			}
+			binary := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			session := connectRunner(t, runner{binary: binary, home: t.TempDir()})
+			response, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
+			if err != nil {
+				t.Fatalf("structured MCP response must satisfy its advertised schema: %v", err)
+			}
+			if response.IsError {
+				t.Fatalf("a pending continuation is a tool result: %+v", response)
+			}
+			raw, err := json.Marshal(response.StructuredContent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var received struct {
+				ExitCode int    `json:"exit_code"`
+				Output   string `json:"output"`
+				State    struct {
+					Status     string                       `json:"status"`
+					NextAction struct{ Actor, Code string } `json:"next_action"`
+					Items      []struct{ Name string }      `json:"items"`
+				} `json:"state"`
+			}
+			if err := json.Unmarshal(raw, &received); err != nil {
+				t.Fatal(err)
+			}
+			if received.ExitCode != 1 || received.State.Status != tc.status || received.State.NextAction.Actor != "user" || received.State.NextAction.Code != "approve" || len(received.State.Items) != 1 || received.State.Items[0].Name != "example" || !strings.Contains(received.Output, "retry diagnostics") {
+				t.Fatalf("structured continuation changed in transit: %s", raw)
+			}
+		})
 	}
 }

@@ -59,13 +59,32 @@ func findMCPBinary() (string, error) {
 		}
 		sibling := filepath.Join(filepath.Dir(self), name)
 		if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
-			return sibling, nil
+			return preferExecutableLauncher(sibling), nil
 		}
 	}
-	if path, err := setupLookup(name); err == nil {
-		return filepath.Abs(path)
-	}
 	return "", fmt.Errorf("install the full SkillTrust release with both skillctl and skilltrust-mcp, then run skillctl setup again")
+}
+
+// Package managers may replace a versioned release directory on upgrade. Persist the
+// absolute PATH launcher when it targets this exact binary, never an unrelated install.
+func preferExecutableLauncher(expected string) string {
+	target, err := os.Stat(expected)
+	if err != nil {
+		return expected
+	}
+	launcher, err := exec.LookPath(filepath.Base(expected))
+	if err != nil {
+		return expected
+	}
+	launcher, err = filepath.Abs(launcher)
+	if err != nil {
+		return expected
+	}
+	candidate, err := os.Stat(launcher)
+	if err != nil || !os.SameFile(target, candidate) {
+		return expected
+	}
+	return launcher
 }
 
 func configureMCPClient(agentName, binary, mcpBinary string) setupClient {

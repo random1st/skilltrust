@@ -164,8 +164,8 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 	}
 
 	current.NextStep = nextStep(current)
-	if result, err := s.run.run(ctx, "", "status", "--json"); err == nil && json.Valid(result.State) {
-		current.Connection = result.State
+	if result, err := s.run.run(ctx, "", "status", "--json"); err == nil && result.State != nil {
+		current.Connection, _ = json.Marshal(result.State)
 		var status struct {
 			Status     string `json:"status"`
 			NextAction *struct {

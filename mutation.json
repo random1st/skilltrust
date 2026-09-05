@@ -1,6 +1,22 @@
 {
   "mutations": [
     {
+      "id": "mcp_output_schema",
+      "file": "client/cmd/skilltrust-mcp/tools.go",
+      "before": "Name: \"skilltrust_status\", Title: \"Check connection, skills and report delivery\",",
+      "after": "Name: \"skilltrust_status\", Title: \"Check connection, skills and report delivery\", OutputSchema: map[string]any{\"type\": \"object\", \"properties\": map[string]any{\"state\": map[string]any{\"type\": \"array\"}}},",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestStructuredToolsReturnObjectsThroughMCP$"
+    },
+    {
+      "id": "installed_upgrade_launcher",
+      "file": "client/cmd/skillctl/setup.go",
+      "before": "return launcher",
+      "after": "return expected",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestInstalledCommandsSurviveReleaseUpgrade$"
+    },
+    {
       "id": "publication_line_endings",
       "file": "client/cmd/skillctl/publish_repository.go",
       "before": "\"-c\", \"core.autocrlf=false\", \"-c\", \"core.eol=lf\", \"checkout-index\"",
@@ -43,8 +59,8 @@
     {
       "id": "structured_continuation",
       "file": "client/cmd/skilltrust-mcp/skillctl.go",
-      "before": "if json.Valid(out.Bytes()) {",
-      "after": "if json.Valid(append(out.Bytes(), diagnostics.Bytes()...)) {",
+      "before": "if json.Valid(out.Bytes()) && decoder.Decode(&state) == nil {",
+      "after": "if json.Valid(append(out.Bytes(), diagnostics.Bytes()...)) && decoder.Decode(&state) == nil {",
       "package": "./client/cmd/skilltrust-mcp",
       "run": "^TestDiagnostics"
     },

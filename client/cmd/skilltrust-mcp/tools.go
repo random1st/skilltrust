@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -158,7 +157,7 @@ func (s *server) connect(ctx context.Context, _ *mcp.CallToolRequest, in connect
 	}
 	reply, result, err := s.call(ctx, "", args...)
 	if err == nil {
-		if status, statusErr := s.run.run(ctx, "", "status", "--json"); statusErr == nil && json.Valid(status.State) {
+		if status, statusErr := s.run.run(ctx, "", "status", "--json"); statusErr == nil && status.State != nil {
 			result.State = status.State
 		}
 	}
@@ -212,11 +211,7 @@ func (s *server) status(ctx context.Context, _ *mcp.CallToolRequest, in statusIn
 	if in.Refresh {
 		args = append(args, "--refresh")
 	}
-	reply, out, err := s.call(ctx, "", args...)
-	if json.Valid([]byte(out.Output)) {
-		out.State = json.RawMessage(out.Output)
-	}
-	return reply, out, err
+	return s.call(ctx, "", args...)
 }
 
 type trustKeyInput struct {
