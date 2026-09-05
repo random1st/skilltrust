@@ -191,8 +191,8 @@ release:
     macOS builds are signed with a Developer ID certificate and notarized by Apple:
 
     ```
-    codesign -dvv skillctl 2>&1 | grep Authority
-    spctl --assess --type exec skillctl
+    codesign --verify --strict -R=notarized --check-notarization skillctl
+    codesign --verify --strict -R=notarized --check-notarization skilltrust-mcp
     ```
 
     Every artifact is covered by `skillctl_{{ .Version }}_checksums.txt`, and builds are
