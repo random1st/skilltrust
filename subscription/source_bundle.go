@@ -16,7 +16,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/random1st/skilltrust/internal/archive"
+	"github.com/random1st/skilltrust/internal/lint"
 	"github.com/random1st/skilltrust/internal/marketplace"
+	"github.com/random1st/skilltrust/internal/source"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -38,7 +40,9 @@ func ValidateSourceRead(repository string, omitted []string) error {
 			strings.ContainsAny(member, "\\:\x00\r\n") || norm.NFC.String(member) != member || path.Clean(member) != member {
 			return fmt.Errorf("omitted source path %q must be a canonical relative POSIX path", member)
 		}
-		if sourcePathsOverlap(member, marketplace.ManifestPath) {
+		// Only a native marketplace has a manifest to lose; a skills repository is
+		// checked against its skill roots below like any other omission.
+		if nativeSource(repository) && sourcePathsOverlap(member, marketplace.ManifestPath) {
 			return fmt.Errorf("source read omitted the native marketplace manifest: %q", member)
 		}
 	}
@@ -61,6 +65,13 @@ func ValidateSourceRead(repository string, omitted []string) error {
 		}
 	}
 	return nil
+}
+
+// nativeSource reports whether a repository publishes through a native marketplace.
+// The check is the directory, not the manifest file: a missing manifest inside an
+// existing .claude-plugin is a broken native source, not a skills repository.
+func nativeSource(repository string) bool {
+	return sourceDirectory(repository, ".claude-plugin") == nil
 }
 
 func sourcePathsOverlap(left, right string) bool {
@@ -192,18 +203,29 @@ func absentSourceDestination(destination string) error {
 	return fmt.Errorf("source destination already exists; choose a new directory and keep the existing files")
 }
 
+// sourceLayout describes what a repository publishes. A native marketplace carries
+// a manifest that names its plugins; a skills repository carries no manifest at all,
+// and manifest is nil for it.
 type sourceLayout struct {
 	manifest []byte
 	mode     os.FileMode
 	roots    []string
 }
 
+func (l *sourceLayout) native() bool { return l.manifest != nil }
+
 func readSourceLayout(repository string, manifestLimit int64) (*sourceLayout, error) {
 	if err := sourceDirectory(repository, "."); err != nil {
 		return nil, err
 	}
 	if err := sourceDirectory(repository, ".claude-plugin"); err != nil {
-		return nil, err
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		// No native manifest: the other published shape, a repository of skills. It is
+		// signed by `catalog publish` and installed by every loose-skills client, so
+		// refusing to deliver it would sign what cannot be handed over.
+		return looseSourceLayout(repository)
 	}
 	manifestPath := filepath.Join(repository, filepath.FromSlash(marketplace.ManifestPath))
 	manifestBytes, mode, err := sourceManifest(manifestPath, manifestLimit)
@@ -235,8 +257,9 @@ func sourceArchive(repository string, limits archive.Limits) (*archive.Archive, 
 	tree := filepath.Join(stage, "source")
 	exclusions := append(append([]string{}, marketplace.ClientManagedRoots...), marketplace.SignatureFileName)
 	fileCount, totalBytes := 1, int64(len(manifestBytes))
-	if len(roots) == 1 && roots[0] == "." {
-		fileCount, totalBytes = 0, 0 // The root plugin already contains the manifest.
+	if !layout.native() || (len(roots) == 1 && roots[0] == ".") {
+		// A skills repository ships no manifest; a root plugin already contains it.
+		fileCount, totalBytes = 0, 0
 	}
 	for _, relative := range roots {
 		if err := sourceDirectory(repository, relative); err != nil {
@@ -271,12 +294,14 @@ func sourceArchive(repository string, limits archive.Limits) (*archive.Archive, 
 			return nil, err
 		}
 	}
-	if len(roots) == 1 && roots[0] == "." {
+	switch {
+	case !layout.native():
+	case len(roots) == 1 && roots[0] == ".":
 		copied, _, err := sourceManifest(filepath.Join(tree, marketplace.ManifestPath), limits.MaxFileBytes)
 		if err != nil || !bytes.Equal(copied, manifestBytes) {
 			return nil, fmt.Errorf("the root plugin's marketplace manifest changed while packaging")
 		}
-	} else {
+	default:
 		if err := os.MkdirAll(filepath.Join(tree, ".claude-plugin"), 0o755); err != nil {
 			return nil, err
 		}
@@ -290,6 +315,15 @@ func sourceArchive(repository string, limits archive.Limits) (*archive.Archive, 
 	built, err := archive.Build(tree, limits)
 	if err != nil {
 		return nil, err
+	}
+	if !layout.native() {
+		// The staged tree holds exactly the discovered skills. Re-deriving the layout
+		// from it on extraction is what proves that, so the only thing left to reject
+		// here is an empty delivery.
+		if len(built.Files) == 0 {
+			return nil, fmt.Errorf("source has no skill files to deliver")
+		}
+		return built, nil
 	}
 	for _, file := range built.Files {
 		if file.Path == marketplace.ManifestPath {
@@ -381,6 +415,46 @@ func localSourceRoots(manifest *marketplace.Manifest) ([]string, error) {
 	}
 	sort.Strings(roots)
 	return roots, nil
+}
+
+// looseSourceLayout selects the skills a repository without a native manifest
+// publishes, by the same rule that signed them: every SKILL.md discovered under
+// skills/. Sharing lint.Discover is what keeps the index and the delivery from
+// disagreeing about what the catalog contains — a repository is scanned from its
+// root nowhere here, exactly as `catalog publish` refuses to sign one.
+func looseSourceLayout(repository string) (*sourceLayout, error) {
+	if err := sourceDirectory(repository, source.SkillsSubdirectory); err != nil {
+		return nil, fmt.Errorf("source needs a native marketplace at %s or skills under %s/: %w",
+			marketplace.ManifestPath, source.SkillsSubdirectory, err)
+	}
+	found, _ := lint.Discover(filepath.Join(repository, source.SkillsSubdirectory), lint.Options{})
+	roots := make([]string, 0, len(found))
+	for _, directory := range found {
+		relative, err := filepath.Rel(repository, directory)
+		if err != nil {
+			return nil, err
+		}
+		relative = filepath.ToSlash(relative)
+		if path.IsAbs(relative) || strings.Contains(relative, "..") || path.Clean(relative) != relative ||
+			norm.NFC.String(relative) != relative {
+			return nil, fmt.Errorf("skill source %q needs a safe relative path", relative)
+		}
+		roots = append(roots, relative)
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("source has no skills under %s/ to deliver", source.SkillsSubdirectory)
+	}
+	sort.Strings(roots)
+	// Discovery stops at the first SKILL.md on a branch, so nesting one skill inside
+	// another cannot happen — assert it rather than trust it, because an overlap would
+	// ship the same bytes under two identities.
+	for index := 1; index < len(roots); index++ {
+		if sourcePathsOverlap(roots[index-1], roots[index]) {
+			return nil, fmt.Errorf("skill sources %q and %q overlap; give each skill its own directory",
+				roots[index-1], roots[index])
+		}
+	}
+	return &sourceLayout{roots: roots}, nil
 }
 
 func sourceDirectory(repository, relative string) error {
