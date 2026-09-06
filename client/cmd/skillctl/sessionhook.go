@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -26,7 +28,17 @@ import (
 // It takes a lock. Two sessions opening together would otherwise both restore the same
 // plugin, with the loser renaming a directory the winner had already moved.
 func runHookSessionStart(args []string) int {
+	return runHookSessionStartTo(args, os.Stdout, os.Stderr)
+}
+
+func runHookSessionStartTo(args []string, output, diagnostics io.Writer) int {
+	return runHookSessionStartForBases(args, output, diagnostics, baseDirectories())
+}
+
+func runHookSessionStartForBases(args []string, output, diagnostics io.Writer, bases []string) int {
 	flags := flag.NewFlagSet("hook session-start", flag.ContinueOnError)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(),
 			"Usage: skillctl hook session-start [flags]\n\n"+
@@ -42,22 +54,48 @@ func runHookSessionStart(args []string) int {
 	claudeHome := flags.String("claude-home", "", "the client's directory (default the agent's own)")
 	verbose := flags.Bool("verbose", false, "also report when everything already matched")
 	fetch := flags.Bool("fetch", true, "refresh signed catalogs first; pass -fetch=false to stay fully offline")
+	claudeJSON := flags.Bool("claude-json", false, "return a Claude Code user-visible warning as hook JSON")
 
 	if err := parseArgs(flags, args); err != nil {
+		if *claudeJSON {
+			_ = writeClaudeHookJSON(output, "SessionStart", flagOutput.String())
+		} else {
+			fmt.Fprint(diagnostics, flagOutput.String())
+		}
 		return exitClean
+	}
+	if *claudeJSON {
+		var notice bytes.Buffer
+		original := output
+		output, diagnostics = &notice, &notice
+		defer func() { _ = writeClaudeHookJSON(original, "SessionStart", notice.String()) }()
 	}
 	now := time.Now().UTC()
 	var events []report.Event
 	var checks []CurrentCheck
+	looseChecked := 0
 	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
-		skills, drift, _ := verifyEverySkillReporting(trusted, true)
-		if shouldReportLooseSkillCheck(skills) {
-			checks = append(checks, looseSkillCurrentCheck(skills))
+		if roots, err := optionalSkillRoots(bases); err != nil {
+			fmt.Fprintf(diagnostics, "Axela: local skills could not be checked: %v\n", err)
+			checks = append(checks, CurrentCheck{Scope: CheckScopeApprovedSkills, CheckedAt: now, Errors: 1})
+		} else {
+			skills, drift, _ := inspectSkillRoots(trusted, true, roots, output, diagnostics)
+			looseChecked = skills.Checked
+			if shouldReportLooseSkillCheck(skills) {
+				checks = append(checks, looseSkillCurrentCheck(skills))
+			}
+			if *claudeJSON && (skills.Unapproved > 0 || skills.Errors > 0) {
+				fmt.Fprintf(output, "Axela: local skills need attention: %d unapproved, %d errors. Run %s doctor.\n",
+					skills.Unapproved, skills.Errors, commandName())
+			}
+			events = append(events, skillDriftEvents(drift, now)...)
 		}
-		events = append(events, skillDriftEvents(drift, now)...)
+	} else if *claudeJSON {
+		fmt.Fprintf(diagnostics, "Axela: local skills were not checked because pinned keys could not be read: %v\n", err)
 	}
 
 	managedRan := false
+	managedChecked := 0
 	var results []marketplace.Result
 	var unusable []string
 
@@ -65,36 +103,44 @@ func runHookSessionStart(args []string) int {
 	// marketplace would produce an empty walk and the same silence as a clean machine. The
 	// two must not look alike: "checked, nothing had changed" is safe to read as fine and
 	// "there was never anything here to check" is a different sentence.
-	if known, err := lookupAgent(*agentName); err == nil && !known.Managed {
-		fmt.Fprintf(os.Stderr, "skillctl: %s installs no plugins from a marketplace, so "+
-			"there is nothing here to reconcile\n", known.Name)
+	if known, err := lookupAgent(*agentName); err == nil && known.Layout != layoutPluginCache {
+		fmt.Fprintf(diagnostics, "skillctl: %s keeps no plugin cache, so there is nothing "+
+			"here for a session start to reconcile\n", known.Name)
 	} else if homes, err := managedSessionHomes(*agentName, *claudeHome); err != nil {
 		// A hook that fails loudly at the start of every session is a hook people remove,
 		// so this reports and stands aside rather than taking the session down with it.
-		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		fmt.Fprintf(diagnostics, "skillctl: %v\n", err)
 	} else if subscriptions, err := loadSubscriptions(); err != nil {
-		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
+		fmt.Fprintf(diagnostics, "skillctl: %v\n", err)
 	} else if len(subscriptions) > 0 {
 		release, held := takeLock()
 		if held {
 			defer release()
 
-			managed, code := runSessionManagedChecks(homes, *fetch)
+			managed, code := runSessionManagedChecksTo(homes, *fetch, output, diagnostics)
 			if code == exitClean {
 				managedRan = true
 				results, unusable = managed.Results, managed.Unusable
+				managedChecked = managedCurrentCheck(managed).Checked
 				events = append(events, collectEvents(results, unusable, now)...)
 				checks = append(checks, managedCurrentCheck(managed))
 				for _, line := range pruneDeadAdoptions(results) {
-					fmt.Printf("skillctl: %s\n", line)
+					fmt.Fprintf(output, "skillctl: %s\n", line)
 				}
 			}
+		} else if *claudeJSON {
+			fmt.Fprintf(diagnostics, "Axela: this session did not finish a check because another check is running. Run %s doctor.\n", commandName())
 		}
 	}
 
-	_, _ = recordReports(events, checks, 2*time.Second)
+	if _, err := recordReports(events, checks, 2*time.Second); err != nil && *claudeJSON {
+		fmt.Fprintf(diagnostics, "Axela: the check report could not be saved or delivered: %v\n", err)
+	}
 	if managedRan {
-		writeSessionReport(results, unusable, *verbose)
+		writeSessionReportTo(output, results, unusable, *verbose)
+	}
+	if *claudeJSON && looseChecked == 0 && managedChecked == 0 {
+		fmt.Fprintf(output, "Axela: no installed skill was verified in this session. Run %s doctor.\n", commandName())
 	}
 	return exitClean
 }
@@ -125,12 +171,16 @@ func managedSessionHomes(agentName, explicitHome string) ([]string, error) {
 }
 
 func runSessionManagedChecks(homes []string, fetch bool) (ManagedCheck, int) {
+	return runSessionManagedChecksTo(homes, fetch, os.Stdout, os.Stderr)
+}
+
+func runSessionManagedChecksTo(homes []string, fetch bool, output, diagnostics io.Writer) (ManagedCheck, int) {
 	options := ManagedCheckOptions{
-		Restore: true, Offline: !fetch, UpdateSource: fetch, RefreshBudget: 3 * time.Second,
+		Restore: true, Offline: !fetch, UpdateSource: fetch, RefreshBudget: 3 * time.Second, teamOnline: true,
 	}
 	var combined ManagedCheck
 	for i, home := range homes {
-		managed, code := RunManagedCheck(home, options)
+		managed, code := runManagedCheckTo(home, options, output, diagnostics)
 		if code != exitClean {
 			return managed, code
 		}
@@ -141,7 +191,7 @@ func runSessionManagedChecks(homes []string, fetch bool) (ManagedCheck, int) {
 		}
 		options.Offline = true
 		options.UpdateSource = false
-		options.RefreshBudget = 0
+		options.RefreshBudget = 3 * time.Second
 	}
 	if len(homes) == 0 {
 		return ManagedCheck{
@@ -174,7 +224,7 @@ func aggregateManagedReportCheck(
 		seen[home] = true
 
 		extra, code := RunManagedCheck(home, ManagedCheckOptions{
-			Restore: false, Offline: true, UpdateSource: false,
+			Restore: false, Offline: true, UpdateSource: false, teamOnline: managed.teamAccessError == nil, RefreshBudget: 3 * time.Second,
 		})
 		if code != exitClean && len(extra.Unusable) == 0 {
 			extra = managedCheckFailure(fmt.Sprintf("%s could not be checked", home))
@@ -280,11 +330,15 @@ func containsString(haystack []string, needle string) bool {
 }
 
 func writeSessionReport(results []marketplace.Result, unusable []string, verbose bool) {
+	writeSessionReportTo(os.Stdout, results, unusable, verbose)
+}
+
+func writeSessionReportTo(output io.Writer, results []marketplace.Result, unusable []string, verbose bool) {
 	// An unusable marketplace is reported even though nothing was done, because "we could
 	// not check" and "nothing had changed" produce the same silence and only one of them is
 	// safe to read as fine.
 	for _, failure := range unusable {
-		fmt.Printf("skillctl: a signed marketplace could not be used, so its plugins were "+
+		fmt.Fprintf(output, "skillctl: a signed marketplace could not be used, so its plugins were "+
 			"not checked\n  %s\n  refresh with: skillctl sync\n\n", failure)
 	}
 
@@ -294,31 +348,30 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 			continue
 		}
 		if spoken == 0 {
-			fmt.Printf("skillctl: your organisation's plugins were reconciled\n\n")
+			fmt.Fprintf(output, "skillctl: your organisation's plugins were reconciled\n\n")
 		}
 		spoken++
 		if result.Outcome != marketplace.OutcomeAdapted {
 			overridden++
 		}
 
-		fmt.Printf("  %-13s %s   (%s)\n", result.Outcome, result.Plugin, result.Marketplace)
+		fmt.Fprintf(output, "  %-13s %s   (%s)\n", result.Outcome, result.Plugin, result.Marketplace)
 		if result.Detail != "" {
-			fmt.Printf("                %s\n", result.Detail)
+			fmt.Fprintf(output, "                %s\n", result.Detail)
 		}
 		if result.Outcome == marketplace.OutcomeRestored {
-			fmt.Printf("                this copy had been changed here and was put back\n")
-			fmt.Printf("                to keep your version instead: "+
-				"skillctl adopt %s --from-quarantine --because \"...\"\n", result.Plugin)
+			fmt.Fprintf(output, "                this copy had been changed here and was put back\n")
+			writeQuarantineNotice(output, result)
 		}
 		// The reason lives in Adapted, not Detail, so a surface that only prints Detail
 		// shows a divergence with no account of it — which is the state adopting exists to
 		// replace. This is the third place that renders an outcome; the fix belongs in all
 		// of them, not in whichever one was open at the time.
 		if result.Outcome == marketplace.OutcomeAdapted && result.Adapted != "" {
-			fmt.Printf("                your own copy, kept on purpose: %s\n", result.Adapted)
+			fmt.Fprintf(output, "                your own copy, kept on purpose: %s\n", result.Adapted)
 		}
 		if result.Quarantine != "" {
-			fmt.Printf("                what was there: %s\n", result.Quarantine)
+			fmt.Fprintf(output, "                what was there: %q\n", result.Quarantine)
 		}
 	}
 
@@ -326,14 +379,14 @@ func writeSessionReport(results []marketplace.Result, unusable []string, verbose
 	// whose only news was "your own copy, kept on purpose" told the person their change
 	// did not survive in the same breath as preserving it.
 	if overridden > 0 {
-		fmt.Printf("\nThese plugins are managed centrally; local changes to them do not survive.\n")
+		fmt.Fprintf(output, "\nThese plugins are managed centrally; local changes to them do not survive in the installed copy. Preserved edits remain in quarantine until you choose what to keep.\n")
 		return
 	}
 	if spoken > 0 {
 		return
 	}
 	if verbose && len(unusable) == 0 {
-		fmt.Printf("skillctl: %d signed plugin%s unchanged\n",
+		fmt.Fprintf(output, "skillctl: %d signed plugin%s unchanged\n",
 			len(results), plural(len(results), "", "s"))
 	}
 }

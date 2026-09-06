@@ -40,7 +40,7 @@ type managedInstallCandidate struct {
 // thing that check cannot do by itself: ask a native client to install the first signed
 // plugin from a frozen, SkillTrust-owned copy of the already-verified bytes.
 func ensureFirstManagedPlugin(known agent) error {
-	if !known.Managed {
+	if known.Layout != layoutPluginCache {
 		return fmt.Errorf("%s has no managed marketplace cache to install into", known.Name)
 	}
 
@@ -60,7 +60,18 @@ func ensureFirstManagedPlugin(known agent) error {
 	var candidate *managedInstallCandidate
 	var issues []string
 	for _, subscription := range subscriptions {
-		snapshot, err := readSnapshotOnly(subscription, trusted, connectNow())
+		if legacyAxelaSubscription(subscription) {
+			issues = append(issues, legacyAxelaUpgrade(subscription).Error())
+			continue
+		}
+		var snapshot *catalog.Snapshot
+		if subscription.Access != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), connectNativeInstallTimeout)
+			snapshot, subscription, err = refreshTeamSubscription(ctx, subscription, connectNow())
+			cancel()
+		} else {
+			snapshot, err = readSnapshotOnly(subscription, trusted, connectNow())
+		}
 		if err != nil {
 			issues = append(issues,
 				fmt.Sprintf("%s could not be verified again: %v", subscription.Name, err))

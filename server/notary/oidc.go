@@ -79,8 +79,11 @@ type registeredClaims struct {
 // githubClaims adds what a GitHub Actions token carries about the workflow that minted it.
 type githubClaims struct {
 	Repository string `json:"repository"`
-	Ref        string `json:"ref"`
-	Workflow   string `json:"workflow"`
+	// GitHub signs this claim as public, private, or internal. An absent claim
+	// supplies no public-source proof: https://docs.github.com/en/actions/reference/security/oidc.
+	RepositoryVisibility string `json:"repository_visibility"`
+	Ref                  string `json:"ref"`
+	Workflow             string `json:"workflow"`
 	// SHA is the commit the workflow ran on. GitHub mints it, the publisher does not
 	// supply it, which is what makes it usable as the thing an admission check reads:
 	// a caller cannot point the check at a commit other than the one it published from.
@@ -106,18 +109,26 @@ func (a *audience) UnmarshalJSON(raw []byte) error {
 
 // Verify checks the token end to end and returns what it was minted for.
 func (v *OIDCVerifier) Verify(token string, now time.Time) (repository, ref, commit string, err error) {
-	payload, err := v.VerifyToken(token, now)
+	claims, err := v.verifyGitHubClaims(token, now)
 	if err != nil {
 		return "", "", "", err
 	}
+	return claims.Repository, claims.Ref, claims.SHA, nil
+}
+
+func (v *OIDCVerifier) verifyGitHubClaims(token string, now time.Time) (githubClaims, error) {
+	payload, err := v.VerifyToken(token, now)
+	if err != nil {
+		return githubClaims{}, err
+	}
 	var claims githubClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", "", "", fmt.Errorf("%w: unreadable claims", ErrOIDC)
+		return githubClaims{}, fmt.Errorf("%w: unreadable claims", ErrOIDC)
 	}
 	if claims.Repository == "" {
-		return "", "", "", fmt.Errorf("%w: no repository claim", ErrOIDC)
+		return githubClaims{}, fmt.Errorf("%w: no repository claim", ErrOIDC)
 	}
-	return claims.Repository, claims.Ref, claims.SHA, nil
+	return claims, nil
 }
 
 // VerifyToken checks signature, issuer, audience and validity window, and returns the

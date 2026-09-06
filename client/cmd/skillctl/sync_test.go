@@ -147,6 +147,24 @@ func TestACleanRunCarriesNoCaveat(t *testing.T) {
 	}
 }
 
+func TestSyncSeparatesCompletedActionsFromRemainingAttention(t *testing.T) {
+	output := capture(t, func() {
+		code := writeReconcileReport([]marketplace.Result{
+			{Outcome: marketplace.OutcomeRestored, Plugin: "restored"},
+			{Outcome: marketplace.OutcomeAdapted, Plugin: "my-copy", Adapted: "reviewed locally"},
+			{Outcome: marketplace.OutcomeChanged, Plugin: "still-changed"},
+		}, nil, t.TempDir(), false)
+		if code != exitFindings {
+			t.Errorf("a run with actions/findings exited %d", code)
+		}
+	})
+	for _, count := range []string{"3 signed plugins", "1 restored", "1 kept by choice", "1 needing attention"} {
+		if !strings.Contains(output, count) {
+			t.Errorf("summary is missing %q: %s", count, output)
+		}
+	}
+}
+
 func serveSignedCatalog(
 	t *testing.T, snapshot catalog.Snapshot, key ed25519.PrivateKey,
 ) *httptest.Server {

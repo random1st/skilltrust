@@ -10,6 +10,67 @@ import (
 	"testing"
 )
 
+func TestOnlyClaudeHooksOptIntoClaudeWarningJSON(t *testing.T) {
+	claude := claudeHooks("/usr/local/bin/axela")
+	if len(claude) != 1 || !strings.HasSuffix(claude[0].Command, "hook session-start --claude-json") {
+		t.Fatalf("Claude hook does not request visible warnings: %+v", claude)
+	}
+	for _, known := range agents {
+		if known.Name == "claude" || known.Hooks == nil {
+			continue
+		}
+		for _, hook := range known.Hooks("/usr/local/bin/axela") {
+			if strings.Contains(hook.Command, "--claude-json") {
+				t.Errorf("Claude JSON leaked into %s's contract: %+v", known.Name, hook)
+			}
+		}
+	}
+}
+
+func TestClaudeWarningHookUpgradeKeepsExistingHooksAndCompanySettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	existing := `{"statusLine":{"type":"command","command":"company-status"},"allowManagedHooksOnly":true,"hooks":{"SessionStart":[{"hooks":[
+  {"type":"command","command":"/usr/local/bin/axela hook session-start","timeout":17,"async":false,"futureOption":"keep"},
+  {"type":"command","command":"company-audit"},
+  {"type":"command","command":"/usr/local/bin/axela hook session-start --agent codex"}
+]}]}}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added, err := applyClaudeHooks(path, claudeHooks("/usr/local/bin/axela"))
+	if err != nil || len(added) != 1 {
+		t.Fatalf("upgrade = %+v (%v)", added, err)
+	}
+	if again, err := applyClaudeHooks(path, claudeHooks("/usr/local/bin/axela")); err != nil || len(again) != 0 {
+		t.Fatalf("upgrade was not idempotent: %+v (%v)", again, err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	groups := document["hooks"].(map[string]any)["SessionStart"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("upgrade duplicated the restoration hook: %s", body)
+	}
+	entries := groups[0].(map[string]any)["hooks"].([]any)
+	if len(entries) != 3 {
+		t.Fatalf("upgrade replaced a sibling hook: %s", body)
+	}
+	upgraded := entries[0].(map[string]any)
+	if upgraded["command"] != "/usr/local/bin/axela hook session-start --claude-json" || upgraded["timeout"] != float64(17) ||
+		upgraded["async"] != false || upgraded["futureOption"] != "keep" {
+		t.Fatalf("upgrade lost hook options: %+v", upgraded)
+	}
+	if entries[1].(map[string]any)["command"] != "company-audit" || entries[2].(map[string]any)["command"] != "/usr/local/bin/axela hook session-start --agent codex" ||
+		document["statusLine"].(map[string]any)["command"] != "company-status" || document["allowManagedHooksOnly"] != true {
+		t.Fatalf("upgrade changed another client's or company's configuration: %s", body)
+	}
+}
+
 // Codex CLI keeps its hooks in a file that already has other people's hooks in it. Merging
 // into it must leave every one of them alone.
 //

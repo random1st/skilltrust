@@ -296,6 +296,14 @@ func recordChecksAndFlush(
 				errs = append(errs, err)
 			}
 		}
+		// Recording locally does not require a reporting destination. An explicit
+		// report flush still explains that none is configured; saving a check must
+		// preserve write errors without treating the account-free mode as a failure.
+		if config == nil || len(config.Destinations) == 0 {
+			pending, err := pendingReportStatus()
+			status.add(pending)
+			return errors.Join(append(errs, err)...)
+		}
 
 		remaining, ok := remainingReportingBudget(deadline)
 		if deadline.IsZero() {

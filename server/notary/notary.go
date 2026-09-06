@@ -97,6 +97,9 @@ type Provenance struct {
 	Repository string
 	Ref        string
 	Commit     string
+	// RepositoryVisibility comes only from the verified GitHub OIDC token.
+	// Empty legacy and static-token provenance never prove a public source.
+	RepositoryVisibility string `json:"repository_visibility,omitempty"`
 }
 
 // CatalogProvenanceStorage stores how one accepted catalog reached this notary, keyed by
@@ -201,12 +204,12 @@ func (s *Service) AuthorizeOIDC(orgName, token string, now time.Time) (Org, Prov
 	if !known || s.oidc == nil || len(org.GitHubRepositories) == 0 || org.Publishers == nil {
 		return Org{}, Provenance{}, ErrUnknownOrg
 	}
-	repository, ref, commit, err := s.oidc.Verify(token, now)
+	claims, err := s.oidc.verifyGitHubClaims(token, now)
 	if err != nil {
 		return Org{}, Provenance{}, err
 	}
-	where := Provenance{Organisation: orgName, Repository: repository, Commit: commit}
-	where.Ref = ref
+	repository, ref := claims.Repository, claims.Ref
+	where := Provenance{Organisation: orgName, Repository: repository, Ref: ref, Commit: claims.SHA, RepositoryVisibility: claims.RepositoryVisibility}
 	// A repository that matched by name but not by ref is reported as a ref failure, not
 	// as "unregistered": the caller is who they claim to be and got the branch wrong, and
 	// telling them their repository is unknown would send them to fix the wrong thing.

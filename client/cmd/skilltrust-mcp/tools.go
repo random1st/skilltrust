@@ -27,8 +27,8 @@ func (s *server) addTools(m *mcp.Server) {
 		Annotations: writes,
 	}, s.publish)
 	mcp.AddTool(m, &mcp.Tool{
-		Name: "skilltrust_status", Title: "Check connection, skills and report delivery",
-		Description: "Shows public machine state and one next action with its responsible person. With refresh=true, checks installed skills and sends a signed report; never installs or restores skills. Without refresh, describes the last recorded check, not a new verification.",
+		Name: "skilltrust_status", Title: "Check skills and the next setup step",
+		Description: "Shows public machine state and one next action with its responsible person. For a first verdict, use refresh=true even without an account, subscription or pinned keys: it inventories installed skills and separates verified, changed and unapproved copies. With subscriptions, refresh checks followed skills and delivers a signed report only where reporting is configured; never installs or restores skills. Only discuss cloud report delivery when a team is connected.",
 		Annotations: writes,
 	}, s.status)
 
@@ -56,15 +56,15 @@ func (s *server) addTools(m *mcp.Server) {
 	mcp.AddTool(m, &mcp.Tool{
 		Name:        "skilltrust_subscribe",
 		Title:       "Follow a signed catalog",
-		Description: "Follows an organisation's catalog, pinning the keys allowed to sign it. Set threshold to the number of keys given when there is more than one — the default of 1 accepts any single one of them, which is not what pinning two keys is usually for.",
+		Description: "Follows a signed catalog without requiring an account, pinning the keys allowed to sign it. The default threshold requires every distinct signer supplied. Put rotating notary keys in notary_keys so one notary counts as one signer. Subscribing does not install a plugin or prove it was checked; check before installing session hooks.",
 		Annotations: writes,
 	}, s.subscribe)
 
 	mcp.AddTool(m, &mcp.Tool{
 		Name:        "skilltrust_check",
 		Title:       "Report what differs, changing nothing",
-		Description: "Verifies every followed catalog and reports which installed skills differ from what was signed. Writes nothing. Use this before skilltrust_sync, and to answer questions about the machine's state.",
-		Annotations: safe,
+		Description: "Verifies every followed catalog and reports which installed skills differ from what was signed. Does not install or restore skills. Refreshes catalog caches and saves a signed local check; sends it only where reporting is configured. Select agent=codex for Codex plugins; defaults to Claude. Use this before skilltrust_sync.",
+		Annotations: writes,
 	}, s.check)
 
 	mcp.AddTool(m, &mcp.Tool{
@@ -96,8 +96,11 @@ func (s *server) addTools(m *mcp.Server) {
 
 	mcp.AddTool(m, &mcp.Tool{
 		Name:  "skilltrust_verify_skills",
-		Title: "Check skills against the approvals this machine holds",
-		Description: "Recomputes every skill's digest and checks it against the signed approvals in " +
+		Title: "Verify standalone skills using existing trusted approvals",
+		Description: "Requires pinned publisher keys. For a first check, unknown setup state, or a machine " +
+			"without keys, call skilltrust_status with refresh=true: it shows installed skills, " +
+			"unapproved items and the next step without asking for an account or creating keys. " +
+			"This tool recomputes every skill's digest and checks it against the signed approvals in " +
 			"this machine's attestation store, and against any attestation beside a skill. Writes nothing. " +
 			"Use this for skills that came from anywhere other than a signed marketplace — a repository, " +
 			"a copy, a colleague — which is most of them on Cursor and Antigravity, where nothing is " +
@@ -297,11 +300,18 @@ func (s *server) subscribe(ctx context.Context, _ *mcp.CallToolRequest, in subsc
 }
 
 type checkInput struct {
-	Offline bool `json:"offline,omitempty" jsonschema:"check against the catalogs already fetched instead of fetching"`
+	Offline bool   `json:"offline,omitempty" jsonschema:"check against the catalogs already fetched instead of fetching"`
+	Agent   string `json:"agent,omitempty" jsonschema:"client whose plugins to check: claude or codex; defaults to claude"`
 }
 
 func (s *server) check(ctx context.Context, _ *mcp.CallToolRequest, in checkInput) (*mcp.CallToolResult, result, error) {
+	if in.Agent != "" && in.Agent != "claude" && in.Agent != "codex" {
+		return nil, result{}, fmt.Errorf("agent must be claude or codex")
+	}
 	args := []string{"sync", "-report-only"}
+	if in.Agent != "" {
+		args = append(args, "--agent", in.Agent)
+	}
 	if in.Offline {
 		args = append(args, "-offline")
 	}
@@ -309,11 +319,18 @@ func (s *server) check(ctx context.Context, _ *mcp.CallToolRequest, in checkInpu
 }
 
 type syncInput struct {
-	Offline bool `json:"offline,omitempty" jsonschema:"reconcile against the catalogs already fetched instead of fetching"`
+	Offline bool   `json:"offline,omitempty" jsonschema:"reconcile against the catalogs already fetched instead of fetching"`
+	Agent   string `json:"agent,omitempty" jsonschema:"client whose plugins to restore: claude or codex; defaults to claude"`
 }
 
 func (s *server) sync(ctx context.Context, _ *mcp.CallToolRequest, in syncInput) (*mcp.CallToolResult, result, error) {
+	if in.Agent != "" && in.Agent != "claude" && in.Agent != "codex" {
+		return nil, result{}, fmt.Errorf("agent must be claude or codex")
+	}
 	args := []string{"sync"}
+	if in.Agent != "" {
+		args = append(args, "--agent", in.Agent)
+	}
 	if in.Offline {
 		args = append(args, "-offline")
 	}
@@ -321,11 +338,18 @@ func (s *server) sync(ctx context.Context, _ *mcp.CallToolRequest, in syncInput)
 }
 
 type installHookInput struct {
-	Apply bool `json:"apply" jsonschema:"write the change; false prints what would be written and touches nothing"`
+	Apply  bool   `json:"apply" jsonschema:"write the change; false prints what would be written and touches nothing"`
+	Client string `json:"client,omitempty" jsonschema:"client whose session hook to install: claude or codex; defaults to claude"`
 }
 
 func (s *server) installHook(ctx context.Context, _ *mcp.CallToolRequest, in installHookInput) (*mcp.CallToolResult, result, error) {
+	if in.Client != "" && in.Client != "claude" && in.Client != "codex" {
+		return nil, result{}, fmt.Errorf("client must be claude or codex")
+	}
 	args := []string{"hook", "install"}
+	if in.Client != "" {
+		args = append(args, "--client", in.Client)
+	}
 	if in.Apply {
 		args = append(args, "-apply")
 	}

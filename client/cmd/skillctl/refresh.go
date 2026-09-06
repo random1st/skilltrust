@@ -56,6 +56,21 @@ func runRefresh(args []string) int {
 			continue
 		}
 		found = true
+		if subscriptions[i].Access != "" || legacyAxelaSubscription(subscriptions[i]) {
+			var err error
+			if legacyAxelaSubscription(subscriptions[i]) {
+				err = legacyAxelaUpgrade(subscriptions[i])
+			} else {
+				_, subscriptions[i], err = refreshTeamSubscription(context.Background(), subscriptions[i], now)
+			}
+			if err != nil {
+				failed++
+				fmt.Fprintf(os.Stderr, "%s: %v\n", commandName(), err)
+			} else {
+				fmt.Printf("%-11s %s: current team access, signatures and source verified\n", "checked", subscriptions[i].Name)
+			}
+			continue
+		}
 		if subscriptions[i].CatalogURL == "" {
 			if only != "" {
 				fmt.Printf("%s has no notary URL; its keys only change by hand\n", only)

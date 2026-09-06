@@ -87,6 +87,9 @@ func TestTheDemoTellsTheWholeStory(t *testing.T) {
 	if strings.Index(output, "changed") > strings.Index(output, "kind           restored") {
 		t.Error("the demo reports the restore before the detection")
 	}
+	if !strings.Contains(output, "1 restored") || !strings.Contains(output, "1 verified · 0 not installed here · 0 needing attention") {
+		t.Error("the completed demo never confirms a clean check after restoring the plugin")
+	}
 
 	// The claim the demo makes about itself: the installed file is the published one again.
 	installed := filepath.Join(sandbox, "client-home", "plugins", "cache", "acme",
@@ -116,8 +119,20 @@ func TestTheDemoLeavesTheRealHomeAlone(t *testing.T) {
 	real := t.TempDir()
 	t.Setenv("SKILLTRUST_HOME", real)
 	sandbox := filepath.Join(t.TempDir(), "demo")
+	// This callback is the discovery boundary for a client's real loose skills.
+	// An explicit demo cache must not even ask where those unrelated skills live.
+	previous := agents
+	queried := false
+	agents = []agent{{Name: "claude", Managed: true, ExtraRoots: func(string) []string {
+		queried = true
+		return nil
+	}}}
+	t.Cleanup(func() { agents = previous })
 
 	capture(t, func() { runDemo([]string{"--dir", sandbox}) })
+	if queried {
+		t.Error("the demo scanned the real machine for loose skills")
+	}
 
 	entries, err := os.ReadDir(real)
 	if err != nil {

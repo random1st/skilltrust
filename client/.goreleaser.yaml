@@ -23,6 +23,29 @@ before:
     - cp ../LICENSE ../README.md .
 
 builds:
+  # Axela is the user-facing name of the same CLI, not a launcher or another
+  # verifier. Keep skillctl below for existing hooks, scripts and the MCP sibling.
+  - id: axela
+    main: ./cmd/skillctl
+    binary: axela
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
   - id: skillctl
     main: ./cmd/skillctl
     binary: skillctl
@@ -78,6 +101,15 @@ builds:
 # A single macOS binary that runs on both Intel and Apple Silicon, so the cask does not
 # have to pick.
 universal_binaries:
+  - id: axela-macos
+    ids:
+      - axela
+    replace: true
+    name_template: axela
+    hooks:
+      post:
+        - ./scripts/sign-macos.sh "{{ .Path }}"
+
   - id: skillctl-macos
     ids:
       - skillctl
@@ -103,10 +135,12 @@ universal_binaries:
         - ./scripts/sign-macos.sh "{{ .Path }}"
 
 archives:
-  # One archive carrying both commands, because they are installed together and a person
-  # who downloaded only half would meet the same dead end the console used to lead to.
+  # One archive carries Axela, the compatible skillctl name and the MCP server.
+  # Retain the archive name so existing installers and release URLs remain valid.
   - id: skillctl
     ids:
+      - axela
+      - axela-macos
       - skillctl
       - skillctl-macos
       - skilltrust-mcp
@@ -158,8 +192,7 @@ sboms:
 # `brew install random1st/tap/skillctl` against a tap that has never contained it — which is
 # the same 404 the deferral was avoiding, arrived at from the other direction.
 #
-# Both commands are installed, because the onboarding names both and a person who followed it
-# and got half would meet the dead end one step later.
+# Install all three release names, including the legacy entry used by existing setups.
 homebrew_casks:
   - name: skillctl
     repository:
@@ -167,10 +200,9 @@ homebrew_casks:
       name: homebrew-tap
     homepage: https://github.com/random1st/skilltrust
     description: Verify, restore and revoke the Agent Skills your organisation signed
-    # Both, named explicitly. The console tells people to run `skilltrust-mcp`, and a cask
-    # that linked only skillctl would put them one step further along before the same dead
-    # end.
+    # The public entry, compatibility command and MCP server must stay together.
     binaries:
+      - axela
       - skillctl
       - skilltrust-mcp
     # No quarantine dance. The macOS artifact is signed with a Developer ID and notarized,
@@ -191,6 +223,7 @@ release:
     macOS builds are signed with a Developer ID certificate and notarized by Apple:
 
     ```
+    codesign --verify --strict -R=notarized --check-notarization axela
     codesign --verify --strict -R=notarized --check-notarization skillctl
     codesign --verify --strict -R=notarized --check-notarization skilltrust-mcp
     ```

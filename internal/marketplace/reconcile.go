@@ -2,8 +2,10 @@ package marketplace
 
 import (
 	"fmt"
-	"os"
+	"path"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/catalog"
@@ -54,15 +56,18 @@ func (o Outcome) Settled() bool { return o == OutcomeVerified || o == OutcomeAbs
 
 // Result is one line of a reconciliation.
 type Result struct {
-	Marketplace string  `json:"marketplace"`
-	Plugin      string  `json:"plugin"`
-	Version     string  `json:"version"`
-	Outcome     Outcome `json:"outcome"`
-	Signed      string  `json:"signed,omitempty"`
-	OnDisk      string  `json:"on_disk,omitempty"`
-	Installed   string  `json:"installed_version,omitempty"`
-	Detail      string  `json:"detail,omitempty"`
-	Quarantine  string  `json:"quarantine,omitempty"`
+	Marketplace string `json:"marketplace"`
+	// ClientHome is only for local recovery commands. Private filesystem paths must
+	// not become part of a check uploaded to the organisation.
+	ClientHome string  `json:"-"`
+	Plugin     string  `json:"plugin"`
+	Version    string  `json:"version"`
+	Outcome    Outcome `json:"outcome"`
+	Signed     string  `json:"signed,omitempty"`
+	OnDisk     string  `json:"on_disk,omitempty"`
+	Installed  string  `json:"installed_version,omitempty"`
+	Detail     string  `json:"detail,omitempty"`
+	Quarantine string  `json:"quarantine,omitempty"`
 	// Adapted carries the reason the person gave when they adopted these bytes, and
 	// AdaptedSince when they did. The date is reported, never enforced: an adoption that
 	// expired on a timer would ask for a re-approval carrying no new information, and a
@@ -76,7 +81,40 @@ type Result struct {
 	// advice; after a lapse the person's bytes are already in quarantine, so adopting now
 	// would adopt the publisher's copy — the opposite of what they wanted.
 	Lapsed bool `json:"lapsed,omitempty"`
+	// Copy names which of several copies of one published skill this line is about, and is
+	// empty when the client keeps exactly one. A client that reads skills from more than one
+	// directory — one per agent profile, say — has a copy per directory, each of which can
+	// verify, differ or be adopted on its own. Without this, two lines would be identical
+	// text about different files and neither could be acted on.
+	Copy string `json:"copy,omitempty"`
 }
+
+// InstalledCopy is one copy of a published skill on this machine.
+//
+// Path and Label describe the copy; OtherVersion describes its absence. Keeping the second
+// case here rather than in the reconciler is what lets the reconciler stay ignorant of
+// versioned caches: only a client that installs releases side by side can find a different
+// one in the place it looked, so only its locator can say so.
+type InstalledCopy struct {
+	// Path is the directory holding this copy.
+	Path string
+	// Label distinguishes copies of one skill within one client, and is empty when there is
+	// only ever one. It is reported, so it must be something a person recognises — a profile
+	// name rather than a hash of a path.
+	Label string
+	// OtherVersion names the release found where the published one was expected, for a
+	// client that installs releases side by side. Set only when Path is empty.
+	OtherVersion string
+}
+
+// Locator answers where a published skill's copies are on this machine.
+//
+// It exists so that reconciling does not have to know how any client stores what it
+// installed. Claude Code and Codex keep a versioned plugin cache; a client with loose skill
+// directories keeps one directory per profile and no versions at all. Both are a list of
+// directories to digest, and everything after that point — digesting, verifying, restoring,
+// reporting — is the same work.
+type Locator func(managed catalog.Managed) []InstalledCopy
 
 // Options configures a reconciliation.
 type Options struct {
@@ -92,7 +130,11 @@ type Options struct {
 	// Adopted are the differences this machine's owner accepted on purpose. Empty means
 	// every difference is a finding, which is the behaviour every machine had before.
 	Adopted Adoptions
-	Now     time.Time
+	// Locate finds the copies of a published skill this client keeps. Nil is the plugin
+	// cache under ClaudeHome, which is what every caller wanted before a second shape of
+	// client existed.
+	Locate Locator
+	Now    time.Time
 }
 
 // Reconcile checks every plugin a signed marketplace claims, and optionally repairs it.
@@ -101,20 +143,46 @@ func Reconcile(snapshot *catalog.Snapshot, options Options) []Result {
 		options.Now = time.Now().UTC()
 	}
 	manifest, _ := Load(options.Source)
+	locate := options.Locate
+	if locate == nil {
+		locate = PluginCache(options.ClaudeHome, snapshot.Name)
+	}
 
 	results := make([]Result, 0, len(snapshot.Skills))
 	for _, managed := range snapshot.Skills {
-		results = append(results, reconcileOne(snapshot, managed, manifest, options))
+		copies := locate(managed)
+		if len(copies) == 0 {
+			// Nothing installed here is an ordinary answer and still owes a line, or a
+			// catalog entry would silently disappear from the report.
+			results = append(results, reconcileOne(snapshot, managed, manifest, options, InstalledCopy{}))
+			continue
+		}
+		for _, copy := range copies {
+			results = append(results, reconcileOne(snapshot, managed, manifest, options, copy))
+		}
 	}
-	sort.Slice(results, func(i, j int) bool { return results[i].Plugin < results[j].Plugin })
+	// Copy breaks the tie, so several copies of one skill keep a stable order between runs
+	// rather than shuffling and reading as a change.
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Plugin != results[j].Plugin {
+			return results[i].Plugin < results[j].Plugin
+		}
+		return results[i].Copy < results[j].Copy
+	})
 	return results
 }
 
 func reconcileOne(
 	snapshot *catalog.Snapshot, managed catalog.Managed, manifest *Manifest, options Options,
+	copy InstalledCopy,
 ) Result {
+	home, _ := filepath.Abs(options.ClaudeHome)
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
 	result := Result{
 		Marketplace: snapshot.Name, Plugin: managed.Name,
+		ClientHome: home, Copy: copy.Label,
 		Version: managed.Version, Signed: managed.Digest,
 	}
 
@@ -125,27 +193,27 @@ func reconcileOne(
 		return result
 	}
 
-	installed := InstalledPath(options.ClaudeHome, snapshot.Name, managed.Name, managed.Version)
-	if _, err := os.Stat(installed); os.IsNotExist(err) {
-		if others := InstalledVersions(options.ClaudeHome, snapshot.Name, managed.Name); len(others) > 0 {
-			result.Outcome, result.Installed = OutcomeOtherVersion, others[0]
-			// The version the catalog signs is the only one this reconciler digests, so an
-			// adoption of the installed release is never examined again once the publisher
-			// moves on. Left unsaid, that is a silent end to something a person decided on
-			// purpose — the line about the version difference must also say what it did to
-			// their adoption.
-			if adoption, ok := options.Adopted.Find(snapshot.Name, managed.Name); ok {
-				result.Detail = fmt.Sprintf(
-					"you adopted a change to %s (%s); the catalog has moved to %s — "+
-						"re-apply your change there and adopt it again, if you still want it",
-					others[0], adoption.Reason, managed.Version)
-			}
+	if copy.Path == "" {
+		if copy.OtherVersion == "" {
+			result.Outcome = OutcomeAbsent
 			return result
 		}
-		result.Outcome = OutcomeAbsent
+		result.Outcome, result.Installed = OutcomeOtherVersion, copy.OtherVersion
+		// The version the catalog signs is the only one this reconciler digests, so an
+		// adoption of the installed release is never examined again once the publisher
+		// moves on. Left unsaid, that is a silent end to something a person decided on
+		// purpose — the line about the version difference must also say what it did to
+		// their adoption.
+		if adoption, ok := options.Adopted.FindCopy(snapshot.Name, managed.Name, copy.Label); ok {
+			result.Detail = fmt.Sprintf(
+				"you adopted a change to %s (%s); the catalog has moved to %s — "+
+					"re-apply your change there and adopt it again, if you still want it",
+				copy.OtherVersion, adoption.Reason, managed.Version)
+		}
 		return result
 	}
 
+	installed := copy.Path
 	digest, _, err := DigestInstalled(installed)
 	if err != nil {
 		result.Outcome, result.Detail = OutcomeUnverifiable, err.Error()
@@ -171,7 +239,7 @@ func reconcileOne(
 	// publishes the digest it was adopted away from. Anything else — someone editing the
 	// file again, or upstream shipping a new version — falls back to being a difference
 	// that needs a decision, which is the property that keeps this from being an off switch.
-	if adoption, ok := options.Adopted.Find(snapshot.Name, managed.Name); ok {
+	if adoption, ok := options.Adopted.FindCopy(snapshot.Name, managed.Name, copy.Label); ok {
 		switch {
 		case adoption.Local != digest:
 			result.Lapsed = true
@@ -198,7 +266,7 @@ func reconcileOne(
 		return result
 	}
 
-	source, ok := pluginSource(manifest, options.Source, managed.Name)
+	source, ok := pluginSource(manifest, options.Source, managed)
 	if !ok {
 		result.Outcome = OutcomeUnverifiable
 		result.Detail = "no local copy of the signed bytes to restore from"
@@ -214,16 +282,43 @@ func reconcileOne(
 	return result
 }
 
-// pluginSource finds the signed bytes for a plugin inside the marketplace checkout.
-func pluginSource(manifest *Manifest, repository, name string) (string, bool) {
-	if manifest == nil || repository == "" {
+// pluginSource finds the signed bytes for a published skill inside the catalog checkout.
+//
+// The catalog's own Path wins over the marketplace manifest, and is consulted even when there
+// is no manifest at all. A catalog published with `catalog publish` names where each skill
+// lives in the repository and has no marketplace.json to look it up in; a marketplace catalog
+// leaves Path empty and is answered exactly as before.
+func pluginSource(manifest *Manifest, repository string, managed catalog.Managed) (string, bool) {
+	if repository == "" {
+		return "", false
+	}
+	if managed.Path != "" {
+		relative, ok := containedPath(managed.Path)
+		if !ok {
+			return "", false
+		}
+		return filepath.Join(repository, relative), true
+	}
+	if manifest == nil {
 		return "", false
 	}
 	for _, entry := range manifest.Plugins {
-		if entry.Name != name {
+		if entry.Name != managed.Name {
 			continue
 		}
 		return entry.LocalPath(repository)
 	}
 	return "", false
+}
+
+// containedPath turns a slash-separated catalog path into a local one, refusing anything that
+// would leave the directory it is joined to. The catalog is signed, so this is not the first
+// line of defence — but a path from a document is still a path from a document, and one that
+// escaped would read or replace a tree nobody published.
+func containedPath(slashed string) (string, bool) {
+	cleaned := path.Clean("/" + slashed)
+	if cleaned == "/" {
+		return "", false
+	}
+	return filepath.FromSlash(strings.TrimPrefix(cleaned, "/")), true
 }

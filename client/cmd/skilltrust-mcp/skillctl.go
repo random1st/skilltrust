@@ -26,7 +26,8 @@ type runner struct {
 	home   string
 }
 
-// findSkillctl prefers an explicit path, then the binary beside this one, then PATH.
+// findSkillctl prefers an explicit path, then the matching release beside this one,
+// then PATH. Axela is the public name; skillctl remains a supported alias.
 //
 // Beside-this-one comes before PATH because the two ship together: an agent that installed
 // a release into a directory it controls should get that release, not whatever older copy a
@@ -39,26 +40,40 @@ func findSkillctl() (string, error) {
 		return explicit, nil
 	}
 	if self, err := os.Executable(); err == nil {
-		// .exe first on Windows, where the sibling that ships in the same archive is
-		// skillctl.exe and a bare "skillctl" matches nothing — so every Windows install
-		// silently fell through to PATH, which is the case this lookup exists to beat.
-		names := []string{"skillctl"}
-		if runtime.GOOS == "windows" {
-			names = []string{"skillctl.exe", "skillctl"}
-		}
-		for _, name := range names {
-			sibling := filepath.Join(filepath.Dir(self), name)
-			if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
-				return sibling, nil
-			}
+		if sibling := bundledCLI(filepath.Dir(self), runtime.GOOS); sibling != "" {
+			return sibling, nil
 		}
 	}
-	found, err := exec.LookPath("skillctl")
-	if err != nil {
-		return "", errors.New("skillctl is not on PATH. Install it from " +
-			"https://github.com/random1st/skilltrust/releases, or set SKILLCTL to its path")
+	for _, name := range []string{"axela", "skillctl"} {
+		if found, err := exec.LookPath(name); err == nil {
+			return found, nil
+		}
 	}
-	return found, nil
+	return "", errors.New("axela (or its skillctl alias) is not on PATH. Install it from " +
+		"https://github.com/random1st/skilltrust/releases, or set SKILLCTL to its path")
+}
+
+func bundledCLI(directory, goos string) string {
+	names := []string{"axela", "skillctl"}
+	if goos == "windows" {
+		names = []string{"axela.exe", "skillctl.exe", "axela", "skillctl"}
+	}
+	for _, name := range names {
+		sibling := filepath.Join(directory, name)
+		if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
+			return sibling
+		}
+	}
+	return ""
+}
+
+func displayedCLI(binary string) string {
+	switch filepath.Base(binary) {
+	case "axela", "axela.exe", "axela.cmd":
+		return "axela"
+	default:
+		return "skillctl"
+	}
 }
 
 // home is where skillctl keeps the key, the pins and the subscriptions. Resolved the same
@@ -107,7 +122,7 @@ func (r runner) run(ctx context.Context, dir string, args ...string) (result, er
 
 	err := command.Run()
 	shown := result{
-		Command: "skillctl " + strings.Join(args, " "),
+		Command: displayedCLI(r.binary) + " " + strings.Join(args, " "),
 		Output:  strings.TrimRight(out.String(), "\n"),
 	}
 	var state map[string]any

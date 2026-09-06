@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook session-start; else echo 'skilltrust: skillctl is not installed, this session is NOT verified; run: brew install random1st/tap/skillctl'; fi",
+            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook session-start --claude-json; else echo 'skilltrust: skillctl is not installed, this session is NOT verified; run: brew install random1st/tap/skillctl'; fi",
             "timeout": 20
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook pre-skill; fi",
+            "command": "if command -v skillctl >/dev/null 2>&1; then skillctl hook pre-skill --claude-json; fi",
             "timeout": 10
           }
         ]

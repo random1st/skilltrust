@@ -39,8 +39,11 @@ func runPolicy(args []string) int {
 	flags := flag.NewFlagSet("policy", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: skillctl policy [flags]\n\n"+
-			"Prints the Claude Code managed settings that confine a machine to plugins your\n"+
-			"organisation signed. Deploy it with whatever already places files on your fleet.\n\n"+
+			"Prepares Claude Code managed settings for the owner of your existing MDM.\n"+
+			"To review integration with an exported policy without changing it:\n"+
+			"  skillctl policy --from export.json --diff --marketplace acme --repo acme/plugins\n\n"+
+			"The proposal must be reviewed and merged into the managed source your organisation\n"+
+			"already uses. This command does not confirm deployment or effective policy.\n\n"+
 			"Exit codes: %d printed, %d error.\n\nFlags:\n", exitClean, exitUsage)
 		flags.PrintDefaults()
 	}
@@ -50,10 +53,15 @@ func runPolicy(args []string) int {
 	plugin := flags.String("plugin", "skilltrust", "SkillTrust plugin name to force on")
 	lockdown := flags.Bool("lockdown", false,
 		"also forbid every marketplace but yours, including Anthropic's")
-	out := flags.String("out", "", "write to a file instead of standard output")
+	out := flags.String("out", "", "save the proposed JSON to a file (--from requires a new output path)")
+	from := flags.String("from", "", "existing exported policy to preserve; never modified")
+	diff := flags.Bool("diff", false, "show proposed changes by JSON path (requires --from)")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
+	}
+	if *diff && *from == "" {
+		return fail(fmt.Errorf("--diff requires --from with an exported managed policy"))
 	}
 	if *name == "" || *repo == "" {
 		flags.Usage()
@@ -94,6 +102,9 @@ func runPolicy(args []string) int {
 			map[string]any{"source": "github", "repo": *repo},
 		}
 	}
+	if *from != "" {
+		return previewManagedPolicy(*from, *out, *diff, *name, *repo, *plugin, settings)
+	}
 
 	body, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -111,12 +122,7 @@ func runPolicy(args []string) int {
 		fmt.Println()
 	}
 
-	fmt.Printf("Place this as managed-settings.json in the system directory for each platform:\n")
-	fmt.Printf("  macOS    /Library/Application Support/ClaudeCode/managed-settings.json\n")
-	fmt.Printf("  Linux    /etc/claude-code/managed-settings.json\n")
-	fmt.Printf("  Windows  C:\\Program Files\\ClaudeCode\\managed-settings.json\n\n")
-	fmt.Printf("Confirm it applied by running /status in Claude Code: the \"Setting sources\"\n")
-	fmt.Printf("line names the managed source when a policy is in force.\n\n")
+	writePolicyNextSteps()
 
 	fmt.Printf("What this does and does not do:\n")
 	fmt.Printf("  · a developer cannot edit these paths, so the check cannot be switched off\n")
@@ -132,4 +138,12 @@ func runPolicy(args []string) int {
 		fmt.Printf("  · no other marketplace may be added, including Anthropic's official one\n")
 	}
 	return exitClean
+}
+
+func writePolicyNextSteps() {
+	fmt.Println("Give this proposal to the owner of your existing MDM or configuration management.")
+	fmt.Println("They should review and merge it into the managed source your organisation already uses.")
+	fmt.Println("After deployment, confirm the effective source with /status in Claude Code and check")
+	fmt.Println("that the SkillTrust plugin and its hooks run. A generated proposal is not deployment proof.")
+	fmt.Println()
 }

@@ -1,0 +1,4 @@
+# version platform archive_sha256 axela_binary_sha256
+# Enable only with hashes of a published release that contains the real axela
+# executable and supports doctor --json. No latest URL or downloaded trust root.
+UNRELEASED

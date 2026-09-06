@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/random1st/skilltrust/internal/marketplace"
 )
 
 // An agent is a client that reads skills on this machine and can be asked to check them
@@ -25,6 +27,21 @@ import (
 // what this type holds. Everything else — digesting, verifying, restoring, reporting — never
 // learns there is more than one client, which is the property worth protecting as more are
 // added.
+// layout names how a client stores the copies of what a catalog publishes.
+type layout string
+
+const (
+	// layoutNone is a client with nothing centrally managed on this machine.
+	layoutNone layout = ""
+	// layoutPluginCache is <home>/plugins/cache/<marketplace>/<plugin>/<version>, fed by a
+	// marketplace the client installs from.
+	layoutPluginCache layout = "plugin cache"
+	// layoutLooseSkills is a skill directory per catalog entry, under one or more skill
+	// roots, with no marketplace and no version anywhere in the path. Identity is the
+	// catalog's name for the skill and the digest of the directory.
+	layoutLooseSkills layout = "loose skills"
+)
+
 type agent struct {
 	// Name is what a person types after --agent.
 	Name string
@@ -47,12 +64,25 @@ type agent struct {
 	// scanner that reported on SkillDir alone would describe a different machine than the
 	// agent runs on, and would do it silently.
 	ExtraRoots func(base string) []string
-	// Managed reports whether this client installs plugins from a marketplace into
-	// <home>/plugins/cache, which is the only tree reconciling can act on.
+	// Managed reports whether anything on this machine is centrally managed for this client,
+	// so that reconciling has something to check, restore or revoke.
 	//
 	// False means every skilltrust command that restores or revokes has nothing to work
 	// with here, and must say so instead of running and finding nothing.
+	//
+	// True no longer implies a plugin cache. What it implies is Layout, which must be set
+	// alongside it — a caller that needs the tree rather than the fact asks Layout.
 	Managed bool
+	// Layout is the shape the managed copies take here, and is what code reaching for a
+	// specific tree must test.
+	//
+	// It exists because Managed was a single bool meaning two things at once — "something
+	// here is centrally managed" and "that something is <home>/plugins/cache" — which held
+	// only while every managed client was a marketplace client. A client whose managed
+	// skills are loose directories makes the two come apart, and leaving them fused would
+	// have every plugin-cache walk quietly run against a tree that is not there and report
+	// a machine where nothing is installed.
+	Layout layout
 	// Hooks are the moments this client offers that are worth taking, and may be nil when
 	// there is nothing worth checking at any of them.
 	Hooks func(executable string) []hookSpec
@@ -82,7 +112,7 @@ var agents = []agent{
 	{
 		Name: "claude", HomeDir: ".claude", HomeEnv: "CLAUDE_CONFIG_DIR",
 		HookConfig: "settings.json", SkillDir: "skills",
-		Managed: true, Hooks: claudeHooks,
+		Managed: true, Layout: layoutPluginCache, Hooks: claudeHooks,
 	},
 	{
 		Name: "codex", HomeDir: ".codex", HomeEnv: "",
@@ -90,7 +120,7 @@ var agents = []agent{
 		// from ~/.codex/hooks.json, and writing them into config.toml instead would be
 		// configuration nobody reads.
 		HookConfig: "hooks.json", SkillDir: "skills",
-		Managed: true, Hooks: codexHooks,
+		Managed: true, Layout: layoutPluginCache, Hooks: codexHooks,
 		// Codex records a trusted_hash per hook in config.toml under [hooks.state] and
 		// asks before running one it has not seen. Writing that hash from here would be
 		// this tool granting itself execution inside another tool, past the review that
@@ -125,7 +155,7 @@ var agents = []agent{
 		// default, Cursor also loads ~/.claude/skills and ~/.codex/skills — directories
 		// skillRoots already covers, so a machine scanned for Claude Code is largely
 		// scanned for Cursor too.
-		Managed: false, Hooks: nil,
+		Managed: false, Layout: layoutNone, Hooks: nil,
 		NoHooksBecause: "Cursor installs no plugins from a marketplace, so there is nothing " +
 			"here for a check to put back or refuse.\n" +
 			"Its skills are the ones in ~/.cursor/skills and a repository's .cursor/skills; " +
@@ -147,7 +177,7 @@ var agents = []agent{
 		// path, no version, and the manifest at the directory root rather than under
 		// .claude-plugin. Reconciling keys on (marketplace, plugin, version) and could not
 		// identify an installed copy here, so there is nothing for a check to put back.
-		Managed: false, Hooks: nil,
+		Managed: false, Layout: layoutNone, Hooks: nil,
 		NoHooksBecause: "Antigravity installs plugins as plugins/<name>/ inside a " +
 			"customization root, recording neither which marketplace they came from nor " +
 			"which version, so there is nothing here a check could put back or refuse.\n" +
@@ -158,6 +188,106 @@ var agents = []agent{
 			"PostToolUse, PreInvocation, PostInvocation and Stop, and the first two run on " +
 			"every tool call rather than once.",
 	},
+	{
+		Name: "hermes", HomeDir: ".hermes", HomeEnv: "HERMES_HOME",
+		SkillDir: "skills", ExtraRoots: hermesRoots,
+		// Managed, and not through a marketplace. A Hermes host follows a signed catalog and
+		// keeps each published skill as a plain directory the agent reads — no plugin cache,
+		// no marketplace name in any path, no version anywhere. So the copies are located by
+		// the catalog's own layout and identified by their digest, which is the whole of what
+		// reconciling needs; everything else about it is the same work as for a cache.
+		Managed: true, Layout: layoutLooseSkills,
+		// There is no hook system to install into. Hermes runs scheduled work through its own
+		// cron, so the honest answer is the command that actually schedules the check rather
+		// than a file to edit — and it is printed in full, because a person told "use cron"
+		// has been told nothing.
+		Hooks: nil,
+		NoHooksBecause: "Hermes has no hook system: nothing runs at the start of a session, " +
+			"so there is no moment here for a check to take.\n" +
+			"Schedule it instead, with a Hermes cron job that runs no model:\n\n" +
+			"  hermes cron create \"*/30 * * * *\" \"\" --name skilltrust-sync --no-agent " +
+			"--script <script>\n\n" +
+			"where <script> runs `skillctl sync --agent hermes`. --no-agent matters: the job " +
+			"is a command, and waking a model to run it would cost tokens to learn nothing.\n" +
+			"skillctl cannot create that job for you — it is Hermes's scheduler, and a tool " +
+			"that wrote into it would be configuring another product behind its back.",
+	},
+}
+
+// hermesRoots finds the per-profile skill directories a Hermes host reads.
+//
+// Hermes has two layouts and a machine can have both at once: skills at <home>/skills for a
+// single-profile host, and <home>/profiles/<profile>/skills for each profile on a host that
+// runs several. The machine root is the table's SkillDir; these are the rest, and a checker
+// that knew only the fixed path would report on the one profile it guessed and stay silent
+// about the others — which on a fleet host is every skill that matters.
+//
+// Two bases are honoured because two callers pass different things. The locator passes the
+// Hermes home, where profiles/ sits directly; the machine-wide skill scan passes a working
+// directory or $HOME, where it sits under .hermes/. Both are answered by looking, and only
+// directories that exist are returned, so neither caller can be told about a profile the
+// machine does not have.
+func hermesRoots(base string) []string {
+	var found []string
+	for _, parent := range []string{
+		filepath.Join(base, "profiles"),
+		filepath.Join(base, ".hermes", "profiles"),
+	} {
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			candidate := filepath.Join(parent, entry.Name(), "skills")
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				found = append(found, candidate)
+			}
+		}
+	}
+	return found
+}
+
+// looseSkillRoots are the directories a loose-skills client reads, each labelled with the
+// name its copies are reported under.
+//
+// The machine-wide root carries no label: there is nothing to distinguish, and printing one
+// would invent a profile that does not exist. A profile root is labelled with the profile,
+// which is what makes two lines about one skill readable as "operator's copy" and "analyst's
+// copy" rather than as the same sentence twice.
+func looseSkillRoots(known agent, home string) []marketplace.SkillRoot {
+	var roots []marketplace.SkillRoot
+	seen := map[string]bool{}
+	add := func(path, label string) {
+		if path == "" || seen[path] {
+			return
+		}
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			return
+		}
+		seen[path] = true
+		roots = append(roots, marketplace.SkillRoot{Path: path, Label: label})
+	}
+	add(filepath.Join(home, known.SkillDir), "")
+	if known.ExtraRoots != nil {
+		for _, extra := range known.ExtraRoots(home) {
+			add(extra, profileLabel(extra))
+		}
+	}
+	return roots
+}
+
+// profileLabel reads the profile out of <home>/profiles/<profile>/skills, and is empty for
+// any other shape — a label guessed from a path that does not have one would be worse than
+// none.
+func profileLabel(root string) string {
+	profile := filepath.Dir(root)
+	if filepath.Base(filepath.Dir(profile)) != "profiles" {
+		return ""
+	}
+	return filepath.Base(profile)
 }
 
 // antigravityRoots finds the skill directories a skills.json registers under base.
@@ -315,16 +445,15 @@ func resolveAgentHome(agentName, explicit string) (string, error) {
 
 // claudeHooks are the moments Claude Code offers.
 //
-// SessionStart reports what changed while nobody was looking. It cannot refuse anything —
-// the documented behaviour is that its output is shown to the user only — so it is an
-// awareness notice and nothing more.
+// SessionStart cannot refuse anything. Claude's systemMessage makes a warning visible
+// to the person, while additionalContext also tells the agent what changed.
 //
 // The per-skill check that can refuse (PreToolUse on the Skill tool) ships in the plugin
 // rather than here, because a hook that fires on every skill invocation is a change to
 // someone's client that should arrive with the thing they installed deliberately.
 func claudeHooks(executable string) []hookSpec {
 	return []hookSpec{{
-		Event: "SessionStart", Matcher: "", Command: executable + " hook session-start",
+		Event: "SessionStart", Matcher: "", Command: executable + " hook session-start --claude-json",
 		Why: "restores any centrally managed skill changed here, and says so",
 	}}
 }

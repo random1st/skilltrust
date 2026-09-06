@@ -32,19 +32,25 @@ const (
 
 const usage = `skillctl - keep your organisation's skills the ones it published
 
+Start here (no account required):
+  skillctl doctor               check installed skills and show the next command
+
 Seeing what it does (about a minute, in a sandbox, no account):
   skillctl demo                  publish, install, tamper, detect, restore, file
 
 Following a catalog (on a machine):
   skillctl setup                add SkillTrust to installed Claude Code or Codex
-  skillctl status --refresh      check skills and confirm the report reached your team
+  skillctl status --refresh      check followed skills locally; confirm delivery for an Axela team
   skillctl connect [https://axela.example]
                                  browser-approved Axela setup for this machine; defaults to https://axela.app
-  skillctl subscribe <git-url> --key <pub>
-                                 follow an organisation's signed skill catalog
+  skillctl subscribe axela://<org>/<catalog>
+                                 follow a public or team signed catalog; manual Git/key options remain available
+  skillctl install              install the first followed plugin using the native client
   skillctl sync                  fetch, verify, and reconcile signed plugins
   skillctl report flush          retry saved reports and first-check receipts
   skillctl adopt <plugin>        keep a change you made, instead of having it put back
+  skillctl diff <plugin>         compare a saved local change with the installed plugin
+  skillctl statusline            print a compact warning or the last check's status
   skillctl refresh [catalog]     pin a rotating notary's next key from its signed announcement
   skillctl hook <subcommand>     run or install the session-start reconciler
 
@@ -71,72 +77,98 @@ Run "skillctl <command> -h" for per-command flags.
 `
 
 func main() {
+	os.Exit(runCLI())
+}
+
+func runCLI() int {
+	help := commandUsage()
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(exitUsage)
+		fmt.Fprint(os.Stderr, help)
+		return exitUsage
 	}
+	unlock, err := lockCLIState(os.Args[1])
+	if err != nil {
+		if os.Args[1] == "statusline" {
+			fmt.Println("Axela: local state unavailable | " + commandName() + " doctor")
+			return exitClean
+		}
+		if os.Args[1] == "hook" && len(os.Args) > 2 && os.Args[2] == "pre-skill" {
+			fmt.Fprintf(os.Stderr, "%s: this skill could not be checked: %v. Retry after the current check finishes.\n", commandName(), err)
+			return exitDeny
+		}
+		return fail(err)
+	}
+	defer unlock()
 
 	switch os.Args[1] {
 	case "demo":
-		os.Exit(runDemo(os.Args[2:]))
+		return runDemo(os.Args[2:])
 	case "fleet":
-		os.Exit(runFleet(os.Args[2:]))
+		return runFleet(os.Args[2:])
 	case "policy":
-		os.Exit(runPolicy(os.Args[2:]))
+		return runPolicy(os.Args[2:])
 	case "marketplace":
-		os.Exit(runMarketplace(os.Args[2:]))
+		return runMarketplace(os.Args[2:])
 	case "publish":
-		os.Exit(runPublish(os.Args[2:]))
+		return runPublish(os.Args[2:])
 	case "subscribe":
-		os.Exit(runSubscribe(os.Args[2:]))
+		return runSubscribe(os.Args[2:])
+	case "install":
+		return runInstall(os.Args[2:])
 	case "connect":
-		os.Exit(runConnect(os.Args[2:]))
+		return runConnect(os.Args[2:])
 	case "setup":
-		os.Exit(runSetup(os.Args[2:]))
+		return runSetup(os.Args[2:])
 	case "status":
-		os.Exit(runStatus(os.Args[2:]))
+		return runStatus(os.Args[2:])
+	case "doctor":
+		return runDoctor(os.Args[2:])
+	case "statusline":
+		return runStatusline(os.Args[2:])
 	case "trust":
-		os.Exit(runTrust(os.Args[2:]))
+		return runTrust(os.Args[2:])
 	case "init":
-		os.Exit(runInit(os.Args[2:]))
+		return runInit(os.Args[2:])
 	case "digest":
-		os.Exit(runDigest(os.Args[2:]))
+		return runDigest(os.Args[2:])
 	case "hook":
-		os.Exit(runHook(os.Args[2:]))
+		return runHook(os.Args[2:])
 	case "attest":
-		os.Exit(runAttest(os.Args[2:]))
+		return runAttest(os.Args[2:])
 	case "catalog":
-		os.Exit(runCatalog(os.Args[2:]))
+		return runCatalog(os.Args[2:])
 	case "sync":
-		os.Exit(runSync(os.Args[2:]))
+		return runSync(os.Args[2:])
 	case "report":
-		os.Exit(runReport(os.Args[2:]))
+		return runReport(os.Args[2:])
 	case "adopt":
-		os.Exit(runAdopt(os.Args[2:]))
+		return runAdopt(os.Args[2:])
+	case "diff":
+		return runDiff(os.Args[2:])
 	case "refresh":
-		os.Exit(runRefresh(os.Args[2:]))
+		return runRefresh(os.Args[2:])
 	case "lint":
-		os.Exit(runLint(os.Args[2:]))
+		return runLint(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
-		os.Exit(exitClean)
+		return exitClean
 	case "help", "--help", "-h":
-		fmt.Print(usage)
-		os.Exit(exitClean)
+		fmt.Print(help)
+		return exitClean
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
-		os.Exit(exitUsage)
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], help)
+		return exitUsage
 	}
 }
 
 func runLint(args []string) int {
 	flags := flag.NewFlagSet("lint", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl lint [flags] [path]\n\n"+
+		fmt.Fprintf(flags.Output(), "Usage: %s lint [flags] [path]\n\n"+
 			"Scans for directories containing SKILL.md and reports specification\n"+
 			"deviations and content risk indicators. Runs entirely offline.\n\n"+
 			"Exit codes: %d clean, %d findings at or above --fail-on, %d usage error.\n\nFlags:\n",
-			exitClean, exitFindings, exitUsage)
+			commandName(), exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 
@@ -305,8 +337,24 @@ func isPlatformPrefixRewrite(absolute, resolved string) bool {
 	return runtime.GOOS == "darwin" && resolved == "/private"+absolute
 }
 
+// Both release names execute this program. Keep legacy and embedded callers on
+// skillctl unless the user explicitly invoked the Axela executable.
+func commandName() string {
+	if len(os.Args) > 0 {
+		name := filepath.Base(os.Args[0])
+		if strings.EqualFold(name, "axela") || strings.EqualFold(name, "axela.exe") {
+			return "axela"
+		}
+	}
+	return "skillctl"
+}
+
+func commandUsage() string {
+	return strings.ReplaceAll(usage, "skillctl", commandName())
+}
+
 func versionString() string {
-	parts := []string{"skillctl " + resolveVersion()}
+	parts := []string{commandName() + " " + resolveVersion()}
 	if commit != "" {
 		parts = append(parts, "commit "+commit)
 	}

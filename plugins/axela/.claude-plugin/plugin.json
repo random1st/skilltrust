@@ -1,0 +1,7 @@
+{
+  "name": "axela",
+  "version": "0.0.0-dev",
+  "description": "Check installed skills with /axela:doctor, without an account. Local development entry; release bootstrap is not enabled yet.",
+  "author": { "name": "Axela" },
+  "homepage": "https://github.com/random1st/skilltrust"
+}

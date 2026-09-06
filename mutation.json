@@ -3,8 +3,8 @@
     {
       "id": "mcp_output_schema",
       "file": "client/cmd/skilltrust-mcp/tools.go",
-      "before": "Name: \"skilltrust_status\", Title: \"Check connection, skills and report delivery\",",
-      "after": "Name: \"skilltrust_status\", Title: \"Check connection, skills and report delivery\", OutputSchema: map[string]any{\"type\": \"object\", \"properties\": map[string]any{\"state\": map[string]any{\"type\": \"array\"}}},",
+      "before": "Name: \"skilltrust_status\", Title: \"Check skills and the next setup step\",",
+      "after": "Name: \"skilltrust_status\", Title: \"Check skills and the next setup step\", OutputSchema: map[string]any{\"type\": \"object\", \"properties\": map[string]any{\"state\": map[string]any{\"type\": \"array\"}}},",
       "package": "./client/cmd/skilltrust-mcp",
       "run": "^TestStructuredToolsReturnObjectsThroughMCP$"
     },
@@ -171,8 +171,8 @@
     {
       "id": "empty_or_failed_check",
       "file": "client/cmd/skillctl/status.go",
-      "before": "if !check.HealthyAt(now) {",
-      "after": "if check.HealthyAt(now) && false {",
+      "before": "if !check.HealthyAt(now) {\n\t\treturn attention(\"check_connection\"",
+      "after": "if check.HealthyAt(now) && false {\n\t\treturn attention(\"check_connection\"",
       "package": "./client/cmd/skillctl",
       "run": "^TestMachineStatusRejects"
     },
@@ -231,6 +231,686 @@
       "after": "attest.NewTrustedKeys(notaries...), nil, connectNow()); err != nil && false {",
       "package": "./client/cmd/skillctl",
       "run": "^TestPublishStatus"
+    },
+    {
+      "id": "local_status_alias",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "expected[subscription.Name] = snapshot",
+      "after": "expected[snapshot.Name] = snapshot",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestLocalStatus"
+    },
+    {
+      "id": "local_status_expiry_owner",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "if errors.Is(err, catalog.ErrExpired) {",
+      "after": "if errors.Is(err, catalog.ErrExpired) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestLocalStatus"
+    },
+    {
+      "id": "local_status_nonempty",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "if check.Checked == 0 {",
+      "after": "if check.Checked == 0 && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestLocalStatus"
+    },
+    {
+      "id": "local_status_health",
+      "file": "client/cmd/skillctl/status.go",
+      "before": "if !check.HealthyAt(now) {\n\t\treturn attention(\"check_skills\"",
+      "after": "if !check.HealthyAt(now) && false {\n\t\treturn attention(\"check_skills\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestLocalStatus"
+    },
+    {
+      "id": "local_check_no_destination",
+      "file": "client/cmd/skillctl/events.go",
+      "before": "return errors.Join(append(errs, err)...)",
+      "after": "return errors.Join(append(errs, err, report.ErrNoDestinations)...)",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestLocalStatus"
+    },
+    {
+      "id": "demo_scope_isolation",
+      "file": "client/cmd/skillctl/sync.go",
+      "before": "// Do not discover loose skills in the caller's actual project or home.\n\tif *claudeHome == \"\" {",
+      "after": "// Do not discover loose skills in the caller's actual project or home.\n\tif *claudeHome == \"\" || len(*claudeHome) > 0 {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTheDemoLeaves"
+    },
+    {
+      "id": "sync_remaining_attention",
+      "file": "client/cmd/skillctl/sync.go",
+      "before": "unresolved++",
+      "after": "unresolved += 0",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestSyncSeparatesCompleted"
+    },
+    {
+      "id": "loose_root_read_errors",
+      "file": "client/cmd/skillctl/attest.go",
+      "before": "summary.Errors += len(notes)\n\t\tfor _, note := range notes {",
+      "after": "summary.Errors += 0\n\t\tfor _, note := range notes {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestSyncDoesNotHideLoose"
+    },
+    {
+      "id": "mcp_accountfree_route",
+      "file": "client/cmd/skilltrust-mcp/resources.go",
+      "before": "if len(current.Subscriptions) > 0 {",
+      "after": "if len(current.Subscriptions) > 0 && false {",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestLocalSetup"
+    },
+    {
+      "id": "mcp_existing_approvals",
+      "file": "client/cmd/skilltrust-mcp/resources.go",
+      "before": "status.NextAction != nil && !localApprovals",
+      "after": "status.NextAction != nil && (!localApprovals || localApprovals)",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestLocalSetup"
+    },
+    {
+      "id": "mcp_requested_team",
+      "file": "client/cmd/skilltrust-mcp/prompts.go",
+      "before": "first, second = hosted, local",
+      "after": "first, second = local, hosted",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestLocalSetup"
+    },
+    {
+      "id": "mcp_hook_client",
+      "file": "client/cmd/skilltrust-mcp/tools.go",
+      "before": "args = append(args, \"--client\", in.Client)",
+      "after": "args = append(args, \"--client\", \"claude\")",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestClientSelection"
+    },
+    {
+      "id": "mcp_hook_client_validation",
+      "file": "client/cmd/skilltrust-mcp/tools.go",
+      "before": "in.Client != \"\" && in.Client != \"claude\" && in.Client != \"codex\"",
+      "after": "in.Client != \"\" && in.Client != \"claude\" && in.Client != \"codex\" && false",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestClientSelection"
+    },
+    {
+      "id": "quarantine_installed_target",
+      "file": "internal/marketplace/quarantine.go",
+      "before": "provenance.Installed != installed",
+      "after": "false",
+      "package": "./internal/marketplace",
+      "run": "^TestNewestQuarantineRejectsDamagedProvenance$"
+    },
+    {
+      "id": "quarantine_schema",
+      "file": "internal/marketplace/quarantine.go",
+      "before": "provenance.Schema != 1",
+      "after": "false",
+      "package": "./internal/marketplace",
+      "run": "^TestNewestQuarantineRejectsDamagedProvenance$"
+    },
+    {
+      "id": "quarantine_reclaim_binding",
+      "file": "internal/marketplace/restore.go",
+      "before": "if isBoundQuarantine(quarantined) {",
+      "after": "if false {",
+      "package": "./internal/marketplace",
+      "run": "^TestQuarantineSeparatesInstalledTargets$"
+    },
+    {
+      "id": "quarantine_newest_collision",
+      "file": "internal/marketplace/quarantine.go",
+      "before": "sequence > newestSequence",
+      "after": "sequence < newestSequence",
+      "package": "./internal/marketplace",
+      "run": "^TestNewestQuarantineOrdersTimestampsAndCollisionCounters$"
+    },
+    {
+      "id": "policy_existing_allowlist",
+      "file": "client/cmd/skillctl/policy_merge.go",
+      "before": "if !allowed {",
+      "after": "if !allowed && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPolicyPreviewRefusesConflictsAndMalformedExports$"
+    },
+    {
+      "id": "policy_disabled_plugin",
+      "file": "client/cmd/skillctl/policy_merge.go",
+      "before": "if bytes.Equal(bytes.TrimSpace(plugins[pluginID]), []byte(\"false\")) {",
+      "after": "if bytes.Equal(bytes.TrimSpace(plugins[pluginID]), []byte(\"false\")) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPolicyPreviewRefusesConflictsAndMalformedExports$"
+    },
+    {
+      "id": "policy_output_clobber",
+      "file": "client/cmd/skillctl/policy_merge.go",
+      "before": "os.O_CREATE|os.O_EXCL|os.O_WRONLY",
+      "after": "os.O_CREATE|os.O_WRONLY",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPolicyPreviewNeverClobbersAnExistingOutput$"
+    },
+    {
+      "id": "policy_system_directory",
+      "file": "client/cmd/skillctl/policy_merge.go",
+      "before": "if insideManaged {",
+      "after": "if insideManaged && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPolicyPreviewRefusesSystemManagedDirectoryAndItsAliases$"
+    },
+    {
+      "id": "doctor_empty_coverage",
+      "file": "client/cmd/skillctl/doctor.go",
+      "before": "case summary.Found == 0:",
+      "after": "case summary.Found == 0 && false:",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorEmptyMachine"
+    },
+    {
+      "id": "doctor_incomplete_coverage",
+      "file": "client/cmd/skillctl/doctor.go",
+      "before": "case summary.Errors > 0:",
+      "after": "case summary.Errors > 0 && false:",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorBrokenChild"
+    },
+    {
+      "id": "unapproved_skill_read_error",
+      "file": "client/cmd/skillctl/attest.go",
+      "before": "if one.err != nil {",
+      "after": "if one.err != nil && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorUnapprovedSkillReadError"
+    },
+    {
+      "id": "malformed_sibling_approval",
+      "file": "client/cmd/skillctl/attest.go",
+      "before": "summary.Errors++\n\t\t\t\tfmt.Fprintf(diagnostics, \"skillctl: %s could not be verified: %v\\n\", path, err)",
+      "after": "summary.Errors += 0\n\t\t\t\tfmt.Fprintf(diagnostics, \"skillctl: %s could not be verified: %v\\n\", path, err)",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorMalformedSiblingApproval"
+    },
+    {
+      "id": "discovery_child_stat_error",
+      "file": "internal/lint/lint.go",
+      "before": "notes = append(notes, \"cannot inspect \"+path+\": \"+err.Error())",
+      "after": "notes = append(notes, []string{}...)",
+      "package": "./internal/lint",
+      "run": "^TestDiscoverReports"
+    },
+    {
+      "id": "restore_failure_preserves_client_data",
+      "file": "internal/marketplace/restore.go",
+      "before": "return \"\", rollBackManaged(err)",
+      "after": "return \"\", err",
+      "package": "./internal/marketplace",
+      "run": "^TestRestoreQuarantineFailureKeepsClientManagedData"
+    },
+    {
+      "id": "mcp_prefers_axela_binary",
+      "file": "client/cmd/skilltrust-mcp/skillctl.go",
+      "before": "names := []string{\"axela\", \"skillctl\"}",
+      "after": "names := []string{\"skillctl\", \"axela\"}",
+      "package": "./client/cmd/skilltrust-mcp",
+      "run": "^TestBundledCLIUsesAxelaAndSupportsLegacyArchives$"
+    },
+    {
+      "id": "axela_invoked_name",
+      "file": "client/cmd/skillctl/main.go",
+      "before": "\t\t\treturn \"axela\"",
+      "after": "\t\t\treturn \"skillctl\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestCLIAliasUsesInvokedNameAndPreservesLegacy$"
+    },
+    {
+      "id": "doctor_inventory_items",
+      "file": "client/cmd/skillctl/doctor.go",
+      "before": "Skills:  summary.Observations,",
+      "after": "Skills:  nil,",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorCountsUnapprovedLooseSkillsAndPluginCachesOnce$"
+    },
+    {
+      "id": "doctor_review_command",
+      "file": "client/cmd/skillctl/doctor.go",
+      "before": "out.NextCommand = []string{commandName(), \"lint\", skill.Path}",
+      "after": "out.NextCommand = []string{commandName(), \"subscribe\", \"--help\"}",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorUnapprovedNextCommandUsesTheExactPathWithoutApprovingIt$"
+    },
+    {
+      "id": "exact_reviewed_quarantine",
+      "file": "client/cmd/skillctl/adopt.go",
+      "before": "recoveryCode = reclaimExactQuarantine(results, home, *marketplaceName, name, *quarantined, *reviewedDigest)",
+      "after": "recoveryCode = reclaimFromQuarantine(results, home, *marketplaceName, name)",
+      "package": "./client/cmd/skillctl",
+      "run": "^Test(DiffPrintedCommandKeepsReviewedCopyAfterAnotherRestore|AdoptExactQuarantineRecoversReviewedCopy)$"
+    },
+    {
+      "id": "recovery_revoked_candidate",
+      "file": "client/cmd/skillctl/diff.go",
+      "before": "snapshot.IsRevoked(candidate)",
+      "after": "snapshot.IsRevoked(candidate[:0])",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestAdoptExactQuarantineRequiresReviewAndRejectsRevokedBytes$"
+    },
+    {
+      "id": "recovery_rollback_client_moves",
+      "file": "internal/marketplace/quarantine.go",
+      "before": "errors.Join(cause, returnClientManaged(original, directory, moved))",
+      "after": "errors.Join(cause, nil)",
+      "package": "./internal/marketplace",
+      "run": "^TestReclaimVerifiedRollsBackEarlierClientMovesOnCollision$"
+    },
+    {
+      "id": "diff_executable_mode",
+      "file": "client/cmd/skillctl/diff.go",
+      "before": "leftOK == rightOK && left.mode == right.mode && bytes.Equal(left.body, right.body)",
+      "after": "leftOK == rightOK && bytes.Equal(left.body, right.body)",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPayloadDiffReportsBinaryModeAndEmptyFileChanges$"
+    },
+    {
+      "id": "diff_binary_bytes",
+      "file": "client/cmd/skillctl/diff.go",
+      "before": "return utf8.Valid(body) && !bytes.ContainsRune(body, 0)",
+      "after": "return utf8.Valid(body)",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPayloadDiffReportsBinaryModeAndEmptyFileChanges$"
+    },
+    {
+      "id": "claude_user_warning",
+      "file": "client/cmd/skillctl/hook_json.go",
+      "before": "result := claudeHookOutput{SystemMessage: notice}",
+      "after": "result := claudeHookOutput{SystemMessage: \"\"}",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestClaudeSessionJSONRestoresAndNamesTheExactSavedCopy$"
+    },
+    {
+      "id": "claude_warning_escaping",
+      "file": "client/cmd/skillctl/hook_json.go",
+      "before": "if r == '\\n' || r == '\\t' || unicode.IsPrint(r) {",
+      "after": "if true {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestClaudeHookWarningEscapesCommandsAndTerminalControls$"
+    },
+    {
+      "id": "claude_hook_upgrade",
+      "file": "client/cmd/skillctl/hook.go",
+      "before": "if upgradeClaudeWarningHook(existing, spec) {",
+      "after": "if false && upgradeClaudeWarningHook(existing, spec) {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestClaudeWarningHookUpgradeKeepsExistingHooksAndCompanySettings$"
+    },
+    {
+      "id": "pending_changes_persist",
+      "file": "internal/marketplace/quarantine_pending.go",
+      "before": "return len(pending), err",
+      "after": "return len(pending) * 0, err",
+      "package": "./internal/marketplace",
+      "run": "^TestPendingQuarantinesOutliveCleanChecksAndRemovedClients$"
+    },
+    {
+      "id": "pending_changes_provenance",
+      "file": "internal/marketplace/quarantine_pending.go",
+      "before": "if err := checkQuarantineProvenance(path, provenance.Installed, provenance.Plugin); err != nil {",
+      "after": "if err := checkQuarantineProvenance(path, provenance.Installed, provenance.Plugin); false && err != nil {",
+      "package": "./internal/marketplace",
+      "run": "^TestPendingQuarantinesDoNotTreatDamagedHistoryAsEmpty$"
+    },
+    {
+      "id": "statusline_freshness",
+      "file": "client/cmd/skillctl/statusline.go",
+      "before": "if status.LastCheck != nil && status.LastCheck.HealthyAt(now) &&",
+      "after": "if status.LastCheck != nil &&",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestStatuslineNeverCallsEmptyOrStaleEvidencePassed$"
+    },
+    {
+      "id": "public_catalog_digest",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "if hex.EncodeToString(sum[:]) != descriptor.CatalogDigest {",
+      "after": "if hex.EncodeToString(sum[:]) != descriptor.CatalogDigest && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionRejectsTamperingWithoutSaving$"
+    },
+    {
+      "id": "public_catalog_independent_signers",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "if err := entry.Satisfied(signers); err != nil {",
+      "after": "if err := entry.Satisfied(signers); false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionRejectsTamperingWithoutSaving$"
+    },
+    {
+      "id": "public_source_commit",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "if fetched.Commit != descriptor.Commit {",
+      "after": "if fetched.Commit != descriptor.Commit && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionRejectsTamperingWithoutSaving$"
+    },
+    {
+      "id": "public_no_repeat_tofu",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "if len(known) == 0 {",
+      "after": "if true {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionResubscribeKeepsIdentityAndRotatesNotaryByProof$"
+    },
+    {
+      "id": "public_actual_publisher",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "if !containsPublicKeyID(signers, attest.KeyID(key)) {",
+      "after": "if !containsPublicKeyID(signers, attest.KeyID(key)) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionRejectsTamperingWithoutSaving$"
+    },
+    {
+      "id": "public_write_rollback",
+      "file": "client/cmd/skillctl/public_subscription_store.go",
+      "before": "if err := r.rename(change.from, change.to); err != nil {",
+      "after": "if err := r.rename(change.from, change.to); false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionWriteFailureRollsBackPinsAndLocalSigner$"
+    },
+    {
+      "id": "public_name_stays_bound",
+      "file": "client/cmd/skillctl/managed.go",
+      "before": "if subscription.CatalogName != \"\" && snapshot.Name != subscription.CatalogName {",
+      "after": "if false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionNameRemainsBoundDuringLaterChecks$"
+    },
+    {
+      "id": "connect_preserves_public_binding",
+      "file": "client/cmd/skillctl/connect.go",
+      "before": "entry.CatalogName = existing.CatalogName",
+      "after": "entry.CatalogName = \"\"",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPublicSubscriptionNameRemainsBoundDuringLaterChecks$"
+    },
+    {
+      "id": "public_stale_commit",
+      "file": "client/cmd/skillctl/public_subscription_state.go",
+      "before": "if current != expected {",
+      "after": "if current != expected && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestReviewPublicSubscriptionPreservesConcurrentTrustAndSequence$"
+    },
+    {
+      "id": "public_target_notary_binding",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "subscriptions = []Subscription{entry}",
+      "after": "subscriptions = append([]Subscription(nil), subscriptions...)",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestReviewPublicSubscriptionKeepsRotationWithinTargetPins$"
+    },
+    {
+      "id": "notary_public_visibility",
+      "file": "server/notary/subscription.go",
+      "before": "|| verified.Visibility != \"public\"",
+      "after": "",
+      "package": "./server/notary",
+      "run": "^TestSubscriptionDescriptorRefusesUnprovenPrivateOrDamagedCatalogs$"
+    },
+    {
+      "id": "notary_current_signature",
+      "file": "server/notary/subscription.go",
+      "before": "if _, _, err := catalog.VerifySigners(&envelope, attest.NewTrustedKeys(notaries...), state, now); err != nil {",
+      "after": "if _, _, err := catalog.VerifySigners(&envelope, attest.NewTrustedKeys(notaries...), state, now); err != nil && false {",
+      "package": "./server/notary",
+      "run": "^TestSubscriptionDescriptorRefusesUnprovenPrivateOrDamagedCatalogs$"
+    },
+    {
+      "id": "doctor_native_install_result",
+      "file": "client/cmd/skillctl/install.go",
+      "before": "return runDoctor(nil)",
+      "after": "return exitClean",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorInstallCommandChecksTheNativeResultWithoutAnAccount$"
+    },
+    {
+      "id": "doctor_saved_change_route",
+      "file": "client/cmd/skillctl/doctor_recovery.go",
+      "before": "out.NextCommand = out.SavedChanges[0].NextCommand",
+      "after": "out.NextCommand = []string{commandName(), \"doctor\"}",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorKeepsSavedChangesDiscoverableAfterACleanCheck$"
+    },
+    {
+      "id": "diff_saved_version_binding",
+      "file": "client/cmd/skillctl/diff.go",
+      "before": "diff = append(diff, \"--saved-version\", result.Version)",
+      "after": "",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestDoctorCanReviewASavedChangeAfterAPublisherUpgrade$"
+    },
+    {
+      "id": "plugin_binary_hash",
+      "file": "plugins/axela/scripts/bootstrap.sh",
+      "before": "[[ \"$(hash_file \"$1\")\" == \"$binary_hash\" ]] || fail",
+      "after": "true || fail",
+      "package": "./internal/pluginentry",
+      "run": "^TestBootstrapRejectsBadDownloadsWithoutRunningThem$"
+    },
+    {
+      "id": "plugin_doctor_exit_code",
+      "file": "plugins/axela/scripts/doctor.sh",
+      "before": "doctor_exit_code=$?",
+      "after": "doctor_exit_code=0",
+      "package": "./internal/pluginentry",
+      "run": "^TestDoctorPreservesTheExitCodeWithoutMaskingFailures$"
+    },
+    {
+      "id": "plugin_next_command_executable",
+      "file": "client/cmd/skillctl/doctor.go",
+      "before": "if *absoluteCommands {",
+      "after": "if *absoluteCommands && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPluginDoctorUsesExecutableOutsidePATH$"
+    },
+    {
+      "id": "read_exact_resource",
+      "file": "subscription/access.go",
+      "before": "proof.URL != address",
+      "after": "proof.URL != address && false",
+      "package": "./subscription",
+      "run": "^TestReadProofBindsMachineMethodAndExactResource$"
+    },
+    {
+      "id": "read_expiry",
+      "file": "subscription/access.go",
+      "before": "!proof.ExpiresAt.After(now)",
+      "after": "!proof.ExpiresAt.After(now) && false",
+      "package": "./subscription",
+      "run": "^TestReadProofBindsMachineMethodAndExactResource$"
+    },
+    {
+      "id": "read_signed_method",
+      "file": "subscription/access.go",
+      "before": "proof.Method != method",
+      "after": "proof.Method != method && false",
+      "package": "./subscription",
+      "run": "^TestReadProofRejectsForgedOrUnboundedPayloads$"
+    },
+    {
+      "id": "team_source_url",
+      "file": "subscription/descriptor.go",
+      "before": "d.SourceURL != address",
+      "after": "d.SourceURL != address && false",
+      "package": "./subscription",
+      "run": "^TestTeamDescriptorBindsCatalogAndDeliveredSource$"
+    },
+    {
+      "id": "team_public_downgrade",
+      "file": "subscription/descriptor.go",
+      "before": "if d.SourceURL != \"\" || d.SourceDigest != \"\" {",
+      "after": "if (d.SourceURL != \"\" || d.SourceDigest != \"\") && false {",
+      "package": "./subscription",
+      "run": "^TestTeamDescriptorBindsCatalogAndDeliveredSource$"
+    },
+    {
+      "id": "enrollment_team_syntax",
+      "file": "enrollment/enrollment.go",
+      "before": "request.Organisation != \"\" && !organisationName.MatchString(request.Organisation)",
+      "after": "request.Organisation != \"\" && !organisationName.MatchString(request.Organisation) && false",
+      "package": "./enrollment",
+      "run": "^TestEnrollmentOptionalTeamIsSignedAndValidated$"
+    },
+    {
+      "id": "source_gzip_trailing",
+      "file": "subscription/source_bundle.go",
+      "before": "if compressed.Len() != 0 {",
+      "after": "if compressed.Len() != 0 && false {",
+      "package": "./subscription",
+      "run": "^TestExtractSourceRefusesCorruptionTraversalLinksAndCollisions$"
+    },
+    {
+      "id": "source_curated_distribution",
+      "file": "subscription/source_bundle.go",
+      "before": "if rebuilt.Digest != digest {",
+      "after": "if rebuilt.Digest != digest && false {",
+      "package": "./subscription",
+      "run": "^TestExtractSourceRefusesUnrelatedFilesEvenWithTheirCorrectDigest$"
+    },
+    {
+      "id": "source_tracked_identity",
+      "file": "subscription/source_bundle.go",
+      "before": "if built.Digest != expected {",
+      "after": "if built.Digest != expected && false {",
+      "package": "./subscription",
+      "run": "^TestSourceBundleRefusesUntrackedPluginContentInsteadOfChangingSignedIdentity$"
+    },
+    {
+      "id": "source_omitted_manifest",
+      "file": "subscription/source_bundle.go",
+      "before": "if sourcePathsOverlap(member, marketplace.ManifestPath) {",
+      "after": "if sourcePathsOverlap(member, marketplace.ManifestPath) && false {",
+      "package": "./subscription",
+      "run": "^TestValidateSourceReadRefusesOmittedOrUnreadableManifest$"
+    },
+    {
+      "id": "source_omitted_plugin",
+      "file": "subscription/source_bundle.go",
+      "before": "else if !sourcePathsOverlap(member, root) {",
+      "after": "else if !sourcePathsOverlap(member, root) || sourcePathsOverlap(member, root) {",
+      "package": "./subscription",
+      "run": "^TestValidateSourceReadRefusesOmittedLocalPluginContent$"
+    },
+    {
+      "id": "team_current_catalog_digest",
+      "file": "server/notary/subscription.go",
+      "before": "|| verified.Descriptor.CatalogDigest != catalogDigest",
+      "after": "|| verified.Descriptor.CatalogDigest != catalogDigest && false",
+      "package": "./server/notary",
+      "run": "^TestTeamSubscriptionRejectsCatalogDigestMismatchBeforeSigning$"
+    },
+    {
+      "id": "team_current_source_registration",
+      "file": "server/notary/subscription.go",
+      "before": "if (team || where.RepositoryVisibility != \"public\") && !subscriptionSourceRegistered(org, where) {",
+      "after": "if (team || where.RepositoryVisibility != \"public\") && !subscriptionSourceRegistered(org, where) && false {",
+      "package": "./server/notary",
+      "run": "^TestSubscriptionDeliveryUsesCurrentSourceRegistration$"
+    },
+    {
+      "id": "team_current_directory",
+      "file": "server/notary/subscription.go",
+      "before": "if strong, ok := s.directory.(interface{ LookupOrgStrong(string) (Org, bool) }); ok {",
+      "after": "if strong, ok := s.directory.(interface{ LookupOrgStrong(string) (Org, bool) }); ok && false {",
+      "package": "./server/notary",
+      "run": "^TestSubscriptionRefusesCachedDirectoryAfterCurrentRevocation$"
+    },
+    {
+      "id": "team_registered_ref",
+      "file": "server/notary/subscription.go",
+      "before": "(ref == \"\" || where.Ref == ref)",
+      "after": "(ref == \"\" || where.Ref == ref || true)",
+      "package": "./server/notary",
+      "run": "^TestSubscriptionDeliveryUsesCurrentSourceRegistration$"
+    },
+    {
+      "id": "preskill_lock_blocks",
+      "file": "client/cmd/skillctl/main.go",
+      "before": "if os.Args[1] == \"hook\" && len(os.Args) > 2 && os.Args[2] == \"pre-skill\" {",
+      "after": "if os.Args[1] == \"hook\" && len(os.Args) > 2 && os.Args[2] == \"pre-skill\" && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestPreSkillStateLockFailureUsesTheNativeBlockingExit$"
+    },
+    {
+      "id": "team_credential_resource",
+      "file": "client/cmd/skillctl/subscription_access.go",
+      "before": "if request.Method != http.MethodGet || !allowed {",
+      "after": "if (request.Method != http.MethodGet || !allowed) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionCredentialCannotAuthorizeOtherOriginsOrRoutes$"
+    },
+    {
+      "id": "team_browser_identity",
+      "file": "client/cmd/skillctl/subscription_identity.go",
+      "before": "if connection.Organisation != org {",
+      "after": "if connection.Organisation != org && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionWrongBrowserTeamCannotStoreAConnection$"
+    },
+    {
+      "id": "team_connection_cas",
+      "file": "client/cmd/skillctl/public_subscription_state.go",
+      "before": "connectStatePath(), connectCredentialsPath(), pendingConnectPath(),",
+      "after": "pendingConnectPath(),",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionConcurrentDisconnectRefusesStaleCommit$"
+    },
+    {
+      "id": "team_offline_cache",
+      "file": "client/cmd/skillctl/sync.go",
+      "before": "if options.Offline && !options.teamOnline {",
+      "after": "if options.Offline && !options.teamOnline && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionDeniedOrOfflineCannotUsePopulatedCache$"
+    },
+    {
+      "id": "team_install_access",
+      "file": "client/cmd/skillctl/connect_install.go",
+      "before": "if subscription.Access != \"\" {",
+      "after": "if subscription.Access != \"\" && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionDeniedOrOfflineCannotUsePopulatedCache$"
+    },
+    {
+      "id": "team_preskill_catalog_claim",
+      "file": "client/cmd/skillctl/preskill.go",
+      "before": "if team && claimed {",
+      "after": "if team && claimed && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionPreSkillCannotSkipAccessUsingMutableCacheMetadata$"
+    },
+    {
+      "id": "team_preskill_installed_claim",
+      "file": "client/cmd/skillctl/preskill.go",
+      "before": "if (subscription.Access != \"\" || legacyAxelaSubscription(subscription)) && (claimsPlugin(subscription, plugin) || teamPluginInstalled(subscription, plugin, home)) {",
+      "after": "if (subscription.Access != \"\" || legacyAxelaSubscription(subscription)) && (claimsPlugin(subscription, plugin) || teamPluginInstalled(subscription, plugin, home)) && false {",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionPreSkillCannotSkipAccessUsingMutableCacheMetadata$"
+    },
+    {
+      "id": "team_publisher_threshold",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "entry.Threshold = existing.Required()",
+      "after": "entry.Threshold = 2",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionPreservesPublisherPartyAndStrongerThreshold$"
+    },
+    {
+      "id": "team_client_redirect",
+      "file": "client/cmd/skillctl/public_subscription.go",
+      "before": "client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }",
+      "after": "client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return nil }",
+      "package": "./client/cmd/skillctl",
+      "run": "^TestTeamSubscriptionRedirectsNeverForwardCredentials$"
     }
   ]
 }

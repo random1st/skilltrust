@@ -5,15 +5,18 @@
 
 GOFLAGS ?=
 VERSION ?= dev
+BIN_DIR ?= bin
+EXE := $(shell go env GOEXE)
 
 build:
-	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/skillctl ./cmd/skillctl
+	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o "$(BIN_DIR)/skillctl$(EXE)" ./cmd/skillctl
+	cp "$(BIN_DIR)/skillctl$(EXE)" "$(BIN_DIR)/axela$(EXE)"
 
 # The MCP server is a second binary, not a skillctl subcommand: the SDK brings nine
 # dependencies, and skillctl decides whether a skill is trusted. `go version -m bin/skillctl`
 # still lists two.
 mcp:
-	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/skilltrust-mcp ./cmd/skilltrust-mcp
+	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o "$(BIN_DIR)/skilltrust-mcp$(EXE)" ./cmd/skilltrust-mcp
 
 check: fmt lint test
 
@@ -37,6 +40,8 @@ snapshot:
 
 install:
 	go install -trimpath ./cmd/skillctl
+	@installed=$$(go list -f '{{.Target}}' ./cmd/skillctl | tr '\\' '/'); \
+	 test -n "$$installed" && cp "$$installed" "$${installed%/*}/axela$(EXE)"
 
 # Prove the reproducibility claim rather than asserting it: two independent builds of the
 # same source must produce identical bytes.
@@ -65,15 +70,16 @@ notarize:
 clean:
 	rm -rf bin dist
 
-# The plugin is hooks only. A file named skillctl in plugin/bin would go on PATH inside a
+# The plugin is hooks only. A verifier name in plugin/bin would go on PATH inside a
 # Claude Code session and intercept the release binary — including a wrapper that exits 0
 # and leaves the session unverified. Cross-compilation of the real binary is the
 # cross-compile CI job, not this target.
 plugin:
-	@if [ -e ../plugin/bin/skillctl ] || [ -e ../plugin/bin/skillctl.cmd ]; then \
-		echo "plugin/bin must not contain a skillctl shim: it shadows the release binary on PATH"; \
-		ls -la ../plugin/bin; \
-		exit 1; \
-	fi
+	@for name in axela axela.exe axela.cmd skillctl skillctl.exe skillctl.cmd; do \
+		if [ -e "../plugin/bin/$$name" ] || [ -L "../plugin/bin/$$name" ]; then \
+			echo "plugin/bin must not contain a $$name shim: it shadows the release binary on PATH"; \
+			exit 1; \
+		fi; \
+	done
 	@test -f ../plugin/hooks/hooks.json
 	@echo "plugin is hooks only; skillctl comes from a release"

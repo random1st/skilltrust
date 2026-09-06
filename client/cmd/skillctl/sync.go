@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,12 @@ type ManagedCheckOptions struct {
 	Offline       bool
 	UpdateSource  bool
 	RefreshBudget time.Duration
+	// Additional client homes reuse public bytes but still authorize team reads.
+	teamOnline bool
+	// looseRoots reconciles the skill directories a client reads loose, instead of a plugin
+	// cache. Empty is the plugin cache, which is what every caller but a loose-skills client
+	// wants and what every caller wanted before one existed.
+	looseRoots []marketplace.SkillRoot
 }
 
 type ManagedCatalogCheck struct {
@@ -32,18 +39,29 @@ type ManagedCatalogCheck struct {
 }
 
 type ManagedCheck struct {
-	Scope     string                `json:"scope"`
-	Coverage  string                `json:"coverage"`
-	Complete  bool                  `json:"complete"`
-	CheckedAt time.Time             `json:"checked_at"`
-	Catalogs  []ManagedCatalogCheck `json:"catalogs,omitempty"`
-	Results   []marketplace.Result  `json:"results,omitempty"`
-	Unusable  []string              `json:"unusable,omitempty"`
+	Scope           string                `json:"scope"`
+	Coverage        string                `json:"coverage"`
+	Complete        bool                  `json:"complete"`
+	CheckedAt       time.Time             `json:"checked_at"`
+	Catalogs        []ManagedCatalogCheck `json:"catalogs,omitempty"`
+	Results         []marketplace.Result  `json:"results,omitempty"`
+	Unusable        []string              `json:"unusable,omitempty"`
+	teamAccessError error
 }
 
 func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedCheck, int) {
+	return runManagedCheckTo(claudeHome, options, os.Stdout, os.Stderr)
+}
+
+// Hook adapters route all presentation through writers so Claude receives one JSON
+// object even when a key rotates or a local file cannot be read.
+func runManagedCheckTo(claudeHome string, options ManagedCheckOptions, output, diagnostics io.Writer) (ManagedCheck, int) {
 	now := time.Now().UTC()
 	check := ManagedCheck{Scope: CheckScopeManaged, CheckedAt: now}
+	failure := func(err error) (ManagedCheck, int) {
+		fmt.Fprintf(diagnostics, "skillctl: %v\n", err)
+		return check, exitUsage
+	}
 
 	// Defaulted here rather than at each call site. CacheRoot("") is the relative path
 	// ./plugins/cache, so a caller that forgets looks in the working directory, finds
@@ -54,7 +72,7 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 	}
 	subscriptions, err := loadSubscriptions()
 	if err != nil {
-		return check, fail(err)
+		return failure(err)
 	}
 	if len(subscriptions) == 0 {
 		check.Coverage = "empty"
@@ -67,7 +85,7 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 	if !options.Offline {
 		refreshed := false
 		for i := range subscriptions {
-			if subscriptions[i].CatalogURL == "" {
+			if subscriptions[i].CatalogURL == "" || subscriptions[i].Access != "" || legacyAxelaSubscription(subscriptions[i]) {
 				continue
 			}
 			added, err := refreshSubscriptionContext(ctx, &subscriptions[i], defaultTrustedKeys(), now)
@@ -75,19 +93,19 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 				continue
 			}
 			refreshed = true
-			fmt.Printf("%-11s %s now also pinned for %s\n",
+			fmt.Fprintf(output, "%-11s %s now also pinned for %s\n",
 				"pinned", strings.Join(fingerprints(added), ", "), subscriptions[i].Name)
 		}
 		if refreshed {
 			if err := saveSubscriptions(subscriptions); err != nil {
-				return check, fail(err)
+				return failure(err)
 			}
 		}
 	}
 
 	trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
 	if err != nil {
-		return check, fail(err)
+		return failure(err)
 	}
 
 	// A file this machine's owner wrote deliberately. An unreadable one adopts nothing and
@@ -95,14 +113,25 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 	// difference here" — turns a local mistake into a silent hole.
 	adopted, err := marketplace.LoadAdoptions(defaultAdoptions())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "skillctl: %v\n"+
+		fmt.Fprintf(diagnostics, "skillctl: %v\n"+
 			"  Nothing is adopted this run, so every signed skill is checked as published.\n", err)
 		adopted = marketplace.Adoptions{}
+	}
+
+	// One locator for the whole run. Which directories hold the copies is a property of the
+	// client, not of any catalog, and building it here is what keeps the reconciler below
+	// from ever asking which client it is serving.
+	var locate marketplace.Locator
+	if len(options.looseRoots) > 0 {
+		locate = marketplace.LooseSkills(options.looseRoots)
 	}
 
 	for _, subscription := range subscriptions {
 		snapshot, catalogCheck, err := loadManagedSnapshot(ctx, subscription, trusted, now, options)
 		if err != nil {
+			if subscription.Access != "" || legacyAxelaSubscription(subscription) {
+				check.teamAccessError = err
+			}
 			check.Unusable = append(check.Unusable, fmt.Sprintf("%s: %v", subscription.Name, err))
 			catalogCheck.Detail = err.Error()
 			check.Catalogs = append(check.Catalogs, catalogCheck)
@@ -110,7 +139,10 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 		}
 
 		sourcePath := source.Path(catalogRoot(), subscription.Name)
-		if options.UpdateSource && subscription.CatalogURL != "" {
+		if subscription.Access == "team" {
+			// The authenticated transaction already checked and promoted the exact
+			// archive. It is never a Git checkout or an offline restore source.
+		} else if options.UpdateSource && subscription.CatalogURL != "" {
 			if _, err := fetchCatalogContext(ctx, subscription); err != nil {
 				if catalogCheck.Refreshed {
 					sourcePath = ""
@@ -122,10 +154,20 @@ func RunManagedCheck(claudeHome string, options ManagedCheckOptions) (ManagedChe
 			appendManagedDetail(&catalogCheck, "restore requires a full sync after catalog refresh")
 		}
 
+		// A curator that keeps its own record of what it changed is telling us which
+		// differences are decisions. Reading it here, per catalog, is what stops an ordinary
+		// curated host from reporting every skill it maintains as tampering.
+		accepted := adopted
+		if locate != nil {
+			accepted = mergeAdoptions(adopted,
+				curatorLedgerAdoptions(snapshot, options.looseRoots, locate))
+		}
+
 		check.Catalogs = append(check.Catalogs, catalogCheck)
 		check.Results = append(check.Results, marketplace.Reconcile(snapshot, marketplace.Options{
 			ClaudeHome:     claudeHome,
-			Adopted:        adopted,
+			Adopted:        accepted,
+			Locate:         locate,
 			Source:         sourcePath,
 			QuarantineRoot: quarantineRoot(),
 			Restore:        options.Restore,
@@ -164,6 +206,20 @@ func loadManagedSnapshot(
 	options ManagedCheckOptions,
 ) (*catalog.Snapshot, ManagedCatalogCheck, error) {
 	status := ManagedCatalogCheck{Name: subscription.Name}
+	if subscription.Access != "" {
+		if options.Offline && !options.teamOnline {
+			return nil, status, fmt.Errorf("%s requires current team access; run %s doctor online before checking or restoring it. Existing files were kept", subscription.Name, commandName())
+		}
+		snapshot, _, err := refreshTeamSubscription(ctx, subscription, now)
+		if err != nil {
+			return nil, status, err
+		}
+		status.Sequence, status.ValidUntil, status.Refreshed = snapshot.Sequence, snapshot.ValidUntil, true
+		return snapshot, status, nil
+	}
+	if legacyAxelaSubscription(subscription) {
+		return nil, status, legacyAxelaUpgrade(subscription)
+	}
 	if options.Offline {
 		snapshot, err := readSnapshot(subscription, trusted, now, !options.Offline)
 		if err != nil {
@@ -333,18 +389,44 @@ func runSync(args []string) int {
 		flags.PrintDefaults()
 	}
 
-	agentName := flags.String("agent", "claude", "which client's plugins to check: claude or codex")
+	agentName := flags.String("agent", "claude", "which client's skills to check: claude, codex or hermes")
 	claudeHome := flags.String("claude-home", "", "the client's directory (default the agent's own)")
+	// The older name says Claude on a command that now checks four clients. Both are accepted
+	// and neither is deprecated in output: renaming a flag people have in cron jobs and hooks
+	// buys clarity for new readers by breaking machines that already work.
+	clientHome := flags.String("home", "", "the client's directory (default the agent's own)")
 	offline := flags.Bool("offline", false, "use the marketplaces already fetched")
 	report := flags.Bool("report-only", false, "say what differs without putting anything back")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
+	if *claudeHome != "" && *clientHome != "" && *claudeHome != *clientHome {
+		fmt.Fprintln(os.Stderr, "skillctl: --home and --claude-home name the same thing and "+
+			"were given different directories; pass one")
+		return exitUsage
+	}
+	if *claudeHome == "" {
+		*claudeHome = *clientHome
+	}
 	home, err := resolveAgentHome(*agentName, *claudeHome)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skillctl: %v\n", err)
 		return exitUsage
+	}
+
+	// Where the copies live is decided once, from the client's table entry and the home in
+	// front of us. A loose-skills client with no readable root is not a machine with nothing
+	// installed — it is a machine this run cannot describe — so it says so rather than
+	// printing a clean report about directories it never opened.
+	var looseRoots []marketplace.SkillRoot
+	if known, err := lookupAgent(*agentName); err == nil && known.Layout == layoutLooseSkills {
+		looseRoots = looseSkillRoots(known, home)
+		if len(looseRoots) == 0 {
+			fmt.Fprintf(os.Stderr, "skillctl: no skill directory found for %s under %s; "+
+				"nothing here could be checked\n", known.Name, home)
+			return exitUsage
+		}
 	}
 
 	if subscriptions, err := loadSubscriptions(); err == nil && len(subscriptions) == 0 {
@@ -354,7 +436,7 @@ func runSync(args []string) int {
 	}
 
 	managed, code := RunManagedCheck(home, ManagedCheckOptions{
-		Restore: !*report, Offline: *offline, UpdateSource: !*offline,
+		Restore: !*report, Offline: *offline, UpdateSource: !*offline, looseRoots: looseRoots,
 	})
 	if code != exitClean {
 		return code
@@ -362,8 +444,21 @@ func runSync(args []string) int {
 
 	var loose LooseSkillCheck
 	var drift []skillDrift
-	if trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys()); err == nil {
-		loose, drift, _ = verifyEverySkillReporting(trusted, true)
+	looseCode := exitClean
+	// An explicit client directory is an isolated scope, including in the demo.
+	// Do not discover loose skills in the caller's actual project or home.
+	if *claudeHome == "" {
+		roots, err := optionalSkillRoots(baseDirectories())
+		if err != nil {
+			return fail(err)
+		}
+		if len(roots) > 0 {
+			trusted, err := attest.LoadTrustedKeys(defaultTrustedKeys())
+			if err != nil {
+				return fail(err)
+			}
+			loose, drift, looseCode = verifySkillRootsReporting(trusted, true, roots)
+		}
 	}
 	reportManaged := managed
 	if known, err := lookupAgent(*agentName); err == nil && known.Managed {
@@ -384,11 +479,47 @@ func runSync(args []string) int {
 			fmt.Printf("  %s\n", line)
 		}
 	}
-	return writeReconcileReport(managed.Results, managed.Unusable, home, *report)
+	code = writeReconcileReport(managed.Results, managed.Unusable, home, *report,
+		checkedRoots(looseRoots)...)
+	if looseCode != exitClean {
+		fmt.Fprintln(os.Stderr, "skillctl: local skills outside the plugin cache need attention; run skillctl attest verify for details")
+		if code == exitClean {
+			return looseCode
+		}
+	}
+	return code
 }
 
+// checkedRoots names the directories a loose-skills run actually read, for the line that
+// tells a person where the check happened. Empty for a plugin-cache client, whose one tree
+// the report can name by itself.
+func checkedRoots(roots []marketplace.SkillRoot) []string {
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, root.Path)
+	}
+	return paths
+}
+
+// reportedName is how one result is addressed in a report: the skill, prefixed by the copy it
+// belongs to when there is more than one. "aws-readonly" on a host with three profiles names
+// three different files, and a person cannot act on a line that does not say which.
+func reportedName(result marketplace.Result) string {
+	if result.Copy == "" {
+		return result.Plugin
+	}
+	return result.Copy + "/" + result.Plugin
+}
+
+// writeReconcileReport prints what a reconciliation found.
+//
+// checkedIn names the directories that were read, and is given only by a client whose skills
+// do not live in a plugin cache. It is variadic because every caller that had nothing to say
+// about it was already correct, and making them all pass an empty argument would be churn in
+// exchange for nothing.
 func writeReconcileReport(
 	results []marketplace.Result, unusable []string, claudeHome string, reportOnly bool,
+	checkedIn ...string,
 ) int {
 	for _, failure := range unusable {
 		fmt.Fprintf(os.Stderr, "skillctl: a marketplace could not be used, so its plugins "+
@@ -405,24 +536,13 @@ func writeReconcileReport(
 			unresolved++
 		}
 
-		fmt.Printf("  %-13s %s   (%s)\n", result.Outcome, result.Plugin, result.Marketplace)
+		fmt.Printf("  %-13s %s   (%s)\n", result.Outcome, reportedName(result), result.Marketplace)
 		if result.Detail != "" {
 			fmt.Printf("                %s\n", result.Detail)
 		}
 		switch result.Outcome {
 		case marketplace.OutcomeRestored:
-			if result.Lapsed {
-				// Their copy is already in quarantine, so "adopt this" would adopt the
-				// publisher's bytes - the opposite of what they want. The detail above
-				// has already said what happened; all that helps here is the diff.
-				break
-			}
 			fmt.Printf("                this copy had been changed here and was put back\n")
-			// --from-quarantine, not a plain adopt: the restore above has already happened,
-			// so the person's bytes are in quarantine and adopting what is installed now
-			// would adopt the published copy — a hint that fails for everyone who takes it.
-			fmt.Printf("                to keep your version instead: "+
-				"skillctl adopt %s --from-quarantine --because \"...\"\n", result.Plugin)
 		case marketplace.OutcomeAdapted:
 			// The reason is the whole reason to print this line. Without it a person
 			// reading their own machine six months on sees a divergence and no account
@@ -436,37 +556,47 @@ func writeReconcileReport(
 				result.Version, result.Installed)
 		}
 		if result.Quarantine != "" {
-			fmt.Printf("                kept at %s\n", result.Quarantine)
-			// Both versions are on disk and nobody would guess the second path. Without
-			// this line, re-applying a patch across an upstream release is archaeology:
-			// find the quarantine directory, work out where the new copy landed, and
-			// diff them by hand. It is the difference between a chore and a paste.
-			fmt.Printf("                see what changed: diff -ru %s %s\n",
-				result.Quarantine,
-				marketplace.InstalledPath(claudeHome, result.Marketplace, result.Plugin, result.Version))
+			fmt.Printf("                kept at %q\n", result.Quarantine)
+			if result.ClientHome == "" {
+				// This argument is the actual checked cache root, never a guessed client.
+				result.ClientHome = claudeHome
+			}
+			writeQuarantineNotice(os.Stdout, result)
 		}
 	}
 
-	verified, absent := 0, 0
+	verified, absent, restored, adapted := 0, 0, 0, 0
 	for _, result := range results {
 		switch result.Outcome {
 		case marketplace.OutcomeVerified:
 			verified++
 		case marketplace.OutcomeAbsent:
 			absent++
+		case marketplace.OutcomeRestored:
+			restored++
+		case marketplace.OutcomeAdapted:
+			adapted++
 		}
 	}
 	if acted > 0 {
 		fmt.Println()
 	}
-	// Absent is counted out loud so the three numbers add up to the first one. They did not
-	// before: a machine following catalogs that sign sixteen plugins, none of them installed
-	// here, was told "16 signed plugins · 0 verified · 0 needing attention" — every figure
-	// correct, and the whole line read as a clean verification of sixteen things.
-	fmt.Printf("%d signed plugin%s · %d verified · %d not installed here · %d needing attention\n",
-		len(results), plural(len(results), "", "s"), verified, absent, acted)
-	fmt.Printf("checked in %s; anything unsigned there is not this tool's business.\n",
-		marketplace.CacheRoot(claudeHome))
+	// Completed actions get their own counts. Restoring a plugin is not an unresolved
+	// finding, and it is not a subsequent clean verification either.
+	fmt.Printf("%d signed plugin%s · %d verified · %d not installed here",
+		len(results), plural(len(results), "", "s"), verified, absent)
+	if restored > 0 {
+		fmt.Printf(" · %d restored", restored)
+	}
+	if adapted > 0 {
+		fmt.Printf(" · %d kept by choice", adapted)
+	}
+	fmt.Printf(" · %d needing attention\n", unresolved)
+	where := marketplace.CacheRoot(claudeHome)
+	if len(checkedIn) > 0 {
+		where = strings.Join(checkedIn, ", ")
+	}
+	fmt.Printf("checked in %s; anything unsigned there is not this tool's business.\n", where)
 
 	// And said in words when the count alone would still be read as reassurance. This is the
 	// same failure the note below describes for an unreadable marketplace — a run that

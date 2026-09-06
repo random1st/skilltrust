@@ -218,7 +218,7 @@ func runSetup(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	out := setupResult{Status: "configured", Clients: []setupClient{}, NextAction: nextAction{"connect", "user", "Restart your agent and ask: Connect this computer to Axela. Finish its browser approval, then let the agent verify installed skills and report delivery."}}
+	out := setupResult{Status: "configured", Clients: []setupClient{}, NextAction: nextAction{"choose_source", "user", "Restart your agent and ask: Help me follow signed skills without an account. If your team uses Axela, ask: Connect this computer to Axela. If you already follow a catalog, ask it to check your skills."}}
 	for _, name := range []string{"claude", "codex"} {
 		if *client != "auto" && *client != name {
 			continue

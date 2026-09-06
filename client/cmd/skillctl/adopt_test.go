@@ -1,7 +1,7 @@
 package main
 
 import (
-	"os"
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -15,28 +15,23 @@ import (
 // and each one that is not shows a divergence with no account of it, which is precisely the
 // state adopting exists to replace. Two of the four had already been missed once.
 func TestEverySurfaceShowsWhyAPluginWasAdopted(t *testing.T) {
-	sources := map[string]string{
-		"the sync report":        "sync.go",
-		"the session-start hook": "sessionhook.go",
-		"the pre-skill hook":     "preskill.go",
-		"the fleet event":        "events.go",
+	result := marketplace.Result{Marketplace: "acme", Plugin: "runbook", Outcome: marketplace.OutcomeAdapted,
+		Adapted: "Our staging URL needs a different port", Detail: "This is not the reason"}
+	var preSkill bytes.Buffer
+	if code := decideTo(result, false, &preSkill); code != exitClean {
+		t.Fatalf("an accepted local change was blocked: %d", code)
 	}
-	for surface, file := range sources {
-		body, err := os.ReadFile("cmd/skillctl/" + file)
-		if err != nil {
-			body, err = os.ReadFile(file)
-		}
-		if err != nil {
-			t.Fatalf("%s: %v", surface, err)
-		}
-		text := string(body)
-		if !strings.Contains(text, "OutcomeAdapted") {
-			t.Errorf("%s (%s) does not handle an adopted plugin at all", surface, file)
-			continue
-		}
-		if !strings.Contains(text, "result.Adapted") {
-			t.Errorf("%s (%s) handles adoption but never shows the reason, which lives in "+
-				"Adapted rather than Detail", surface, file)
+	events := collectEvents([]marketplace.Result{result}, nil, time.Now())
+	if len(events) != 1 {
+		t.Fatalf("missing adoption event: %+v", events)
+	}
+	for surface, text := range map[string]string{
+		"sync":      capture(t, func() { writeReconcileReport([]marketplace.Result{result}, nil, t.TempDir(), false) }),
+		"session":   capture(t, func() { writeSessionReport([]marketplace.Result{result}, nil, false) }),
+		"pre-skill": preSkill.String(), "fleet": events[0].Detail,
+	} {
+		if !strings.Contains(text, result.Adapted) {
+			t.Errorf("%s omitted the actual reason: %s", surface, text)
 		}
 	}
 }
@@ -86,25 +81,18 @@ func TestAdoptionIsRefusedForWhatItCannotDescribe(t *testing.T) {
 // the command that keeps it has to be — in every message that reports an undo, not in help
 // text they would have had to find before they knew they needed it.
 func TestLosingYourWorkTellsYouHowToKeepIt(t *testing.T) {
-	for surface, file := range map[string]string{
-		"the sync report":        "sync.go",
-		"the session-start hook": "sessionhook.go",
-		"the pre-skill hook":     "preskill.go",
-	} {
-		body, err := os.ReadFile("cmd/skillctl/" + file)
-		if err != nil {
-			body, err = os.ReadFile(file)
-		}
-		if err != nil {
-			t.Fatalf("%s: %v", surface, err)
-		}
-		text := string(body)
-		if !strings.Contains(text, "OutcomeRestored") {
-			continue // this surface does not report an undo
-		}
-		if !strings.Contains(text, "skillctl adopt %s") {
-			t.Errorf("%s (%s) undoes someone's work without telling them how to keep it",
-				surface, file)
+	f := newRecoveryFixture(t)
+	saved, digest := f.keep(t, "intentional change\n", time.Now())
+	result := marketplace.Result{Marketplace: "acme", Plugin: "runbook", Version: "1.0.0", ClientHome: f.home,
+		Outcome: marketplace.OutcomeRestored, Quarantine: saved, OnDisk: digest}
+	var preSkill bytes.Buffer
+	if code := decideTo(result, false, &preSkill); code != exitClean {
+		t.Fatalf("restored, verified plugin was blocked: %d", code)
+	}
+	for _, want := range []string{"skillctl diff runbook", "skillctl adopt runbook", "--quarantine-digest " + digest,
+		nextCommandText([]string{"--quarantine", saved})} {
+		if !strings.Contains(preSkill.String(), want) {
+			t.Errorf("pre-skill restoration omitted %q: %s", want, preSkill.String())
 		}
 	}
 }
@@ -115,18 +103,15 @@ func TestLosingYourWorkTellsYouHowToKeepIt(t *testing.T) {
 // the new copy landed, compare them by hand. This is the one place the tool can turn that
 // into a paste, and it is the whole of what exists for keeping a patch across updates.
 func TestBeingReplacedShowsHowToSeeWhatChanged(t *testing.T) {
-	body, err := os.ReadFile("cmd/skillctl/sync.go")
-	if err != nil {
-		body, err = os.ReadFile("sync.go")
+	f := newRecoveryFixture(t)
+	saved, digest := f.keep(t, "old intentional change\n", time.Now())
+	result := marketplace.Result{Marketplace: "acme", Plugin: "runbook", Version: "1.0.0", ClientHome: f.home,
+		Outcome: marketplace.OutcomeRestored, Quarantine: saved, OnDisk: digest, Lapsed: true}
+	text := capture(t, func() { writeReconcileReport([]marketplace.Result{result}, nil, f.home, false) })
+	if !strings.Contains(text, "skillctl diff runbook") || !strings.Contains(text, nextCommandText([]string{"--quarantine", saved})) {
+		t.Fatalf("lapsed change has no exact comparison: %s", text)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(body)
-	if !strings.Contains(text, "diff -ru") {
-		t.Error("a replaced copy is reported without any way to see what changed")
-	}
-	if !strings.Contains(text, "marketplace.InstalledPath(") {
-		t.Error("the diff names no second path, so the reader still has to find it")
+	if strings.Contains(text, "skillctl adopt") {
+		t.Fatalf("suggested adopting an obsolete change onto a new publisher version: %s", text)
 	}
 }

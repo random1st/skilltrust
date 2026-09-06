@@ -164,7 +164,7 @@ func TestMachineStatusWillNotInventAConnectionFromConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := inspectMachine(time.Now())
-	if out.Status != "not_connected" || out.NextAction.Code != "connect" {
+	if out.Status == "local_checked" || out.Status == "connected" || out.NextAction.Code != "check_skills" {
 		t.Fatalf("configuration became success: %+v", out)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,14 +23,15 @@ const Lifetime = 15 * time.Minute
 const MaxBytes = 8192
 
 type Request struct {
-	Version     int       `json:"version"`
-	Audience    string    `json:"audience"`
-	Nonce       string    `json:"nonce"`
-	PublicKey   string    `json:"public_key"`
-	Machine     string    `json:"machine"`
-	TokenDigest string    `json:"token_digest"`
-	IssuedAt    time.Time `json:"issued_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	Version      int       `json:"version"`
+	Audience     string    `json:"audience"`
+	Nonce        string    `json:"nonce"`
+	PublicKey    string    `json:"public_key"`
+	Machine      string    `json:"machine"`
+	Organisation string    `json:"organisation,omitempty"`
+	TokenDigest  string    `json:"token_digest"`
+	IssuedAt     time.Time `json:"issued_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 type Catalog struct {
@@ -37,6 +39,7 @@ type Catalog struct {
 	Repository string `json:"repository"`
 	Ref        string `json:"ref,omitempty"`
 	URL        string `json:"url"`
+	Access     string `json:"access,omitempty"`
 }
 
 // Connection contains public configuration only. Receiving it is not evidence
@@ -127,8 +130,13 @@ func Verify(envelope *attest.Envelope, audience string, now time.Time) (*Request
 	if len(request.Machine) == 0 || len(request.Machine) > 100 || strings.ContainsAny(request.Machine, "\r\n\x00") {
 		return nil, "", fmt.Errorf("give this computer a short name")
 	}
+	if request.Organisation != "" && !organisationName.MatchString(request.Organisation) {
+		return nil, "", fmt.Errorf("connection request has an invalid team; start the subscription again")
+	}
 	return &request, attest.KeyID(key), nil
 }
+
+var organisationName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // ID uses the signed payload so harmless JSON formatting changes do not create
 // a second approval. The signature is always verified before this id is used.

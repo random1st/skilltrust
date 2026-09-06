@@ -152,8 +152,8 @@ func runDemo(args []string) int {
 			// exitFindings is the answer here, not a failure: it is how the check says a
 			// machine drifted, and a demo that treated it as an error would be reporting
 			// its own success as a fault.
-			if code := runSync([]string{"--report-only", "--claude-home", client}); code == exitUsage {
-				return code
+			if code := runSync([]string{"--report-only", "--claude-home", client}); code != exitFindings {
+				return fail(fmt.Errorf("the demo expected the changed plugin to be detected (exit %d), got %d", exitFindings, code))
 			}
 			return exitClean
 		}},
@@ -162,7 +162,14 @@ func runDemo(args []string) int {
 			if code := runSync([]string{"--claude-home", client}); code == exitUsage {
 				return code
 			}
-			return verifyDemoRestored(client)
+			if code := verifyDemoRestored(client); code != exitClean {
+				return code
+			}
+			demoSay("skillctl sync --report-only")
+			if code := runSync([]string{"--report-only", "--claude-home", client}); code != exitClean {
+				return fail(fmt.Errorf("the restored demo plugin did not pass its final check (exit %d)", code))
+			}
+			return exitClean
 		}},
 		{"7. What was filed about it", func() int {
 			return showDemoEvidence(home)

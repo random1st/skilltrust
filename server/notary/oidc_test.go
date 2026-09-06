@@ -53,6 +53,8 @@ type tokenSpec struct {
 	issuer     string
 	audience   any
 	repository string
+	visibility string
+	commit     string
 	ref        string
 	expiry     time.Time
 }
@@ -73,10 +75,15 @@ func (i *issuer) mint(t *testing.T, spec tokenSpec) string {
 	}
 
 	header, _ := json.Marshal(map[string]string{"alg": spec.algorithm, "kid": "test-key"})
-	claims, _ := json.Marshal(map[string]any{
+	claimValues := map[string]any{
 		"iss": spec.issuer, "aud": spec.audience,
 		"exp": spec.expiry.Unix(), "repository": spec.repository, "ref": spec.ref,
-	})
+		"sha": spec.commit,
+	}
+	if spec.visibility != "" {
+		claimValues["repository_visibility"] = spec.visibility
+	}
+	claims, _ := json.Marshal(claimValues)
 	signing := base64.RawURLEncoding.EncodeToString(header) + "." +
 		base64.RawURLEncoding.EncodeToString(claims)
 	digest := sha256.Sum256([]byte(signing))
@@ -93,6 +100,35 @@ func withOIDC(f *fixture, i *issuer, repositories ...string) *fixture {
 	f.orgs["acme"] = org
 	f.service.WithOIDC(&OIDCVerifier{JWKSURL: i.server.URL})
 	return f
+}
+
+func TestRepositoryVisibilityComesFromVerifiedOIDCClaims(t *testing.T) {
+	i := newIssuer(t)
+	f := withOIDC(newFixture(t), i, "acme/marketplace")
+	for _, visibility := range []string{"public", "private", "internal", ""} {
+		t.Run("visibility="+visibility, func(t *testing.T) {
+			spec := tokenSpec{repository: "acme/marketplace", ref: "refs/heads/main", commit: strings.Repeat("a", 40), visibility: visibility}
+			_, where, err := f.service.AuthorizeOIDC("acme", i.mint(t, spec), time.Now())
+			if err != nil || where.RepositoryVisibility != visibility || where.Commit != spec.commit {
+				t.Fatalf("verified provenance = %+v, %v", where, err)
+			}
+		})
+	}
+	token := i.mint(t, tokenSpec{repository: "acme/marketplace", visibility: "private"})
+	parts := strings.Split(token, ".")
+	payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	parts[1] = base64.RawURLEncoding.EncodeToString([]byte(strings.Replace(string(payload), `"private"`, `"public"`, 1)))
+	if _, where, err := f.service.AuthorizeOIDC("acme", strings.Join(parts, "."), time.Now()); err == nil || where.RepositoryVisibility != "" {
+		t.Fatalf("tampered public claim was trusted: %+v, %v", where, err)
+	}
+	gate := &refusingGate{}
+	f.service.WithGate(gate)
+	if response := f.publish(t, "publish-token", f.signedCatalog(t, 1)); response.StatusCode != http.StatusOK {
+		t.Fatalf("static publish = %s", response.Status)
+	}
+	if gate.seen.RepositoryVisibility != "" {
+		t.Fatalf("static credential invented visibility: %+v", gate.seen)
+	}
 }
 
 // The point of the whole feature: a workflow of the registered repository publishes with

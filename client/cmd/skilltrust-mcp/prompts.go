@@ -16,10 +16,10 @@ import (
 func (s *server) addPrompts(m *mcp.Server) {
 	m.AddPrompt(&mcp.Prompt{
 		Name:        "set_up_this_machine",
-		Title:       "Connect this machine to Axela or follow signed skills manually",
-		Description: "The hosted Axela path first, then the manual self-hosted path when there is no console.",
+		Title:       "Follow signed skills or join your Axela team",
+		Description: "Account-free setup for a publisher's catalog, or browser-approved connection when a team service is requested.",
 		Arguments: []*mcp.PromptArgument{
-			{Name: "service_url", Description: "Axela base URL for the normal hosted connect flow"},
+			{Name: "service_url", Description: "Axela base URL when the user wants to join a team"},
 			{Name: "catalog_url", Description: "HTTPS URL of the signed catalog, if a notary serves it"},
 			{Name: "repository", Description: "git URL of the repository holding the skills"},
 		},
@@ -53,58 +53,62 @@ func (s *server) setUpMachine(_ context.Context, request *mcp.GetPromptRequest) 
 		connectArgs = "with service_url set to " + service
 	}
 
+	local := `Follow a publisher without an account (including a local or self-hosted notary):
+
+Keep the target client consistent: for Codex pass agent=codex to skilltrust_check and
+skilltrust_sync, and client=codex to skilltrust_install_hook. These tools default to Claude.
+
+1. Obtain the publisher's public key and repository from a source the user trusts.
+   For a notary, also obtain its public key and catalog URL. Do not invent keys or learn
+   the verification key from the signed catalog itself.
+
+2. Use skilltrust_subscribe with the publisher keys in public_keys and the notary keys in
+   notary_keys. Leave threshold unset to require every distinct signer. Subscription
+   creates the local machine key if needed; do not replace any existing key.
+
+3. Run skilltrust_check before installing or restoring anything. An expired, revoked or
+   unverifiable catalog stops this path. An expired catalog needs renewal by its publisher
+   with the original signing key; signing in or lowering the threshold does not repair it.
+
+4. If no approved plugin is installed, use the client's native marketplace and plugin
+   installation commands for the chosen publisher. Run skilltrust_check again afterwards.
+   A successful subscription or zero checked plugins is not successful protection.
+   Review changed files with the user before using skilltrust_sync to restore them.
+
+5. After a nonempty check succeeds, call skilltrust_install_hook with apply=false, show the
+   change, then apply=true once authorized. Finally use skilltrust_status with refresh=true.
+   Report the checked skills and the hook state. Local verification needs no cloud receipt.`
+
+	hosted := fmt.Sprintf(`Join an existing Axela team, when requested by the user:
+
+1. Use skilltrust_connect %s. It creates or reuses the machine key, returns browser approval
+   and configures catalogs and reporting after approval. It never returns a private key or
+   reporting token.
+
+2. If pending, use the approval URL in a browser already signed into Axela, confirm there,
+   and run skilltrust_connect again. Resume a saved pending connection rather than creating
+   another one. If no team is available, the account-free path is still available; do not
+   create a publisher organisation just to follow someone else's skills.
+
+3. Do not report this machine as protected or fully connected until status is connected:
+   this requires a nonempty current check and the matching cloud receipt.`, connectArgs)
+
+	first, second := local, hosted
+	if service != "" {
+		first, second = hosted, local
+	}
 	return prompt("Setting up SkillTrust on this machine", fmt.Sprintf(`Set this machine up to follow signed skills%s.
 
-Read skilltrust://state first. It says what is already done, and its next_step field names
-the one thing to do now. Setting up a machine that is already set up is the common failure
-here, because every step succeeds a second time.
+Read skilltrust://state first and follow its next_step for existing setup. Preserve saved
+team connection records. A pending approval does not prevent choosing local subscriptions
+without a team. A team connection is only needed when the user requests that service.
 
-If this machine is joining hosted Axela, use the normal path first:
+%s
 
-1. skilltrust_connect %s. This starts or resumes the real browser-approved connection,
-   creates or reuses the machine key, and returns only safe fields such as the approval URL,
-   key fingerprint, dashboard URL, and connection status. It does not return the private key
-   or the reporting token.
+%s
 
-2. If skilltrust_connect returns status pending, open the approval URL in a browser already
-   signed into Axela, approve it there, and run skilltrust_connect again. Pending means the
-   browser step or the first acknowledgement has not finished yet.
-
-3. Do not report this machine as protected or fully connected until skilltrust_connect says
-   status connected. Before that, Axela has not yet acknowledged the exact first check.
-
-Use the manual path below only for a local or self-hosted notary, or when you are debugging
-why Axela connect could not finish:
-
-4. skilltrust_init, unless state says a signing key exists. This key signs the events this
-   machine files; its public half is what an administrator pins to believe them.
-
-5. skilltrust_trust_key for each key you were given, with a label naming who it belongs to.
-   Pin before subscribing. The keys must come from somewhere you already trust — a key taken
-   from the catalog it is meant to verify makes the signature a formality, because a catalog
-   that can supply its own key can replace itself.
-
-   With a hosted notary there are two keys: the publisher's and the notary's. Both are
-   pinned, and the point of the pair is that neither alone is enough.
-
-6. skilltrust_subscribe with every key you pinned — the publisher's in public_keys, the
-   notary's in notary_keys. The split matters: a notary that is rotating has two keys, and
-   passed as ordinary public keys they would count as two separate signers, so the notary's
-   own two signatures would satisfy a threshold of two with no publisher at all. Leave
-   threshold unset; this server defaults it to every signer you passed. Setting it to 1
-   with two signers pinned means either alone publishes — the situation the second key was
-   pinned to prevent, and nothing will ever report it as wrong.
-
-7. skilltrust_check. It writes nothing. Read what it says before restoring anything: a
-   difference is not necessarily an attack, and the copy on disk may be work someone has
-   not committed.
-
-8. skilltrust_install_hook with apply=false, show the change, then apply=true. Without this,
-   verification happens when someone remembers, which is not a security property.
-
-Say which path you used and what status it reached. Do not report the machine as protected if
-skilltrust_connect is still pending or if the hook was not applied — checking on demand and
-checking every session are different claims.`, target, connectArgs))
+Say which route was used and what was actually checked. An unapplied hook, an empty check or
+an unusable catalog is unfinished setup.`, target, first, second))
 }
 
 func (s *server) publishRepository(_ context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {

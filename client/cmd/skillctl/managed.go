@@ -29,6 +29,13 @@ type Subscription struct {
 	Name       string `json:"name"`
 	Repository string `json:"repository"`
 	Ref        string `json:"ref,omitempty"`
+	// CatalogName binds subscriptions resolved from a signed public descriptor to
+	// the publisher's catalog identity. Legacy subscriptions may use a local alias.
+	CatalogName string `json:"catalog_name,omitempty"`
+	// Team access is re-authorized for every check or install. These fields bind
+	// the URI, not a cached permission or source download URL.
+	AxelaURI string `json:"axela_uri,omitempty"`
+	Access   string `json:"access,omitempty"`
 	// CatalogURL, when set, is where the signed index is fetched from instead of the
 	// repository — a notary service that countersigns and serves the catalog. The
 	// repository remains the source of the plugin bytes; splitting the two is what lets a
@@ -251,10 +258,14 @@ func saveSubscriptions(subscriptions []Subscription) error {
 func runSubscribe(args []string) int {
 	flags := flag.NewFlagSet("subscribe", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl subscribe [flags] <git-url>\n\n"+
+		fmt.Fprintf(flags.Output(), "Usage: %s subscribe axela://team/catalog\n"+
+			"       %s subscribe [flags] <git-url>\n\n"+
+			"An Axela address follows a signed catalog. Public catalogs need no account;\n"+
+			"team catalogs reuse your connection or open browser approval for that team. It verifies\n"+
+			"the publisher, notary and repository before saving the subscription.\n\n"+
 			"Follows an organisation's skill catalog. The publisher's key is pinned now,\n"+
 			"from a file you already trust; it is never taken from the catalog itself.\n\n"+
-			"Exit codes: %d subscribed, %d error.\n\nFlags:\n", exitClean, exitUsage)
+			"Exit codes: %d subscribed, %d error.\n\nFlags:\n", commandName(), commandName(), exitClean, exitUsage)
 		flags.PrintDefaults()
 	}
 
@@ -274,12 +285,33 @@ func runSubscribe(args []string) int {
 			"which is what makes a single stolen key insufficient")
 
 	if err := parseArgs(flags, args); err != nil {
+		if err == flag.ErrHelp {
+			return exitClean
+		}
 		return exitUsage
 	}
-	if flags.NArg() != 1 || len(keyPaths)+len(notaryKeyPaths) == 0 {
+	if flags.NArg() != 1 {
 		flags.Usage()
 		return exitUsage
 	}
+	if strings.HasPrefix(strings.ToLower(flags.Arg(0)), "axela:") {
+		if flags.NFlag() != 0 {
+			fmt.Fprintf(os.Stderr, "%s: an Axela address supplies its signed settings; do not combine it with manual subscription flags\n", commandName())
+			return exitUsage
+		}
+		return runPublicSubscribe(flags.Arg(0))
+	}
+	if len(keyPaths)+len(notaryKeyPaths) == 0 {
+		flags.Usage()
+		return exitUsage
+	}
+	lockContext, cancelLock := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLock()
+	unlock, err := acquireConsumerState(lockContext)
+	if err != nil {
+		return fail(err)
+	}
+	defer unlock()
 
 	repository := flags.Arg(0)
 	catalogName := *name
@@ -294,6 +326,15 @@ func runSubscribe(args []string) int {
 		fmt.Fprintf(os.Stderr, "skillctl: %q is not usable as a catalog name; letters, "+
 			"digits, dashes and underscores only\n", catalogName)
 		return exitUsage
+	}
+	currentSubscriptions, err := loadSubscriptions()
+	if err != nil {
+		return fail(err)
+	}
+	for _, existing := range currentSubscriptions {
+		if existing.Name == catalogName && existing.Access != "" {
+			return fail(fmt.Errorf("%s uses team access; update it with %s subscribe %s", catalogName, commandName(), existing.AxelaURI))
+		}
 	}
 
 	pin := func(path, label string) (string, error) {
@@ -397,6 +438,8 @@ func runSubscribe(args []string) int {
 			// reset KeysSeen would re-open the replay window on key-set announcements.
 			entry.Parties = mergeParties(existing.Parties, entry.Parties, entry.Keys())
 			entry.KeysSeen = existing.KeysSeen
+			entry.CatalogName = existing.CatalogName
+			entry.AxelaURI, entry.Access = existing.AxelaURI, existing.Access
 			subscriptions[index] = entry
 			replaced = true
 		}
@@ -467,6 +510,9 @@ func fetchCatalog(subscription Subscription) (source.Source, error) {
 }
 
 func fetchCatalogContext(ctx context.Context, subscription Subscription) (source.Source, error) {
+	if subscription.Access != "" || legacyAxelaSubscription(subscription) {
+		return source.Source{}, fmt.Errorf("%s requires its authenticated Axela source; run %s doctor", subscription.Name, commandName())
+	}
 	return source.FetchContext(ctx, catalogRoot(), subscription.Name,
 		subscription.Repository, subscription.Ref)
 }
@@ -512,6 +558,9 @@ func readSnapshotPath(
 	}
 	if err := subscription.Satisfied(signers); err != nil {
 		return nil, err
+	}
+	if subscription.CatalogName != "" && snapshot.Name != subscription.CatalogName {
+		return nil, fmt.Errorf("the signed catalog belongs to %q, not the subscribed %q", snapshot.Name, subscription.CatalogName)
 	}
 	if persist {
 		if err := sequenceState.Save(snapshotStatePath(subscription), snapshot.Sequence, now); err != nil {

@@ -42,6 +42,15 @@ type Adoption struct {
 	// version the catalog signs now, never digests the old install, and the record sits in
 	// `adopt --list` looking alive. Empty on records written before this field existed.
 	Version string `json:"version,omitempty"`
+	// Copy names which copy of the skill this covers, for a client that keeps more than one —
+	// one per agent profile, say. Empty means every copy, which is what every record written
+	// by a person means and what a client with a single copy always has.
+	//
+	// It is never written to the adoptions file by any command here. What needs it is an
+	// adoption derived from something else on the machine — a curator's ledger vouching for
+	// one profile's edit — which is synthesized per run and must not quiet a differently
+	// edited copy of the same skill next door.
+	Copy string `json:"copy,omitempty"`
 	// Reason is required. An adoption with no reason cannot be told apart from a mistake,
 	// and a year later cannot be told apart from a decision nobody remembers making.
 	Reason string `json:"reason"`
@@ -49,12 +58,31 @@ type Adoption struct {
 
 // Find returns the adoption for a plugin, if this machine has one.
 func (a Adoptions) Find(marketplace, plugin string) (Adoption, bool) {
+	return a.FindCopy(marketplace, plugin, "")
+}
+
+// FindCopy returns the adoption covering one copy of a plugin.
+//
+// A record naming this exact copy wins; otherwise a record naming no copy applies, because
+// that is what every record written before copies existed means and what a person adopting on
+// a single-copy client intends. The order matters in one direction only: a copy-specific
+// record must never be answered for a copy it does not name, or a decision about one profile
+// would silently cover another.
+func (a Adoptions) FindCopy(marketplace, plugin, copy string) (Adoption, bool) {
+	var general Adoption
+	found := false
 	for _, entry := range a.Entries {
-		if entry.Marketplace == marketplace && entry.Plugin == plugin {
+		if entry.Marketplace != marketplace || entry.Plugin != plugin {
+			continue
+		}
+		if entry.Copy == copy {
 			return entry, true
 		}
+		if entry.Copy == "" && !found {
+			general, found = entry, true
+		}
 	}
-	return Adoption{}, false
+	return general, found
 }
 
 // Record adds or replaces an adoption and returns the updated set.

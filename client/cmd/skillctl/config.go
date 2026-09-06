@@ -39,7 +39,17 @@ func defaultAdoptions() string   { return homePath("adopted.json") }
 // different machine than the one the agent is running on.
 func skillRoots() []string {
 	var roots []string
-	for _, base := range baseDirectories() {
+	for _, candidate := range skillRootCandidates(baseDirectories()) {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
+}
+
+func skillRootCandidates(bases []string) []string {
+	var roots []string
+	for _, base := range bases {
 		// `.agents/skills` first: it is the cross-client location, and Codex and Amp both
 		// read it alongside their own. The per-client ones follow, one per known agent, so
 		// adding a client to the table in agents.go is the whole change.
@@ -48,10 +58,7 @@ func skillRoots() []string {
 			suffixes = append(suffixes, filepath.Join(known.HomeDir, known.SkillDir))
 		}
 		for _, suffix := range suffixes {
-			candidate := filepath.Join(base, suffix)
-			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-				roots = append(roots, candidate)
-			}
+			roots = append(roots, filepath.Join(base, suffix))
 		}
 		// And the directories no fixed path can name. Antigravity CLI lets a repository
 		// register skills anywhere through a skills.json, so for that client the set is a
@@ -65,6 +72,34 @@ func skillRoots() []string {
 		}
 	}
 	return roots
+}
+
+// A plugin-only installation need not have loose skills. Only absence is optional:
+// unreadable directories and broken discovery must not become a clean empty check.
+func optionalSkillRoots(bases []string) ([]string, error) {
+	var roots []string
+	seen := make(map[string]bool)
+	for _, candidate := range skillRootCandidates(bases) {
+		info, err := os.Stat(candidate)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("%s is not a skills directory", candidate)
+		}
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[resolved] {
+			seen[resolved] = true
+			roots = append(roots, resolved)
+		}
+	}
+	return roots, nil
 }
 
 // baseDirectories are the places a client would look for project and user configuration.

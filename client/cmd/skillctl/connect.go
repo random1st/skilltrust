@@ -70,6 +70,7 @@ type savedConnect struct {
 	NotaryKeys    []string             `json:"notary_keys,omitempty"`
 	Catalogs      []enrollment.Catalog `json:"catalogs,omitempty"`
 	ConnectedAt   time.Time            `json:"connected_at"`
+	IdentityOnly  bool                 `json:"identity_only,omitempty"`
 }
 
 type connectStatusFile struct {
@@ -525,6 +526,16 @@ func saveBootstrapSubscriptions(base string, connection *enrollment.Connection) 
 			Threshold:  threshold,
 			Parties:    parties,
 		}
+		if listed.Access != "" {
+			if listed.Access != "team" || base != connectDefaultBaseURL || !catalogNameOK.MatchString(connection.Organisation) {
+				return nil, fmt.Errorf("%s has an unsupported team access binding", name)
+			}
+			entry.AxelaURI = "axela://" + connection.Organisation + "/" + name
+			entry.Access, entry.CatalogName = "team", name
+			if _, err := teamSubscriptionURI(entry); err != nil {
+				return nil, err
+			}
+		}
 		if err := upsertBootstrapSubscription(&subscriptions, entry); err != nil {
 			return nil, err
 		}
@@ -582,6 +593,18 @@ func mergeBootstrapSubscription(existing, entry Subscription) (Subscription, err
 	}
 	entry.Parties = mergeParties(existing.Parties, entry.Parties, entry.Keys())
 	entry.KeysSeen = existing.KeysSeen
+	if existing.CatalogName != "" {
+		entry.CatalogName = existing.CatalogName
+	}
+	if existing.AxelaURI != "" {
+		if entry.AxelaURI != "" && entry.AxelaURI != existing.AxelaURI || existing.Access != "" && entry.Access != "" && entry.Access != existing.Access {
+			return Subscription{}, fmt.Errorf("%s already follows another Axela access binding", entry.Name)
+		}
+		entry.AxelaURI = existing.AxelaURI
+		if existing.Access != "" {
+			entry.Access = existing.Access
+		}
+	}
 	if entry.Required() > entry.signerCount() {
 		return Subscription{}, fmt.Errorf("%s requires %d signer(s) but only %d remain pinned",
 			entry.Name, entry.Required(), entry.signerCount())
@@ -715,7 +738,7 @@ func installManagedHooks() ([]string, []string) {
 func detectManagedAgents() []agent {
 	var detected []agent
 	for _, known := range agents {
-		if !known.Managed || known.Hooks == nil {
+		if known.Layout != layoutPluginCache || known.Hooks == nil {
 			continue
 		}
 		if info, err := os.Stat(known.Home()); err == nil && info.IsDir() {
@@ -793,6 +816,10 @@ func pollUntilConnected(base string, pending *pendingConnect, wait time.Duration
 }
 
 func pollConnectStatus(base string, pending *pendingConnect) (*enrollment.Connection, bool, error) {
+	return pollConnectStatusWithClient(connectHTTPClient(connectTimeout), base, pending)
+}
+
+func pollConnectStatusWithClient(client *http.Client, base string, pending *pendingConnect) (*enrollment.Connection, bool, error) {
 	body, err := json.Marshal(pending.Envelope)
 	if err != nil {
 		return nil, false, err
@@ -804,7 +831,7 @@ func pollConnectStatus(base string, pending *pendingConnect) (*enrollment.Connec
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+pending.Token)
 
-	response, err := connectHTTPClient(connectTimeout).Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, false, err
 	}
@@ -937,6 +964,10 @@ func ensurePendingConnect(base, machine string, current *pendingConnect, now tim
 }
 
 func createPendingConnect(base, machine string, now time.Time) (*pendingConnect, bool, error) {
+	return createPendingConnectFor(base, machine, "", now)
+}
+
+func createPendingConnectFor(base, machine, organisation string, now time.Time) (*pendingConnect, bool, error) {
 	key, public, _, err := ensureSigningKey(gitIdentity())
 	if err != nil {
 		return nil, false, err
@@ -951,12 +982,13 @@ func createPendingConnect(base, machine string, now time.Time) (*pendingConnect,
 		return nil, false, err
 	}
 	request := enrollment.Request{
-		Audience:    base,
-		Nonce:       nonce,
-		Machine:     machine,
-		TokenDigest: secretDigest(token),
-		IssuedAt:    now,
-		ExpiresAt:   now.Add(enrollment.Lifetime),
+		Organisation: organisation,
+		Audience:     base,
+		Nonce:        nonce,
+		Machine:      machine,
+		TokenDigest:  secretDigest(token),
+		IssuedAt:     now,
+		ExpiresAt:    now.Add(enrollment.Lifetime),
 	}
 	envelope, err := enrollment.Sign(request, key)
 	if err != nil {

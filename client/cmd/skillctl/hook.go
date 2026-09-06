@@ -90,12 +90,23 @@ func runHookInstall(args []string) int {
 	}
 
 	client := flags.String("client", "claude", "target client: claude, codex or cursor")
+	// Every other command spells this --agent. Accepting both here costs one line and spares
+	// somebody the discovery that the flag they just used elsewhere is not the flag here.
+	agentName := flags.String("agent", "", "target client (same as --client)")
 	settings := flags.String("settings", "", "settings file to modify (default the client's user settings)")
 	apply := flags.Bool("apply", false, "write the change instead of printing it")
 	remove := flags.Bool("uninstall", false, "remove skillctl hooks instead of adding them")
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
+	}
+	if *agentName != "" {
+		if *client != "claude" && *client != *agentName {
+			fmt.Fprintln(os.Stderr, "skillctl: --agent and --client name the same thing and "+
+				"were given different clients; pass one")
+			return exitUsage
+		}
+		*client = *agentName
 	}
 	target, err := lookupAgent(*client)
 	if err != nil {
@@ -121,9 +132,14 @@ func runHookInstall(args []string) int {
 	// the one state this project exists to prevent — a machine that looks configured and
 	// checks nothing — so it says what is true and writes nothing. Removal above still
 	// works, in case an earlier version put something there.
+	//
+	// It exits non-zero because a request that could not be carried out is not a success. A
+	// setup script that installs a hook per client and reads exit codes would otherwise
+	// record this one as installed, which is the "looks configured, is not running" state in
+	// its most durable form: written down.
 	if target.Hooks == nil {
 		fmt.Printf("nothing to install for %s\n\n%s\n", target.Name, target.NoHooksBecause)
-		return exitClean
+		return exitUsage
 	}
 
 	specs := target.Hooks(executablePath())
@@ -214,6 +230,13 @@ func applyClaudeHooks(path string, specs []hookSpec) ([]hookSpec, error) {
 	var added []hookSpec
 	for _, spec := range specs {
 		existing, _ := hooks[spec.Event].([]any)
+		if upgradeClaudeWarningHook(existing, spec) {
+			// Upgrade only the exact command this installer used to write. Keep
+			// sibling hooks, timeout options and every unrelated setting intact.
+			hooks[spec.Event] = existing
+			added = append(added, spec)
+			continue
+		}
 		if hookAlreadyPresent(existing, spec.Command) {
 			continue
 		}
@@ -229,6 +252,34 @@ func applyClaudeHooks(path string, specs []hookSpec) ([]hookSpec, error) {
 		return nil, err
 	}
 	return added, nil
+}
+
+func upgradeClaudeWarningHook(groups []any, spec hookSpec) bool {
+	legacy, wantsJSON := strings.CutSuffix(spec.Command, " --claude-json")
+	if spec.Event != "SessionStart" || !wantsJSON || !strings.HasSuffix(legacy, " hook session-start") {
+		return false
+	}
+	changed := false
+	for _, group := range groups {
+		mapping, ok := group.(map[string]any)
+		if !ok {
+			continue
+		}
+		matcher, _ := mapping["matcher"].(string)
+		if matcher != spec.Matcher {
+			continue
+		}
+		entries, _ := mapping["hooks"].([]any)
+		for _, entry := range entries {
+			hook, ok := entry.(map[string]any)
+			if !ok || hook["type"] != "command" || hook["command"] != legacy {
+				continue
+			}
+			hook["command"] = spec.Command
+			changed = true
+		}
+	}
+	return changed
 }
 
 // removeClaudeHooks strips every entry whose command mentions needle, so what setup wrote

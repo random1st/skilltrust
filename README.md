@@ -25,7 +25,28 @@ machine installed from it, put back anything that changed, and revoke one plugin
 
 Everything outside a signed marketplace is left alone. Not scanned, not restored, not counted.
 
-## See it in a minute
+## Check your existing skills
+
+After [installing the client](https://github.com/random1st/skilltrust/blob/main/docs/install.md), run:
+
+```bash
+axela doctor
+```
+
+It shows what is already installed, what matches an approval, what changed, and what has
+no approval, followed by the next command. No account, subscription or signing key is needed
+for this first result. It does not approve, install or restore your skills. Unapproved skills
+are reported separately from verified ones; finding nothing is not a successful verification.
+
+If your machine already follows a publisher, the same command refreshes its existing status.
+With MCP configured, ask your agent to check your skills; it uses `skilltrust_status` with
+`refresh=true` for the same result.
+
+## Try checking and restoring in a sandbox
+
+On macOS use Homebrew below. For Linux or Windows, follow the
+[installation instructions](https://github.com/random1st/skilltrust/blob/main/docs/install.md),
+then run `skillctl demo`.
 
 ```bash
 brew install random1st/tap/skillctl
@@ -94,6 +115,26 @@ skillctl marketplace sign ./acme-marketplace
 ```
 
 ## For the machine
+
+### Without an account
+
+Follow a publisher's signed skills on your own machine; an Axela team is optional.
+[Install SkillTrust](https://github.com/random1st/skilltrust/blob/main/docs/install.md),
+run `skillctl setup`, restart your agent and ask: "Help me follow signed skills
+without an account." Give it the publisher's repository and public key, plus the
+notary key and catalog URL when used. The agent can subscribe, check the installed
+skills and add session checks.
+
+For a first catalog, the [axela-skills instructions](https://github.com/random1st/axela-skills#install-verified)
+include the public keys and native Claude installation steps. A subscription
+alone does not install a plugin. Finish with a nonempty check and the session hook
+applied. A refused or expired catalog must be repaired by its publisher before
+that path can finish; `skillctl demo` remains available without an account or network.
+
+`skillctl status --refresh` checks the followed skills locally. It distinguishes
+local verification from an Axela report receipt and names the next action.
+
+### With your Axela team
 
 If your team uses Axela, start with:
 
@@ -506,8 +547,8 @@ It offers three things, and the tools are the least interesting of them:
   order and the reasons for it.
 - **Tools** — thin wrappers over the commands below. `skilltrust_check` reports and writes
   nothing; `skilltrust_sync` is marked destructive because it restores files. Subscribing
-  defaults the threshold to the number of keys pinned, which is where the CLI's default of
-  one is a trap. `skilltrust_verify_skills` covers everything a marketplace does not: it is
+  requires every distinct signer by default, just like the CLI. `skilltrust_verify_skills`
+  covers everything a marketplace does not: it is
   the only tool here that answers "are these the approved bytes?" for a skill that arrived
   from a repository or a copy, which on Cursor and Antigravity is all of them.
 

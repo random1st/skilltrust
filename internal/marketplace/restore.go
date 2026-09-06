@@ -3,6 +3,7 @@ package marketplace
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,12 +60,27 @@ func restoreBuilt(
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(staging)
+	keepStaging := false
+	defer func() {
+		if !keepStaging {
+			_ = os.RemoveAll(staging)
+		}
+	}()
 
 	unpacked := filepath.Join(staging, "payload")
 	if _, err := archive.ExtractVerified(
 		built.Payload, unpacked, built.Digest, PluginLimits()); err != nil {
 		return "", err
+	}
+	var moved []string
+	rollBackManaged := func(cause error) error {
+		if err := returnClientManaged(installed, unpacked, moved); err != nil {
+			// A concurrent client may have recreated an entry. Keep both copies instead of
+			// overwriting its new data or letting deferred staging cleanup delete ours.
+			keepStaging = true
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
 
 	// Carry across what the client maintains, before anything is moved aside. Copying rather
@@ -72,22 +88,45 @@ func restoreBuilt(
 	// safe because the directory it comes from is about to be quarantined anyway.
 	for _, name := range ClientManagedRoots {
 		from := filepath.Join(installed, name)
-		if _, err := os.Lstat(from); err != nil {
+		if _, err := os.Lstat(from); os.IsNotExist(err) {
 			continue
+		} else if err != nil {
+			return "", rollBackManaged(fmt.Errorf("cannot read %s: %w", name, err))
 		}
 		if err := os.Rename(from, filepath.Join(unpacked, name)); err != nil {
-			return "", fmt.Errorf("cannot preserve %s: %w", name, err)
+			return "", rollBackManaged(fmt.Errorf("cannot preserve %s: %w", name, err))
 		}
+		moved = append(moved, name)
 	}
 
 	quarantined, err := quarantine(installed, quarantineRoot, name, now)
 	if err != nil {
-		return "", err
+		return "", rollBackManaged(err)
 	}
 	if err := os.Rename(unpacked, installed); err != nil {
-		return "", err
+		keepStaging = true
+		return "", fmt.Errorf("cannot install restored plugin: %w; original copy is in %s, "+
+			"client-managed data is preserved in %s", err, quarantined, unpacked)
 	}
 	return quarantined, nil
+}
+
+// returnClientManaged undoes the preparation when quarantine refuses a restore. Never
+// replace an entry a running client has recreated; leave that saved copy in staging and
+// return its path so the caller also knows not to delete the staging directory.
+func returnClientManaged(installed, staged string, moved []string) error {
+	var failed error
+	for i := len(moved) - 1; i >= 0; i-- {
+		from, to := filepath.Join(staged, moved[i]), filepath.Join(installed, moved[i])
+		if _, err := os.Lstat(to); !os.IsNotExist(err) {
+			failed = errors.Join(failed, fmt.Errorf("cannot return %s to %s; saved data remains in %s", moved[i], to, from))
+			continue
+		}
+		if err := os.Rename(from, to); err != nil {
+			failed = errors.Join(failed, fmt.Errorf("cannot return %s: %w; saved data remains in %s", moved[i], err, from))
+		}
+	}
+	return failed
 }
 
 // signedTree builds the archive of what a publisher signs: git-tracked files, without the
@@ -199,8 +238,21 @@ func writeMaterializedMarketplace(
 // published bytes being discarded are re-materialisable from the marketplace checkout, so
 // nothing is quarantined here.
 func Reclaim(quarantined, installed string) error {
+	quarantined, err := canonicalInstalledTarget(quarantined)
+	if err != nil {
+		return fmt.Errorf("nothing to take back: %w", err)
+	}
 	if _, err := os.Stat(quarantined); err != nil {
 		return fmt.Errorf("nothing to take back: %w", err)
+	}
+	if isBoundQuarantine(quarantined) {
+		target, err := canonicalInstalledTarget(installed)
+		if err != nil {
+			return err
+		}
+		if err := checkQuarantineProvenance(quarantined, target, ""); err != nil {
+			return err
+		}
 	}
 	for _, name := range ClientManagedRoots {
 		from := filepath.Join(installed, name)
@@ -215,31 +267,4 @@ func Reclaim(quarantined, installed string) error {
 		return err
 	}
 	return os.Rename(quarantined, installed)
-}
-
-// quarantine moves a directory aside under a timestamped name, never replacing one already
-// there: the earlier directory is the earlier evidence.
-func quarantine(directory, root, name string, now time.Time) (string, error) {
-	if root == "" {
-		return "", fmt.Errorf("no quarantine directory configured; refusing to replace %s "+
-			"without keeping what was there", directory)
-	}
-	base := filepath.Join(root, name+"-"+now.Format("20060102T150405Z"))
-	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
-		return "", err
-	}
-	target := base
-	for attempt := 1; ; attempt++ {
-		if _, err := os.Lstat(target); os.IsNotExist(err) {
-			break
-		}
-		if attempt > 100 {
-			return "", fmt.Errorf("cannot find an unused quarantine name beside %s", base)
-		}
-		target = fmt.Sprintf("%s-%d", base, attempt)
-	}
-	if err := os.Rename(directory, target); err != nil {
-		return "", err
-	}
-	return target, nil
 }

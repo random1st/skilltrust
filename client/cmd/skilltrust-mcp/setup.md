@@ -13,9 +13,36 @@ prove the skill is safe, correct, or does what its description says. Nothing her
 what a skill does. Reporting a verified skill as "safe" is the one wrong sentence to say
 about this tool.
 
-## The normal hosted path
+## Check what is already installed first
 
-On hosted Axela, the normal consumer setup is `skilltrust_connect`. It wraps the real
+When the user asks for a first verdict, call `skilltrust_status` with `refresh=true`.
+It also works without an account, subscription or pinned keys. Show the inventory's
+found, verified, changed, unapproved and error counts, each skill's name and path, its
+scope, and the next command.
+No approval is not a successful verification. An empty inventory is not protection.
+Do not create keys, sign skills, choose a publisher or install hooks just to show this
+first result. The terminal equivalent is `axela doctor` (`skillctl doctor` remains an
+alias). When no team is connected, omit cloud report delivery from the answer: it is
+not part of this local check.
+
+## Follow signed skills without an account
+
+For a publisher's repository, use `skilltrust_subscribe` with the publisher's public key,
+and the notary key and catalog URL when used. No Axela team or account is required.
+The subscription creates a local machine key if needed. It does not install a plugin.
+
+Use `skilltrust_check` before installation and after the native client installs the chosen
+plugin. A zero-plugin check does not complete setup. A refused or expired catalog requires
+the publisher to repair or renew it with the original signer; do not change the trust pins
+or send the consumer through team signup as a recovery step.
+
+Install the session hook only after a nonempty check succeeds. Use `skilltrust_status` with
+`refresh=true` for the current check and remaining setup steps. Local verification and hook
+installation do not require a cloud receipt.
+
+## Join an existing Axela team
+
+When the user requests a team connection, use `skilltrust_connect`. It wraps the real
 `skillctl connect` flow: creates or reuses the machine key, returns the public approval URL,
 stores the reporting credential locally only after approval, bootstraps the catalog
 subscriptions, installs the managed session hooks it can see, and runs the first check.
@@ -30,10 +57,10 @@ browser step. Do not say this machine is fully connected or protected until it s
 
 Every step succeeds out of order. That is why the order is written down.
 If you are using hosted Axela, that order is normally wrapped inside `skilltrust_connect`.
-The manual steps below are for local or self-hosted setups, and for understanding what the
-hosted flow is doing on the machine.
+The steps below also support following a public publisher without an account. They explain
+what the hosted flow does on the machine.
 
-**Key before anything.** `skilltrust_init` creates the signing key. Its public half is what a
+**Key before signing.** `skilltrust_init` creates the signing key. Its public half is what a
 publisher registers and an administrator pins. Running init twice is safe; it will not
 replace an existing key, because replacing it would unpin this machine everywhere it is
 trusted, silently.
@@ -47,7 +74,8 @@ alone is accepted. Everything verifies. Nothing ever reports it. The second key 
 that a single stolen key would not be enough, and a threshold of 1 gives exactly that back.
 When there are two keys, the number is 2.
 
-**Check before sync.** `skilltrust_check` writes nothing. A difference is not necessarily an
+**Check before sync.** `skilltrust_check` saves its caches and check result, but does not
+install or restore skills. A difference is not necessarily an
 attack — it is often someone's uncommitted work in an installed skill. `skilltrust_sync`
 restores the signed version and keeps the copy it replaced, but a person who is not told
 where their edit went will conclude the tool ate it.
@@ -89,7 +117,8 @@ review. Never replace a missing key as a shortcut.
 `skillctl setup` registers this local MCP integration through Claude Code or Codex's native
 CLI. This one integration handles machine setup and publishing. The cloud MCP is optional.
 Use `skilltrust_status` to read the last check, or `refresh=true` for a current check and
-report. An empty installation or an unacknowledged report is not successful setup.
+report. An empty installation is not successful setup. For a hosted team connection, the report
+must also be acknowledged.
 
 ## Where things live
 

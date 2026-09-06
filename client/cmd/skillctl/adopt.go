@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,22 +14,19 @@ import (
 func runAdopt(args []string) int {
 	flags := flag.NewFlagSet("adopt", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: skillctl adopt [flags] <plugin>\n\n"+
-			"Keeps a change you made to a signed skill, instead of having it put back.\n\n"+
-			"Editing a skill to suit your setup is ordinary, and without this the check\n"+
-			"treats it as tampering: your copy goes to quarantine and the published one\n"+
-			"returns, every session. Adopting records that these exact bytes are yours.\n\n"+
-			"It is not an off switch. The record names the bytes you adopted and the\n"+
-			"version you adopted them from, so if the file changes again, or the publisher\n"+
-			"ships a new version, checking resumes and says so. Your machine reports an\n"+
-			"adopted plugin like any other finding.\n\n"+
-			"  skillctl adopt deploy-runbook --because \"our staging URL, not theirs\"\n"+
-			"  skillctl adopt deploy-runbook --from-quarantine --because \"...\"\n"+
-			"                                            # take back a change a check put back\n"+
-			"  skillctl adopt deploy-runbook --forget    # go back to the published copy\n"+
-			"  skillctl adopt --list\n\n"+
+		fmt.Fprintf(flags.Output(), "Usage: %s adopt [flags] <plugin>\n\n"+
+			"Keep an intentional local change to a signed skill. If a check already put\n"+
+			"the published version back, diff reviews your saved copy and prints the\n"+
+			"exact command to recover it.\n\n"+
+			"The record applies to these exact bytes and this published version. Another\n"+
+			"edit or a publisher update resumes checking; adapted skills remain visible\n"+
+			"in your machine's report.\n\n"+
+			"  %s adopt deploy-runbook --because \"our staging URL\"\n"+
+			"  %s diff deploy-runbook                  # review a saved change first\n"+
+			"  %s adopt deploy-runbook --forget        # restore on the next check\n"+
+			"  %s adopt --list\n\n"+
 			"Exit codes: %d done, %d nothing matched, %d usage error.\n\nFlags:\n",
-			exitClean, exitFindings, exitUsage)
+			commandName(), commandName(), commandName(), commandName(), commandName(), exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 	because := flags.String("because", "",
@@ -40,13 +36,21 @@ func runAdopt(args []string) int {
 	forget := flags.Bool("forget", false,
 		"drop the record, so the published copy is restored on the next check")
 	fromQuarantine := flags.Bool("from-quarantine", false,
-		"put the newest quarantined copy of the plugin back first, then adopt it — "+
-			"the way to keep a change a check has already put back")
+		"recover the newest saved copy for this installation (legacy; use diff to select reviewed bytes)")
+	quarantined := flags.String("quarantine", "", "exact saved copy shown by diff")
+	reviewedDigest := flags.String("quarantine-digest", "", "reviewed payload digest printed by diff (required with --quarantine)")
 	list := flags.Bool("list", false, "print what this machine has adopted")
 	claudeHome := flags.String("claude-home", "", "Claude Code directory (default ~/.claude)")
 
 	if err := parseArgs(flags, args); err != nil {
+		if err == flag.ErrHelp {
+			return exitClean
+		}
 		return exitUsage
+	}
+	if (*fromQuarantine && *quarantined != "") || (*reviewedDigest != "" && *quarantined == "") ||
+		((*list || *forget) && (*fromQuarantine || *quarantined != "")) {
+		return fail(fmt.Errorf("use --quarantine with its reviewed --quarantine-digest, without --from-quarantine, --forget or --list"))
 	}
 
 	adoptions, err := marketplace.LoadAdoptions(defaultAdoptions())
@@ -79,13 +83,16 @@ func runAdopt(args []string) int {
 	// The reason is required at the point of decision, not asked for later. An adoption
 	// with no reason cannot be told apart from a mistake, and in a year cannot be told
 	// apart from a decision nobody remembers making.
-	if strings.TrimSpace(*because) == "" {
+	if strings.TrimSpace(*because) == "" && (*quarantined == "" || *reviewedDigest != "") {
 		fmt.Fprintf(os.Stderr, "skillctl: say why, so the record is worth reading later:\n"+
 			"  skillctl adopt %s --because \"what you changed and why\"\n", name)
 		return exitUsage
 	}
 
-	home := *claudeHome
+	home, err := recoveryHome(*claudeHome)
+	if err != nil {
+		return fail(err)
+	}
 
 	// The digests come from the same reconciliation sync runs, not from a second reading
 	// of the tree. Two ways of computing an identity is how one of them ends up quietly
@@ -95,9 +102,15 @@ func runAdopt(args []string) int {
 		return code
 	}
 
-	if *fromQuarantine {
-		if code := reclaimFromQuarantine(results, home, *marketplaceName, name); code != exitClean {
-			return code
+	if *fromQuarantine || *quarantined != "" {
+		var recoveryCode int
+		if *quarantined != "" {
+			recoveryCode = reclaimExactQuarantine(results, home, *marketplaceName, name, *quarantined, *reviewedDigest)
+		} else {
+			recoveryCode = reclaimFromQuarantine(results, home, *marketplaceName, name)
+		}
+		if recoveryCode != exitClean {
+			return recoveryCode
 		}
 		// The tree just changed under the earlier reconciliation, so its digests describe
 		// a directory that no longer exists. Recompute rather than adopt stale bytes.
@@ -113,11 +126,16 @@ func runAdopt(args []string) int {
 		// The refusal is correct and still a dead end: after a restore the bytes worth
 		// adopting are in quarantine, and the person was sent here by a hint that did not
 		// say so. Point at the door instead of just closing this one.
-		if errors.Is(err, errAlreadyPublished) && !*fromQuarantine {
-			if _, ok := newestQuarantine(name); ok {
-				fmt.Fprintf(os.Stderr, "  an earlier copy of it is in quarantine; to take "+
-					"that back and keep it:\n  skillctl adopt %s --from-quarantine --because %q\n",
-					name, *because)
+		if errors.Is(err, errAlreadyPublished) && !*fromQuarantine && *quarantined == "" {
+			published, _ := match(results, *marketplaceName, name)
+			installed := marketplace.InstalledPath(home, published.Marketplace, name, published.Version)
+			if saved, ok, err := marketplace.NewestQuarantine(quarantineRoot(), installed, name); err != nil {
+				fmt.Fprintf(os.Stderr, "  %v\n", err)
+			} else if ok {
+				published.ClientHome = home
+				command, _ := quarantineCommands(published, saved, "", "")
+				fmt.Fprintln(os.Stderr, "  an earlier copy is in quarantine; review it before taking it back:")
+				printNextCommand(command)
 			}
 		}
 		return exitFindings
@@ -141,6 +159,41 @@ func runAdopt(args []string) int {
 	fmt.Println("\nYour machine will keep these bytes and report them as adapted. If they " +
 		"change again,\nor the publisher ships a new version, it starts checking this " +
 		"plugin again and says so.")
+	return exitClean
+}
+
+func reclaimExactQuarantine(
+	results []marketplace.Result, home, marketplaceName, plugin, quarantined, reviewedDigest string,
+) int {
+	found, err := match(results, marketplaceName, plugin)
+	if err != nil {
+		return fail(err)
+	}
+	found.ClientHome = home
+	installed := marketplace.InstalledPath(home, found.Marketplace, plugin, found.Version)
+	selected, payload, err := marketplace.QuarantinePayload(quarantined, installed, plugin)
+	if err != nil {
+		return fail(err)
+	}
+	if reviewedDigest == "" {
+		fmt.Println("Review this saved copy first; diff prints a command bound to its exact bytes.")
+		command, _ := quarantineCommands(found, selected, "", "")
+		printNextCommand(command)
+		return exitFindings
+	}
+	if payload.Digest != reviewedDigest {
+		return fail(fmt.Errorf("the saved copy changed since review; run diff again before adopting it"))
+	}
+	if found.Outcome != marketplace.OutcomeVerified {
+		return fail(fmt.Errorf("installed %q is %s; preserve its current state before recovering another copy", plugin, found.Outcome))
+	}
+	if err := recoveryAllowed(found, payload.Digest); err != nil {
+		return fail(err)
+	}
+	if err := marketplace.ReclaimVerified(selected, installed, plugin, reviewedDigest, found.Signed); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("took back   %q, from %q\n", plugin, selected)
 	return exitClean
 }
 
@@ -171,47 +224,21 @@ func reclaimFromQuarantine(
 			"place to put a quarantined copy back\n", plugin, found.Version)
 		return exitFindings
 	}
-	quarantined, ok := newestQuarantine(plugin)
+	installed := marketplace.InstalledPath(claudeHome, found.Marketplace, plugin, found.Version)
+	quarantined, ok, err := marketplace.NewestQuarantine(quarantineRoot(), installed, plugin)
+	if err != nil {
+		return fail(err)
+	}
 	if !ok {
 		fmt.Fprintf(os.Stderr, "skillctl: nothing quarantined for %s in %s\n",
 			plugin, quarantineRoot())
 		return exitFindings
 	}
-	installed := marketplace.InstalledPath(claudeHome, found.Marketplace, plugin, found.Version)
-	if err := marketplace.Reclaim(quarantined, installed); err != nil {
+	_, payload, err := marketplace.QuarantinePayload(quarantined, installed, plugin)
+	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("%-11s %s, from %s\n", "took back", plugin, quarantined)
-	return exitClean
-}
-
-// newestQuarantine finds the most recent quarantined copy of a plugin. The directory names
-// embed a UTC timestamp, so the lexicographically last one is the latest.
-func newestQuarantine(plugin string) (string, bool) {
-	entries, err := os.ReadDir(quarantineRoot())
-	if err != nil {
-		return "", false
-	}
-	prefix := plugin + "-"
-	best := ""
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
-			continue
-		}
-		// The suffix must look like a timestamp, or the quarantined copy of a plugin named
-		// "run" would claim everything quarantined for "run-tests".
-		rest := entry.Name()[len(prefix):]
-		if len(rest) < 8 || rest[0] < '0' || rest[0] > '9' {
-			continue
-		}
-		if entry.Name() > best {
-			best = entry.Name()
-		}
-	}
-	if best == "" {
-		return "", false
-	}
-	return filepath.Join(quarantineRoot(), best), true
+	return reclaimExactQuarantine(results, claudeHome, marketplaceName, plugin, quarantined, payload.Digest)
 }
 
 // pick finds the one plugin being adopted, and refuses rather than guessing when the name

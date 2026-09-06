@@ -45,6 +45,50 @@ func rules(report *Report) map[string]Severity {
 
 const validHeader = "---\nname: demo\ndescription: A demo skill. Use when demonstrating.\n---\n"
 
+func TestDiscoverReportsBrokenChildrenWithoutChangingSkips(t *testing.T) {
+	root := writeSkill(t, "demo", validHeader+"\nJust prose.\n", nil)
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, name := range []string{"broken-child", ".git", "node_modules"} {
+		if err := os.Symlink(missing, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readme := filepath.Join(root, "README.md")
+	if err := os.WriteFile(readme, []byte("Ordinary file."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(readme, filepath.Join(root, "linked-file")); err != nil {
+		t.Fatal(err)
+	}
+	directories, notes := Discover(root, Options{})
+	if len(directories) != 1 || directories[0] != filepath.Join(root, "demo") {
+		t.Fatalf("readable skills or ordinary file skips changed: %v", directories)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "broken-child") || !strings.Contains(notes[0], "cannot inspect") {
+		t.Fatalf("broken child must produce one note; ignored directories must stay ignored: %v", notes)
+	}
+}
+
+func TestDiscoverReportsDeniedChildren(t *testing.T) {
+	root := writeSkill(t, "demo", validHeader+"\nJust prose.\n", nil)
+	blocked := writeSkill(t, "unavailable", validHeader+"\nPrivate skill.\n", nil)
+	child := filepath.Join(root, "denied-child")
+	if err := os.Symlink(filepath.Join(blocked, "unavailable"), child); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+	if _, err := os.Stat(child); !os.IsPermission(err) {
+		t.Skipf("this runner does not enforce denied traversal: %v", err)
+	}
+	directories, notes := Discover(root, Options{})
+	if len(directories) != 1 || len(notes) != 1 || !strings.Contains(notes[0], "denied-child") {
+		t.Fatalf("denied child became complete coverage: directories=%v, notes=%v", directories, notes)
+	}
+}
+
 func TestCleanSkillProducesNoFindings(t *testing.T) {
 	root := writeSkill(t, "demo", validHeader+"\nJust prose.\n", nil)
 

@@ -83,7 +83,7 @@ func callText(t *testing.T, session *mcp.ClientSession, name string, args map[st
 }
 
 // The threshold default is the whole reason this server exists rather than a page of
-// instructions. skillctl defaults it to 1, so two pinned keys accept either one alone —
+// instructions. A default of 1 would let two pinned keys accept either one alone —
 // everything verifies, forever, and nothing reports it. Two keys must mean two signatures
 // unless the caller says otherwise.
 func TestSubscribeDefaultsThresholdToTheNumberOfKeys(t *testing.T) {
@@ -222,8 +222,8 @@ func TestStateOnAnEmptyMachine(t *testing.T) {
 	if current.HasSigningKey {
 		t.Fatal("an empty home has no signing key")
 	}
-	if !strings.Contains(current.NextStep, "skilltrust_connect") {
-		t.Fatalf("the first step on an empty machine is the connection journey, got: %s", current.NextStep)
+	if !strings.Contains(current.NextStep, "skilltrust_status") || !strings.Contains(current.NextStep, "refresh=true") || strings.Contains(current.NextStep, "skilltrust_connect") {
+		t.Fatalf("an empty machine needs an installed-skills verdict before setup, got: %s", current.NextStep)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestSetupGuideKeepsTheHonestLimit(t *testing.T) {
 	for _, claim := range []string{
 		"does not prove the skill is safe",
 		"This is detection, not enforcement",
-		"normal consumer setup is `skilltrust_connect`",
+		"No Axela team or account is required",
 		"rerun it after the browser step",
 	} {
 		if !strings.Contains(flat, claim) {

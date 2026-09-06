@@ -169,14 +169,19 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 		var status struct {
 			Status     string `json:"status"`
 			NextAction *struct {
+				Code   string `json:"code"`
 				Detail string `json:"detail"`
 			} `json:"next_action"`
 		}
 		if json.Unmarshal(current.Connection, &status) == nil {
-			if status.NextAction != nil {
+			localApprovals := current.Approvals > 0 && len(current.Subscriptions) == 0 && status.Status == "not_connected" && status.NextAction != nil && status.NextAction.Code == "subscribe"
+			firstVerdict := current.Approvals == 0 && len(current.Subscriptions) == 0 && status.Status == "not_connected" && status.NextAction != nil && status.NextAction.Code == "subscribe"
+			if status.NextAction != nil && !localApprovals && !firstVerdict {
 				current.NextStep = mcpNextStep(status.NextAction.Detail)
 			} else if status.Status == "connected" {
 				current.NextStep = "The last check passed and Axela acknowledged it. Use skilltrust_status with refresh=true for a current check."
+			} else if status.Status == "local_checked" {
+				current.NextStep = "The followed skills were checked locally. No Axela account or cloud receipt is required for this path. Use skilltrust_status with refresh=true for a current check."
 			}
 		}
 	}
@@ -194,11 +199,30 @@ func (s *server) readState(ctx context.Context, request *mcp.ReadResourceRequest
 // steps here are order-dependent in a way the command names do not show: subscribing before
 // pinning the publisher's key succeeds and follows a catalog nothing can verify.
 func nextStep(current state) string {
-	return "Run skilltrust_connect to start or resume the browser-approved team connection. It creates the key, pins the approved team keys, follows catalogs and verifies the first installed skill and report. Use manual pinning only for an explicitly requested self-hosted setup."
+	if len(current.Subscriptions) > 0 {
+		return "Run skilltrust_status with refresh=true to check the followed skills locally and see the next action. A subscription alone does not mean an installed skill was checked."
+	}
+	if current.Approvals > 0 {
+		return "Run skilltrust_verify_skills to check local skills against their saved approvals. No account is required."
+	}
+	return "Run skilltrust_status with refresh=true to check the skills already installed without an account. Show the inventory and its next command before asking for a publisher, key or team. Do not discuss cloud report delivery when no team is connected."
 }
 
 func mcpNextStep(detail string) string {
-	return strings.NewReplacer("skillctl status --refresh", "skilltrust_status with refresh=true", "skillctl connect", "skilltrust_connect", "skillctl publish --renew", "skilltrust_publish with renew=true", "skillctl report flush", "skilltrust_status with refresh=true").Replace(detail)
+	return strings.NewReplacer(
+		"skillctl hook install --client codex --apply", "skilltrust_install_hook with client=codex and apply=true",
+		"skillctl hook install --client claude --apply", "skilltrust_install_hook with client=claude and apply=true",
+		"skillctl sync --agent codex --report-only", "skilltrust_check with agent=codex",
+		"skillctl sync --report-only --agent codex", "skilltrust_check with agent=codex",
+		"skillctl sync --agent claude --report-only", "skilltrust_check with agent=claude",
+		"skillctl sync --report-only --agent claude", "skilltrust_check with agent=claude",
+		"skillctl status --refresh", "skilltrust_status with refresh=true",
+		"skillctl sync --report-only", "skilltrust_check",
+		"skillctl hook install --apply", "skilltrust_install_hook with apply=true",
+		"skillctl subscribe", "skilltrust_subscribe", "skillctl connect", "skilltrust_connect",
+		"skillctl publish --renew", "skilltrust_publish with renew=true",
+		"skillctl report flush", "skilltrust_status with refresh=true",
+	).Replace(detail)
 }
 
 // readFile serves a file under the home, and serves the empty document rather than an error

@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/random1st/skilltrust/catalog"
 )
 
 // ManifestPath is where a marketplace repository keeps its catalog.
@@ -140,6 +142,29 @@ func CacheRoot(claudeHome string) string {
 // InstalledPath is the directory a given plugin version is installed into.
 func InstalledPath(claudeHome, marketplaceName, pluginName, version string) string {
 	return filepath.Join(CacheRoot(claudeHome), marketplaceName, pluginName, version)
+}
+
+// PluginCache locates what a marketplace client installed: one copy per plugin, in the
+// directory named by the version the catalog signs.
+//
+// This is the only Locator that knows about versions, because it is the only layout that has
+// them. When the signed release is not there but another is, that is reported as a copy with
+// no path rather than as an absence — the two are different findings and the difference is
+// only visible from here.
+func PluginCache(claudeHome, marketplaceName string) Locator {
+	return func(managed catalog.Managed) []InstalledCopy {
+		installed := InstalledPath(claudeHome, marketplaceName, managed.Name, managed.Version)
+		if _, err := os.Stat(installed); os.IsNotExist(err) {
+			others := InstalledVersions(claudeHome, marketplaceName, managed.Name)
+			if len(others) == 0 {
+				return nil
+			}
+			return []InstalledCopy{{OtherVersion: others[0]}}
+		}
+		// Any other stat failure is left to the digest, which reports it as unverifiable
+		// with the reason attached rather than as a plugin nobody installed.
+		return []InstalledCopy{{Path: installed}}
+	}
 }
 
 // InstalledVersions lists the versions of a plugin present in the cache, so a report can say

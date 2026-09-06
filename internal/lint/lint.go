@@ -269,7 +269,11 @@ func Discover(root string, options Options) ([]string, []string) {
 			// Stat rather than trusting the entry type, so a symlink pointing at a
 			// directory is followed and one pointing at a file is not.
 			target, err := os.Stat(path)
-			if err != nil || !target.IsDir() {
+			if err != nil {
+				notes = append(notes, "cannot inspect "+path+": "+err.Error())
+				continue
+			}
+			if !target.IsDir() {
 				continue
 			}
 			stack = append(stack, entry{path: path, depth: current.depth + 1})
