@@ -12,12 +12,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/random1st/skilltrust/attest"
 	"github.com/random1st/skilltrust/catalog"
+	"github.com/random1st/skilltrust/internal/archive"
+	"github.com/random1st/skilltrust/internal/lint"
 	"github.com/random1st/skilltrust/internal/marketplace"
 	"github.com/random1st/skilltrust/internal/source"
 	publicsubscription "github.com/random1st/skilltrust/subscription"
@@ -474,6 +478,12 @@ func containsPublicKeyID(ids []string, wanted string) bool {
 }
 
 func verifyPublicSubscriptionSource(repository string, snapshot *catalog.Snapshot) (int, int, error) {
+	// Both published shapes are checked against the index by the rule that built it.
+	// A repository of skills has no native manifest to load, and holding it to one
+	// refused exactly the catalogs `catalog publish` signs.
+	if _, err := os.Stat(filepath.Join(repository, filepath.FromSlash(marketplace.ManifestPath))); errors.Is(err, os.ErrNotExist) {
+		return verifyPublicSubscriptionSkills(repository, snapshot)
+	}
 	manifest, err := marketplace.Load(repository)
 	if err != nil {
 		return 0, 0, fmt.Errorf("the published source is not a usable plugin marketplace: %w", err)
@@ -507,4 +517,49 @@ func verifyPublicSubscriptionSource(repository string, snapshot *catalog.Snapsho
 		uncovered += len(names)
 	}
 	return len(snapshot.Skills), uncovered, nil
+}
+
+// verifyPublicSubscriptionSkills holds a delivered skills repository to its index:
+// every signed skill sits at its published path with its published digest, and the
+// source presents no skill the catalog does not publish. The digest is rebuilt the
+// way `catalog publish` computed it, so the two cannot drift apart quietly.
+func verifyPublicSubscriptionSkills(repository string, snapshot *catalog.Snapshot) (int, int, error) {
+	if len(snapshot.Skills) == 0 {
+		return 0, 0, fmt.Errorf("the signed catalog publishes no skills")
+	}
+	discovered, _ := lint.Discover(filepath.Join(repository, source.SkillsSubdirectory), lint.Options{})
+	delivered := map[string]bool{}
+	for _, directory := range discovered {
+		relative, err := filepath.Rel(repository, directory)
+		if err != nil {
+			return 0, 0, err
+		}
+		delivered[filepath.ToSlash(relative)] = true
+	}
+	claimed := map[string]bool{}
+	for _, skill := range snapshot.Skills {
+		relative := skill.Path
+		if relative == "" {
+			relative = path.Join(source.SkillsSubdirectory, skill.Name)
+		}
+		if claimed[relative] {
+			return 0, 0, fmt.Errorf("the catalog publishes %q twice", relative)
+		}
+		claimed[relative] = true
+		if !delivered[relative] {
+			return 0, 0, fmt.Errorf("the published skill %q is not in the source at %q", skill.Name, relative)
+		}
+		delete(delivered, relative)
+		built, err := archive.Build(filepath.Join(repository, filepath.FromSlash(relative)), archive.Limits{})
+		if err != nil {
+			return 0, 0, err
+		}
+		if built.Digest != skill.Digest {
+			return 0, 0, fmt.Errorf("the published skill %q does not match the source at its signed commit", skill.Name)
+		}
+	}
+	if len(delivered) != 0 {
+		return 0, 0, fmt.Errorf("the source carries skills the catalog does not publish")
+	}
+	return len(snapshot.Skills), 0, nil
 }
