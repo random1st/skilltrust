@@ -62,6 +62,8 @@ release:
 		{ echo "set APPLE_SIGNING_IDENTITY, e.g. \"Developer ID Application: Name (TEAMID)\""; exit 1; }
 	@test -n "$$GITHUB_TOKEN" || \
 		{ echo "set GITHUB_TOKEN (e.g. GITHUB_TOKEN=\$$(gh auth token)) — it creates the release and pushes the cask to random1st/homebrew-tap, so it needs repo scope on both"; exit 1; }
+	@test -r "$$RELEASE_SIGNING_KEY" || \
+		{ echo "set RELEASE_SIGNING_KEY to the release private key (~/.axela/release-signer.key) — skillctl update trusts only releases it signed"; exit 1; }
 	goreleaser release --clean
 
 notarize:

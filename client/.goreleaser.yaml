@@ -171,6 +171,17 @@ sboms:
   - id: archives
     artifacts: archive
 
+# The checksums file is signed with the release key, and skillctl update accepts a
+# release only when that signature verifies against the public half compiled into it.
+# The key lives on the release machine outside every repository; RELEASE_SIGNING_KEY is
+# its path, and `make release` refuses to run without it.
+signs:
+  - id: release-key
+    artifacts: checksum
+    cmd: go
+    args: ["run", "github.com/random1st/skilltrust/tools/release-sign", "-key", "{{ .Env.RELEASE_SIGNING_KEY }}", "${artifact}"]
+    signature: "${artifact}.dsse.json"
+
 # Keyless Sigstore signatures over the checksum file: one signature covers every artifact.
 # Requires cosign on the release runner.
 # Cosign is deferred with Homebrew, and for a sharper reason.
