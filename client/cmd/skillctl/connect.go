@@ -102,15 +102,18 @@ func runConnect(args []string) int {
 			"or reuses the machine key, opens the approval URL, stores the report credential\n"+
 			"locally, follows the organisation's catalogs, installs session hooks for managed\n"+
 			"clients found on this machine, and waits briefly for approval. Without an\n"+
-			"address it connects to %s. With -team, the approval page offers only that\n"+
-			"team, so a computer cannot land in the wrong one by a mis-click.\n\n"+
+			"address it connects to %s. With -org, the approval page offers only that\n"+
+			"organisation, so a computer cannot land in the wrong one by a mis-click.\n\n"+
 			"Exit codes: %d connected and acknowledged, %d pending or needs attention, %d error.\n\nFlags:\n",
 			connectDefaultBaseURL, exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 
 	machine := flags.String("machine", "", "short name for this computer; defaults to the hostname")
-	team := flags.String("team", "", "the team this computer joins; the approval page then offers only that team")
+	// --org is the name every other command uses (marketplace --org, publish --org) and
+	// the word the console and the docs use; --team came first and keeps working.
+	orgName := flags.String("org", "", "the organisation this computer joins; the approval page then offers only that one")
+	team := flags.String("team", "", "alias for -org")
 	noBrowser := flags.Bool("no-browser", false, "print the approval URL instead of opening it")
 	wait := flags.Duration("wait", connectDefaultWait, "how long to wait for browser approval before returning")
 
@@ -127,6 +130,13 @@ func runConnect(args []string) int {
 	if *wait < 0 || *wait > connectMaxWait {
 		fmt.Fprintf(os.Stderr, "skillctl: -wait must be between 0 and %s\n", connectMaxWait)
 		return exitUsage
+	}
+	if *orgName != "" && *team != "" && *orgName != *team {
+		fmt.Fprintf(os.Stderr, "skillctl: -org and -team are the same flag; give one\n")
+		return exitUsage
+	}
+	if *orgName != "" {
+		team = orgName
 	}
 	if *team != "" && !enrollment.ValidOrganisation(*team) {
 		fmt.Fprintf(os.Stderr, "skillctl: -team must be a team name: letters, digits, - and _, up to 64 characters\n")
