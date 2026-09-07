@@ -22,8 +22,14 @@ type Publication struct {
 	ValidUntil string `json:"valid_until,omitempty"`
 	Expired    bool   `json:"expired,omitempty"`
 	Skills     int    `json:"skills"`
-	Revoked    int    `json:"revoked"`
-	Signatures int    `json:"signatures"`
+	// Published is every skill the catalog carries, so a console can show which ones
+	// rather than only how many. Read from the stored envelope, which the notary
+	// verified before storing: this is a description of what is being served, not a
+	// second verification, and nothing here decides trust.
+	Published  []Managed `json:"published,omitempty"`
+	Withdrawn  []Entry   `json:"withdrawn,omitempty"`
+	Revoked    int       `json:"revoked"`
+	Signatures int       `json:"signatures"`
 }
 
 // DescribePublication is the common display rule for the CLI, MCP and console.
@@ -58,6 +64,21 @@ func DescribePublication(body []byte, now time.Time) Publication {
 	}
 	out.Sequence, out.ValidUntil = snapshot.Sequence, snapshot.ValidUntil
 	out.Skills, out.Revoked, out.Signatures = len(snapshot.Skills), len(snapshot.Revoked), len(envelope.Signatures)
+	// Decoded one at a time on purpose: the members stay raw so a single odd entry
+	// cannot fail the whole summary, which is the property this function has always
+	// had. An entry that will not parse is left out of the list and still counted.
+	for _, raw := range snapshot.Skills {
+		var skill Managed
+		if json.Unmarshal(raw, &skill) == nil && skill.Name != "" {
+			out.Published = append(out.Published, skill)
+		}
+	}
+	for _, raw := range snapshot.Revoked {
+		var entry Entry
+		if json.Unmarshal(raw, &entry) == nil {
+			out.Withdrawn = append(out.Withdrawn, entry)
+		}
+	}
 	out.Expired = !now.Before(until)
 	out.Action, out.Actor = "publish_catalog", "publisher"
 	switch {
