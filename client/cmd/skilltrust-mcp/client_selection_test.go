@@ -52,11 +52,13 @@ func TestClientSelectionOmittedKeepsClaudeDefault(t *testing.T) {
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			session, _ := connect(t)
-			if got := callText(t, session, tc.tool, tc.args); got != tc.want {
+			// TrimSpace because the fake skillctl on Windows is a .cmd whose echo ends
+			// in CRLF; the command itself is still compared exactly.
+			if got := strings.TrimSpace(callText(t, session, tc.tool, tc.args)); got != tc.want {
 				t.Fatalf("omitting the target changed the existing Claude command: %s", got)
 			}
 			tc.args[tc.field] = ""
-			if got := callText(t, session, tc.tool, tc.args); got != tc.want {
+			if got := strings.TrimSpace(callText(t, session, tc.tool, tc.args)); got != tc.want {
 				t.Fatalf("an empty optional target must keep the Claude default: %s", got)
 			}
 		})

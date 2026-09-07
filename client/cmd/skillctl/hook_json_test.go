@@ -61,9 +61,24 @@ func TestClaudeSessionJSONRestoresAndNamesTheExactSavedCopy(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("saved edit missing: %t (%v)", ok, err)
 	}
-	for _, required := range []string{"restored", " diff ", " adopt ", "--marketplace acme", "--claude-home", client, "--quarantine", saved, "--quarantine-digest", digest} {
+	// Paths may appear in either spelling of the same directory: the hook prints the
+	// resolved form, and on Windows the temp directory is handed out as an 8.3 short name
+	// (RUNNER~1) that resolves to the long one — like /var and /private/var on macOS.
+	spelled := func(path string) bool {
+		if strings.Contains(out.SystemMessage, path) {
+			return true
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		return err == nil && strings.Contains(out.SystemMessage, resolved)
+	}
+	for _, required := range []string{"restored", " diff ", " adopt ", "--marketplace acme", "--claude-home", "--quarantine", "--quarantine-digest", digest} {
 		if !strings.Contains(out.SystemMessage, required) {
 			t.Errorf("visible warning omits %q:\n%s", required, out.SystemMessage)
+		}
+	}
+	for _, path := range []string{client, saved} {
+		if !spelled(path) {
+			t.Errorf("visible warning names neither spelling of %q:\n%s", path, out.SystemMessage)
 		}
 	}
 	if body, err := os.ReadFile(filepath.Join(installed, "SKILL.md")); err != nil || !bytes.Equal(body, published) {
