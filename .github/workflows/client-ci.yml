@@ -3,14 +3,17 @@
 # Actions are pinned by commit SHA, not by tag. A tag is mutable and a security tool that
 # asks people to pin skills by digest while pulling its own CI by a moving reference is
 # not one worth trusting.
+# The path filter used to be client/** only, so a change to the notary, the catalog or
+# any other package ran no tests at all on the way in — which is how a commit to the
+# dashboard was lost without a single red mark. It is the whole module now; the client's
+# working directory below still scopes what is built, and `go test ./...` from there
+# covers the module because they are one.
 name: client-ci
 
 on:
   push:
     branches: [main]
-    paths: ["client/**", ".github/workflows/client-ci.yml"]
   pull_request:
-    paths: ["client/**", ".github/workflows/client-ci.yml"]
 
 permissions:
   contents: read
