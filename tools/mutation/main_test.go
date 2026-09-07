@@ -23,7 +23,9 @@ func TestIsolatedWorkspaceUsesTheCopy(t *testing.T) {
 		}
 	}
 	work := filepath.Join(root, "original.work")
-	if err := os.WriteFile(work, []byte("go 1.26.8\nuse (\n"+original+"\n"+other+"\n)\n"), 0o600); err != nil {
+	// go.work paths are slash-separated; writing them with the platform separator makes
+	// the file unparsable on Windows and the failure reads as a missing module.
+	if err := os.WriteFile(work, []byte("go 1.26.8\nuse (\n"+filepath.ToSlash(original)+"\n"+filepath.ToSlash(other)+"\n)\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GOWORK", work)
@@ -31,7 +33,14 @@ func TestIsolatedWorkspaceUsesTheCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := command(context.Background(), clone, environment, "go", "list", "-f", "{{.Dir}}", "./...")
+	// The workspace lists resolved paths, as isolatedWorkspace itself does; running the
+	// command from the unresolved one leaves Go matching a short 8.3 temp path against a
+	// long one on Windows, and the mismatch reads as a missing module.
+	resolved, err := filepath.EvalSymlinks(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := command(context.Background(), resolved, environment, "go", "list", "-f", "{{.Dir}}", "./...")
 	if err != nil || !strings.Contains(string(body), filepath.Base(clone)) {
 		t.Fatalf("copy was not selected: %s / %v / %v", body, err, environment)
 	}

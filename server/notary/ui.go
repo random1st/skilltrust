@@ -140,6 +140,36 @@ type EventView struct {
 	Summary   string
 	Kind      string
 	Admission string
+	// What the event was about, as data. Summary is one sentence for a person; a console
+	// that has to name the skill, compare the digests or point at the saved copy should
+	// not be parsing that sentence to do it. Quarantine is a path on that machine — the
+	// changed bytes never leave it, which is the point.
+	Marketplace string
+	Plugin      string
+	Skill       string
+	Version     string
+	Signed      string
+	Found       string
+	Quarantine  string
+	Detail      string
+}
+
+// Subject is the skill or plugin the event is about, whichever the machine reported.
+func (e EventView) Subject() string {
+	if e.Plugin != "" {
+		return e.Plugin
+	}
+	return e.Skill
+}
+
+func viewOf(event report.Event, admission string) EventView {
+	return EventView{
+		At: event.At, Machine: event.Machine, Summary: event.Summary(),
+		Kind: string(event.Kind), Admission: admission,
+		Marketplace: event.Marketplace, Plugin: event.Plugin, Skill: event.Skill,
+		Version: event.PluginVer, Signed: event.Signed, Found: event.Found,
+		Quarantine: event.Quarantine, Detail: event.Detail,
+	}
 }
 
 // BuildDashboard assembles the page from stored state, tolerating partial damage: one
@@ -386,26 +416,17 @@ func (s *Service) BuildDashboard(org Org, now time.Time) Dashboard {
 			case report.KindCatalogUnusable:
 				row.view.CatalogUnusable++
 			}
-			dashboard.Events = append(dashboard.Events, EventView{
-				At: event.At, Machine: event.Machine,
-				Summary: event.Summary(), Kind: string(event.Kind), Admission: admission,
-			})
+			dashboard.Events = append(dashboard.Events, viewOf(*event, admission))
 		}
 		for key, event := range drifted {
 			row := ensure(key.signer, event.event.Machine, event.signer)
 			row.view.SkillsChanged++
-			dashboard.Events = append(dashboard.Events, EventView{
-				At: event.event.At, Machine: event.event.Machine,
-				Summary: event.event.Summary(), Kind: string(event.event.Kind), Admission: event.admission,
-			})
+			dashboard.Events = append(dashboard.Events, viewOf(event.event, event.admission))
 		}
 		for key, event := range adoptions {
 			row := ensure(key.signer, event.event.Machine, event.signer)
 			row.view.Adapted++
-			dashboard.Events = append(dashboard.Events, EventView{
-				At: event.event.At, Machine: event.event.Machine,
-				Summary: event.event.Summary(), Kind: string(event.event.Kind), Admission: event.admission,
-			})
+			dashboard.Events = append(dashboard.Events, viewOf(event.event, event.admission))
 		}
 	}
 

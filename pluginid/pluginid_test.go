@@ -3,6 +3,7 @@ package pluginid
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -45,6 +46,14 @@ func TestTheSameBytesGiveTheSameDigestWhereverTheyAre(t *testing.T) {
 // faithful copy as tampered — which is why anything materialising a tree to check it must
 // carry the mode through.
 func TestTheExecutableBitChangesTheIdentity(t *testing.T) {
+	// Windows has no executable bit — Go reports 0666 or 0444 — so the two trees below
+	// are byte-for-byte the same thing there and share an identity by definition. The
+	// archive layer states the same limitation and asserts it in
+	// TestExecutableBitIsAbsentOnWindows; this test asserts the POSIX half of it, and
+	// pretending otherwise on Windows would be asserting something untrue.
+	if runtime.GOOS == "windows" {
+		t.Skip("no executable bit on this platform; the archive's own test covers what happens instead")
+	}
 	plain, runnable := t.TempDir(), t.TempDir()
 	write(t, plain, "SKILL.md", "x\n", 0o644)
 	write(t, plain, "run.sh", "#!/bin/sh\n", 0o644)

@@ -729,3 +729,61 @@ func TestCountsReadAsEnglish(t *testing.T) {
 		t.Errorf("plural(3) = %q", got)
 	}
 }
+
+// The dashboard's events carry what they are about as fields, not only as a sentence: a
+// console that names the skill, compares the digests or points at the saved copy must not
+// have to parse Summary to do it. This shipped once and was lost before it reached a
+// release; the test is here so the next loss is a failure rather than a silence.
+func TestDashboardEventsCarryTheirDataNotOnlyASentence(t *testing.T) {
+	f := withEventTokens(newFixture(t))
+	machinePub, machineKey, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := f.orgs["acme"]
+	org.Machines = attest.NewTrustedKeys(machinePub)
+	f.orgs["acme"] = org
+
+	signed, err := report.Sign(report.Event{
+		Kind: report.KindRestored, Machine: "eva", Marketplace: "plugins", Plugin: "deploy-runbook",
+		PluginVer: "1.2.0", Signed: "sha256:6cb273", Found: "sha256:3533dc",
+		Quarantine: "/q/deploy-runbook", At: time.Now().UTC(),
+	}, machineKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(signed)
+	if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
+		t.Fatalf("ingest: %s", response.Status)
+	}
+
+	board := f.service.BuildDashboard(f.orgs["acme"], time.Now())
+	if len(board.Events) != 1 {
+		t.Fatalf("events = %+v", board.Events)
+	}
+	got := board.Events[0]
+	if got.Plugin != "deploy-runbook" || got.Subject() != "deploy-runbook" || got.Version != "1.2.0" ||
+		got.Marketplace != "plugins" || got.Signed != "sha256:6cb273" || got.Found != "sha256:3533dc" ||
+		got.Quarantine != "/q/deploy-runbook" {
+		t.Fatalf("event data = %+v", got)
+	}
+	// A loose skill has no plugin, and the subject follows it.
+	loose, err := report.Sign(report.Event{Kind: report.KindSkillChanged, Machine: "eva", Skill: "note-taking", At: time.Now().UTC()}, machineKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(loose)
+	if response := post(t, f.server.URL+"/v1/events/acme", "ingest-token", body); response.StatusCode != http.StatusOK {
+		t.Fatalf("ingest loose: %s", response.Status)
+	}
+	board = f.service.BuildDashboard(f.orgs["acme"], time.Now())
+	found := false
+	for _, e := range board.Events {
+		if e.Subject() == "note-taking" && e.Skill == "note-taking" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a loose skill's name is missing: %+v", board.Events)
+	}
+}
