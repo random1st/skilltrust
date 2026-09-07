@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -68,8 +69,10 @@ func TestPolicyPreviewPreservesExistingMDMAndShowsOnlyChanges(t *testing.T) {
 			t.Errorf("diff exposed unchanged setting %q: %s", unrelated, text)
 		}
 	}
+	// Permission bits are not reliable on Windows (the same reason
+	// TestOwnerOnlyWritesTightenPermissions skips there); the file still has to exist.
 	info, err := os.Stat(proposal)
-	if err != nil || info.Mode().Perm()&0o077 != 0 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		t.Fatalf("proposal may contain private settings and must be owner-only: %v, %v", info, err)
 	}
 	text, code = captureStdout(t, func() int {

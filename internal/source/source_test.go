@@ -152,3 +152,39 @@ func withFakeGit(t *testing.T, script string, run func()) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	run()
 }
+
+// Git on Windows ships with core.autocrlf=true and GitHub's runners keep it, so a clone
+// there rewrote every text file to CRLF and nothing published ever matched its signed
+// digest. The clone has to produce the committed bytes whatever the machine's git config
+// says; forcing the setting through the global config is how the runner had it.
+func TestCloneKeepsTheCommittedBytesWhateverTheMachineGitConfigSays(t *testing.T) {
+	repository := createRepository(t)
+	commitFile(t, repository, "SKILL.md", "line one\nline two\n")
+
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[core]\n\tautocrlf = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+
+	root := t.TempDir()
+	if _, err := FetchContext(context.Background(), root, "catalog", repository, "refs/heads/main"); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(Path(root, "catalog"), "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "\r\n") {
+		t.Fatalf("the checkout rewrote line endings: %q", got)
+	}
+	// And the refresh path — fetch + reset --hard — must not undo it either.
+	commitFile(t, repository, "SKILL.md", "line one\nline two\nline three\n")
+	if _, err := FetchContext(context.Background(), root, "catalog", repository, "refs/heads/main"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	got, _ = os.ReadFile(filepath.Join(Path(root, "catalog"), "SKILL.md"))
+	if strings.Contains(string(got), "\r\n") {
+		t.Fatalf("the refresh rewrote line endings: %q", got)
+	}
+}
