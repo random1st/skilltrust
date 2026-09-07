@@ -102,13 +102,15 @@ func runConnect(args []string) int {
 			"or reuses the machine key, opens the approval URL, stores the report credential\n"+
 			"locally, follows the organisation's catalogs, installs session hooks for managed\n"+
 			"clients found on this machine, and waits briefly for approval. Without an\n"+
-			"address it connects to %s.\n\n"+
+			"address it connects to %s. With -team, the approval page offers only that\n"+
+			"team, so a computer cannot land in the wrong one by a mis-click.\n\n"+
 			"Exit codes: %d connected and acknowledged, %d pending or needs attention, %d error.\n\nFlags:\n",
 			connectDefaultBaseURL, exitClean, exitFindings, exitUsage)
 		flags.PrintDefaults()
 	}
 
 	machine := flags.String("machine", "", "short name for this computer; defaults to the hostname")
+	team := flags.String("team", "", "the team this computer joins; the approval page then offers only that team")
 	noBrowser := flags.Bool("no-browser", false, "print the approval URL instead of opening it")
 	wait := flags.Duration("wait", connectDefaultWait, "how long to wait for browser approval before returning")
 
@@ -124,6 +126,10 @@ func runConnect(args []string) int {
 	}
 	if *wait < 0 || *wait > connectMaxWait {
 		fmt.Fprintf(os.Stderr, "skillctl: -wait must be between 0 and %s\n", connectMaxWait)
+		return exitUsage
+	}
+	if *team != "" && !enrollment.ValidOrganisation(*team) {
+		fmt.Fprintf(os.Stderr, "skillctl: -team must be a team name: letters, digits, - and _, up to 64 characters\n")
 		return exitUsage
 	}
 
@@ -149,11 +155,17 @@ func runConnect(args []string) int {
 	var connection *enrollment.Connection
 	created := false
 	if current != nil {
+		// A saved connection is bound to one team. Moving a computer is not done in place:
+		// the old team's owner disables it there, and this home is reconnected fresh.
+		if *team != "" && current.Organisation != *team {
+			fmt.Fprintf(os.Stderr, "skillctl: this computer is connected to team %s; to join %s, have %s disable it and reconnect from a fresh SKILLTRUST_HOME\n", current.Organisation, *team, current.Organisation)
+			return exitUsage
+		}
 		pending, connection, err = resumeSavedConnect(base, current)
 	} else {
-		pending, created, err = ensurePendingConnect(base, *machine, pending, now)
+		pending, created, err = ensurePendingConnect(base, *machine, *team, pending, now)
 		if err == nil && pending.Expired {
-			pending, created, err = createPendingConnect(base, pending.Machine, now)
+			pending, created, err = createPendingConnectFor(base, pending.Machine, pendingTeam(pending, *team, now), now)
 		}
 	}
 	if err != nil {
@@ -162,6 +174,9 @@ func runConnect(args []string) int {
 
 	fmt.Printf("service     %s\n", base)
 	fmt.Printf("machine     %s\n", pending.Machine)
+	if requested := pendingTeam(pending, "", now); requested != "" {
+		fmt.Printf("team        %s\n", requested)
+	}
 	fmt.Printf("key         %s\n", attest.Fingerprint(pending.MachineKeyID))
 
 	pendingApproval := false
@@ -940,7 +955,21 @@ func approvalURL(base string, envelope *attest.Envelope) (string, error) {
 	return base + "/connect?request=" + base64.RawURLEncoding.EncodeToString(body), nil
 }
 
-func ensurePendingConnect(base, machine string, current *pendingConnect, now time.Time) (*pendingConnect, bool, error) {
+// pendingTeam is the team a pending request asks for: the explicit flag if given, else
+// whatever the saved request already carries, so a bare rerun keeps its team the way it
+// keeps its machine label. An unreadable request asks for no team.
+func pendingTeam(pending *pendingConnect, explicit string, now time.Time) string {
+	if explicit != "" || pending == nil {
+		return explicit
+	}
+	request, _, _, err := readPendingRequest(pending.Envelope, now)
+	if err != nil {
+		return ""
+	}
+	return request.Organisation
+}
+
+func ensurePendingConnect(base, machine, team string, current *pendingConnect, now time.Time) (*pendingConnect, bool, error) {
 	label := connectMachine(machine)
 	if current != nil {
 		if current.Audience != base {
@@ -956,11 +985,13 @@ func ensurePendingConnect(base, machine string, current *pendingConnect, now tim
 		if attest.KeyID(private.Public().(ed25519.PublicKey)) != current.MachineKeyID {
 			return nil, false, fmt.Errorf("the signing key changed while approval was pending; restore the original key before reconnecting")
 		}
-		if current.Machine == label {
+		// A request names its team inside the signed payload, so a different --team
+		// cannot be patched in: it is a new request, like a new machine label.
+		if current.Machine == label && (team == "" || pendingTeam(current, "", now) == team) {
 			return current, false, nil
 		}
 	}
-	return createPendingConnect(base, label, now)
+	return createPendingConnectFor(base, label, pendingTeam(current, team, now), now)
 }
 
 func createPendingConnect(base, machine string, now time.Time) (*pendingConnect, bool, error) {

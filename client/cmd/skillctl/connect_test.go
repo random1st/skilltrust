@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -393,7 +394,7 @@ func TestEnsurePendingConnectKeepsTheSavedMachineLabelOnBareRerun(t *testing.T) 
 		Token:        strings.Repeat("ab", 32),
 	}
 
-	resumed, created, err := ensurePendingConnect(connectDefaultBaseURL, "", pending, now)
+	resumed, created, err := ensurePendingConnect(connectDefaultBaseURL, "", "", pending, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,4 +647,115 @@ func writeExpiredPendingConnect(t *testing.T, machineKey ed25519.PrivateKey, tok
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A pending request names its team inside the signed payload, so asking for a different
+// team must produce a new request rather than a patched one — and a bare rerun must keep
+// the team the same way it keeps the machine label.
+func TestEnsurePendingConnectFollowsTheRequestedTeam(t *testing.T) {
+	t.Setenv("SKILLTRUST_HOME", t.TempDir())
+	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
+
+	first, _, err := createPendingConnectFor(connectDefaultBaseURL, "Eva", "random1st", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTeam(first, "", now); got != "random1st" {
+		t.Fatalf("the signed request carries team %q, want random1st", got)
+	}
+
+	moved, created, err := ensurePendingConnect(connectDefaultBaseURL, "", "quandex", first, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || moved == first {
+		t.Fatal("a different --team must create a new signed request")
+	}
+	if got := pendingTeam(moved, "", now); got != "quandex" {
+		t.Fatalf("the new request carries team %q, want quandex", got)
+	}
+	if moved.Machine != "Eva" {
+		t.Fatalf("machine label = %q, want the one already chosen", moved.Machine)
+	}
+
+	kept, created, err := ensurePendingConnect(connectDefaultBaseURL, "", "", moved, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || kept != moved || pendingTeam(kept, "", now) != "quandex" {
+		t.Fatal("a bare rerun must keep the pending request and its team")
+	}
+}
+
+func TestConnectRefusesAMalformedTeamBeforeTouchingAnything(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SKILLTRUST_HOME", home)
+	var code int
+	capture(t, func() { code = runConnect([]string{"-team", "not a team!"}) })
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d", code, exitUsage)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("a refused flag left files behind: %v", entries)
+	}
+}
+
+// A connected computer asked to join another team is refused before any request is made:
+// the saved connection is bound to its team, and a silent re-enrollment would leave the
+// old team's record alive with nobody told.
+func TestConnectRefusesToMoveAConnectedComputerBetweenTeams(t *testing.T) {
+	t.Setenv("SKILLTRUST_HOME", t.TempDir())
+	machinePublic, machinePrivate, err := attest.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attest.WritePrivateKey(defaultSigningKey(), machinePrivate); err != nil {
+		t.Fatal(err)
+	}
+	if err := attest.WritePublicKey(defaultPublicKey(), machinePublic); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOwnerOnlyText(connectCredentialsPath(), strings.Repeat("ab", 32)+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveHomeJSON(connectStatePath(), savedConnect{
+		Version: connectRecordVersion, Audience: connectDefaultBaseURL, Organisation: "random1st",
+		Machine: "Eva", MachineKeyID: attest.KeyID(machinePublic),
+		IngestURL: "https://axela.app/v1/events", DashboardURL: "https://axela.app/ui/random1st",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var code int
+	stderr := captureStderr(t, func() { capture(t, func() { code = runConnect([]string{"-team", "quandex"}) }) })
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d", code, exitUsage)
+	}
+	for _, expected := range []string{"connected to team random1st", "quandex", "disable"} {
+		if !strings.Contains(stderr, expected) {
+			t.Errorf("the refusal omits %q: %s", expected, stderr)
+		}
+	}
+}
+
+// captureStderr is capture for the other stream: refusals go to stderr, and a test that
+// only reads stdout would pass on any refusal at all.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stderr
+	os.Stderr = write
+	done := make(chan string, 1)
+	go func() {
+		raw, _ := io.ReadAll(read)
+		done <- string(raw)
+	}()
+	defer func() { os.Stderr = original }()
+	f()
+	write.Close()
+	os.Stderr = original
+	return <-done
 }

@@ -31,3 +31,14 @@ func TestEnrollmentOptionalTeamIsSignedAndValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestValidOrganisationMatchesWhatVerifyAccepts(t *testing.T) {
+	for name, want := range map[string]bool{
+		"quandex": true, "random1st": true, "a_b-c": true,
+		"": false, "not a team": false, "-leading": false, "тест": false,
+	} {
+		if got := ValidOrganisation(name); got != want {
+			t.Errorf("ValidOrganisation(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
