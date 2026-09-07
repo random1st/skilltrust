@@ -33,7 +33,14 @@ func TestIsolatedWorkspaceUsesTheCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := command(context.Background(), clone, environment, "go", "list", "-f", "{{.Dir}}", "./...")
+	// The workspace lists resolved paths, as isolatedWorkspace itself does; running the
+	// command from the unresolved one leaves Go matching a short 8.3 temp path against a
+	// long one on Windows, and the mismatch reads as a missing module.
+	resolved, err := filepath.EvalSymlinks(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := command(context.Background(), resolved, environment, "go", "list", "-f", "{{.Dir}}", "./...")
 	if err != nil || !strings.Contains(string(body), filepath.Base(clone)) {
 		t.Fatalf("copy was not selected: %s / %v / %v", body, err, environment)
 	}
