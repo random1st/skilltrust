@@ -273,7 +273,7 @@ func collectFiles(
 					relative)
 			}
 
-			if links, known := hardLinkCount(info); known && links != 1 {
+			if links, known := hardLinkCount(path, info); known && links != 1 {
 				return failf(KindEntryType,
 					"source entry %q has %d hard links; hard-linked files are denied",
 					relative, links)

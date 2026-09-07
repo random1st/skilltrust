@@ -23,7 +23,9 @@ func TestIsolatedWorkspaceUsesTheCopy(t *testing.T) {
 		}
 	}
 	work := filepath.Join(root, "original.work")
-	if err := os.WriteFile(work, []byte("go 1.26.8\nuse (\n"+original+"\n"+other+"\n)\n"), 0o600); err != nil {
+	// go.work paths are slash-separated; writing them with the platform separator makes
+	// the file unparsable on Windows and the failure reads as a missing module.
+	if err := os.WriteFile(work, []byte("go 1.26.8\nuse (\n"+filepath.ToSlash(original)+"\n"+filepath.ToSlash(other)+"\n)\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GOWORK", work)
