@@ -44,7 +44,8 @@ func TestFetchContextClonesAFullHeadRefAndKeepsItsPin(t *testing.T) {
 
 func TestCloneContextStopsPromptlyAfterDeadlineEvenIfGitLeavesAChildHoldingThePipes(t *testing.T) {
 	withFakeGit(t, `#!/bin/sh
-case "$1" in
+for a in "$@"; do case "$a" in clone) match=clone;; fetch) match=fetch;; esac; done
+case "${match:-}" in
 clone)
 	(sleep 1) &
 	sleep 5
@@ -72,10 +73,8 @@ esac
 
 func TestRunContextStopsPromptlyAfterDeadlineEvenIfGitLeavesAChildHoldingThePipes(t *testing.T) {
 	withFakeGit(t, `#!/bin/sh
-if [ "$1" = "-C" ]; then
-	shift 2
-fi
-case "$1" in
+for a in "$@"; do case "$a" in rev-parse) match=rev-parse;; esac; done
+case "${match:-}" in
 rev-parse)
 	(sleep 1) &
 	sleep 5
