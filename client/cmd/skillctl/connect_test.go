@@ -759,3 +759,40 @@ func captureStderr(t *testing.T, f func()) string {
 	os.Stderr = original
 	return <-done
 }
+
+// --org is what every other command calls it and what the console and docs say; --team
+// was first and keeps working. Giving both different values is a mistake worth naming.
+func TestConnectAcceptsOrgAndTeamAsOneFlag(t *testing.T) {
+	t.Setenv("SKILLTRUST_HOME", t.TempDir())
+	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
+	first, _, err := createPendingConnectFor(connectDefaultBaseURL, "eva", "quandex", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTeam(first, "", now); got != "quandex" {
+		t.Fatalf("fixture team = %q", got)
+	}
+
+	var code int
+	stderr := captureStderr(t, func() { capture(t, func() { code = runConnect([]string{"-org", "acme", "-team", "quandex"}) }) })
+	if code != exitUsage || !strings.Contains(stderr, "same flag") {
+		t.Fatalf("conflicting flags = %d %q", code, stderr)
+	}
+	stderr = captureStderr(t, func() { capture(t, func() { code = runConnect([]string{"-org", "not a name!"}) }) })
+	if code != exitUsage || !strings.Contains(stderr, "-team must be") && !strings.Contains(stderr, "letters, digits") {
+		t.Fatalf("a malformed -org was not refused: %d %q", code, stderr)
+	}
+}
+
+// A subcommand group answers its own --help rather than calling it unknown.
+func TestSubcommandGroupsAnswerTheirOwnHelp(t *testing.T) {
+	for name, run := range map[string]func([]string) int{"hook": runHook, "marketplace": runMarketplace} {
+		for _, flag := range []string{"--help", "-h", "help"} {
+			var code int
+			out := capture(t, func() { code = run([]string{flag}) })
+			if code != exitClean || !strings.Contains(out, "Usage: skillctl "+name) {
+				t.Errorf("%s %s = %d %q", name, flag, code, out)
+			}
+		}
+	}
+}

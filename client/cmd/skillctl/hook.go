@@ -23,6 +23,11 @@ func runHook(args []string) int {
 		fmt.Fprint(os.Stderr, hookUsage)
 		return exitUsage
 	}
+	// A group's own --help is a request, not a mistake: it answers on stdout and succeeds.
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		fmt.Print(hookUsage)
+		return exitClean
+	}
 	switch args[0] {
 	case "session-start":
 		return runHookSessionStart(args[1:])

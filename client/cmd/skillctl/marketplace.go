@@ -33,6 +33,11 @@ func runMarketplace(args []string) int {
 		fmt.Fprint(os.Stderr, marketplaceUsage)
 		return exitUsage
 	}
+	// A group's own --help is a request, not a mistake: it answers on stdout and succeeds.
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		fmt.Print(marketplaceUsage)
+		return exitClean
+	}
 	switch args[0] {
 	case "sign":
 		return runMarketplaceSign(args[1:])
