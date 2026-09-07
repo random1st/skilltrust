@@ -61,6 +61,13 @@ type Approval struct {
 // anything. A missing directory is different, and is not a failure: it means no approvals
 // have been given yet.
 func LoadStore(directory string, trusted *TrustedKeys) (map[string][]Approval, []string, error) {
+	// A file where the store directory should be is damage, not absence. Checked before
+	// ReadDir because on Windows listing a regular file fails with ERROR_PATH_NOT_FOUND,
+	// which Go reports as ErrNotExist — so the damaged store read as an empty one and every
+	// approval on the machine silently vanished from the inventory.
+	if info, statErr := os.Stat(directory); statErr == nil && !info.IsDir() {
+		return nil, nil, fmt.Errorf("%s is not a directory", directory)
+	}
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil

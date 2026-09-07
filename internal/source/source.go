@@ -159,7 +159,18 @@ func runContext(ctx context.Context, directory string, arguments ...string) (str
 	return strings.TrimSpace(string(output)), nil
 }
 
+// gitConfig neutralises the settings that make a checkout differ from what was signed.
+// Git on Windows ships with core.autocrlf=true, and GitHub's Windows runners keep it, so a
+// clone there rewrote every text file to CRLF and every published plugin came back as
+// "does not match the repository at its signed commit". The bytes the publisher signed are
+// the bytes in the commit; a checkout that changes them is not a copy of the repository.
+// The publisher side already checks out with exactly these two settings.
+var gitConfig = []string{"-c", "core.autocrlf=false", "-c", "core.eol=lf"}
+
 func commandContext(ctx context.Context, name string, arguments ...string) *exec.Cmd {
+	if name == "git" {
+		arguments = append(append([]string{}, gitConfig...), arguments...)
+	}
 	if ctx == nil {
 		return exec.Command(name, arguments...)
 	}

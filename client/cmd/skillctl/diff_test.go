@@ -263,6 +263,9 @@ func TestAdoptExactQuarantineRequiresReviewAndRejectsRevokedBytes(t *testing.T) 
 }
 
 func TestDiffEscapesControlCharactersAndCommandsRequireKnownHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows path names cannot contain control characters, so the premise cannot be built")
+	}
 	f := newRecoveryFixture(t)
 	f.home = filepath.Join(t.TempDir(), "client\n\x1b[31m")
 	f.installed = marketplace.InstalledPath(f.home, "acme", "runbook", "1.0.0")
