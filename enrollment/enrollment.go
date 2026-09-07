@@ -130,13 +130,17 @@ func Verify(envelope *attest.Envelope, audience string, now time.Time) (*Request
 	if len(request.Machine) == 0 || len(request.Machine) > 100 || strings.ContainsAny(request.Machine, "\r\n\x00") {
 		return nil, "", fmt.Errorf("give this computer a short name")
 	}
-	if request.Organisation != "" && !organisationName.MatchString(request.Organisation) {
+	if request.Organisation != "" && !ValidOrganisation(request.Organisation) {
 		return nil, "", fmt.Errorf("connection request has an invalid team; start the subscription again")
 	}
 	return &request, attest.KeyID(key), nil
 }
 
 var organisationName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// ValidOrganisation is the name rule Verify applies to a request's organisation, exported
+// so a client can refuse a bad --team before signing a request the service would reject.
+func ValidOrganisation(name string) bool { return organisationName.MatchString(name) }
 
 // ID uses the signed payload so harmless JSON formatting changes do not create
 // a second approval. The signature is always verified before this id is used.

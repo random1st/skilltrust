@@ -144,7 +144,7 @@ func prepareSubscriptionIdentity(ctx context.Context, org, uri string, now time.
 			return nil, nil, false, fmt.Errorf("another browser approval is already pending; finish %s connect for that request, then retry %s subscribe %s with the matching team or a separate SKILLTRUST_HOME. The pending request was kept", commandName(), commandName(), uri)
 		}
 		// Reuse the existing key/request binding guard before resuming consent.
-		pending, _, err = ensurePendingConnect(publicsubscription.Origin, pending.Machine, pending, now)
+		pending, _, err = ensurePendingConnect(publicsubscription.Origin, pending.Machine, org, pending, now)
 		if err != nil {
 			return nil, nil, false, err
 		}
