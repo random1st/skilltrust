@@ -142,6 +142,7 @@ func runHookSessionStartForBases(args []string, output, diagnostics io.Writer, b
 	if *claudeJSON && looseChecked == 0 && managedChecked == 0 {
 		fmt.Fprintf(output, "Axela: no installed skill was verified in this session. Run %s doctor.\n", commandName())
 	}
+	writeUpdateNotice(diagnostics)
 	return exitClean
 }
 

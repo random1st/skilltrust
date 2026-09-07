@@ -38,6 +38,10 @@ Start here (no account required):
 Seeing what it does (about a minute, in a sandbox, no account):
   skillctl demo                  publish, install, tamper, detect, restore, file
 
+Keeping skillctl current:
+  skillctl update                install the latest release, verified against the release key
+  skillctl update --auto on      let the session-start hook apply verified updates itself
+
 Following a catalog (on a machine):
   skillctl setup                add SkillTrust to installed Claude Code or Codex
   skillctl status --refresh      check followed skills locally; confirm delivery for an Axela team
@@ -149,6 +153,8 @@ func runCLI() int {
 		return runRefresh(os.Args[2:])
 	case "lint":
 		return runLint(os.Args[2:])
+	case "update":
+		return runUpdate(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
 		return exitClean
