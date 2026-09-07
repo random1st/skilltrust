@@ -3,11 +3,13 @@
 # Actions are pinned by commit SHA, not by tag. A tag is mutable and a security tool that
 # asks people to pin skills by digest while pulling its own CI by a moving reference is
 # not one worth trusting.
-# The path filter used to be client/** only, so a change to the notary, the catalog or
-# any other package ran no tests at all on the way in — which is how a commit to the
-# dashboard was lost without a single red mark. It is the whole module now; the client's
-# working directory below still scopes what is built, and `go test ./...` from there
-# covers the module because they are one.
+# Two things used to hide a whole half of this repository from CI: the path filter was
+# client/** on both triggers, and every step ran inside client/, where `./...` means the
+# client's packages and nothing else. A change to the notary or the catalog therefore
+# merged with no test run at all — which is how a commit to the dashboard view was lost
+# between an edit and a release without one red mark. Formatting, vet and tests now run
+# from the module root; the steps that build the released binaries still run in client/,
+# where the Makefile and goreleaser config live.
 name: client-ci
 
 on:
@@ -40,12 +42,18 @@ jobs:
 
       - name: Verify formatting
         if: runner.os != 'Windows'
+        working-directory: .
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
       - name: Vet
+        working-directory: .
         run: go vet ./...
 
+      # From the module root on purpose: ./... inside client/ is the client's packages
+      # only, and the notary, the catalog and the report format are what the console and
+      # every consumer depend on.
       - name: Test
+        working-directory: .
         run: go test -race -cover ./...
 
   reproducible:
