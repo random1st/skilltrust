@@ -64,6 +64,19 @@ type agent struct {
 	// scanner that reported on SkillDir alone would describe a different machine than the
 	// agent runs on, and would do it silently.
 	ExtraRoots func(base string) []string
+	// Loaded are the other things this client reads and obeys, beyond skills.
+	//
+	// A skill is not the only file an agent follows. Subagents, slash commands, hook
+	// configurations and the standing instructions in CLAUDE.md or AGENTS.md are all read
+	// at runtime and acted on, and none of them were ever looked at again after they were
+	// written. Measured on one real machine: 105 skills checked, and 26 other loaded things
+	// not — among them the two files that decide what executes.
+	//
+	// Directories hold one unit per entry; files are a unit on their own. Both are relative
+	// to the client's home, so adding a kind to this table is the whole change, exactly as
+	// adding a client is.
+	LoadedDirs  []loadedKind
+	LoadedFiles []loadedKind
 	// Managed reports whether anything on this machine is centrally managed for this client,
 	// so that reconciling has something to check, restore or revoke.
 	//
@@ -108,10 +121,28 @@ type agent struct {
 // at ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>. A client whose layout is
 // merely similar does not belong in this table — the point of it is that everything below
 // the table can stay ignorant of which client it is serving.
+// loadedKind is one sort of thing a client loads, and what to call it to a person.
+//
+// Named rather than inferred from the path because the word is what a reader sees: "a
+// subagent" and "the standing instructions" are different things to worry about, and
+// "agents/reviewer.md" is neither.
+type loadedKind struct {
+	Path string
+	Name string
+}
+
 var agents = []agent{
 	{
 		Name: "claude", HomeDir: ".claude", HomeEnv: "CLAUDE_CONFIG_DIR",
 		HookConfig: "settings.json", SkillDir: "skills",
+		LoadedDirs: []loadedKind{
+			{Path: "agents", Name: "subagent"},
+			{Path: "commands", Name: "command"},
+		},
+		LoadedFiles: []loadedKind{
+			{Path: "CLAUDE.md", Name: "standing instructions"},
+			{Path: "settings.json", Name: "settings, which decide what runs"},
+		},
 		Managed: true, Layout: layoutPluginCache, Hooks: claudeHooks,
 	},
 	{
@@ -120,6 +151,14 @@ var agents = []agent{
 		// from ~/.codex/hooks.json, and writing them into config.toml instead would be
 		// configuration nobody reads.
 		HookConfig: "hooks.json", SkillDir: "skills",
+		LoadedDirs: []loadedKind{
+			{Path: "agents", Name: "subagent"},
+			{Path: "prompts", Name: "prompt"},
+		},
+		LoadedFiles: []loadedKind{
+			{Path: "AGENTS.md", Name: "standing instructions"},
+			{Path: "hooks.json", Name: "hooks, which decide what runs"},
+		},
 		Managed: true, Layout: layoutPluginCache, Hooks: codexHooks,
 		// Codex records a trusted_hash per hook in config.toml under [hooks.state] and
 		// asks before running one it has not seen. Writing that hash from here would be

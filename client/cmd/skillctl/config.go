@@ -299,3 +299,60 @@ func relativeOr(path, root string) string {
 	}
 	return relative
 }
+
+// loadedUnit is one thing a client reads and obeys, found on this machine.
+type loadedUnit struct {
+	Path string
+	Kind string
+}
+
+// loadedUnits are the files an agent follows that are not skills.
+//
+// Skills were the whole object because they were the whole product. They are not the whole
+// surface: a subagent, a slash command, a hook configuration and the standing instructions
+// are all read at runtime and acted on, and nothing has ever looked at them again after
+// they were written. The mechanics do not care — a digest is over bytes and a rule reads
+// prose — so the only thing that changes is what counts as a unit.
+//
+// Project directories before the user's, the same order the clients read them in.
+func loadedUnits() []loadedUnit {
+	var units []loadedUnit
+	seen := map[string]struct{}{}
+	add := func(path, kind string) {
+		if _, repeat := seen[path]; repeat {
+			return
+		}
+		seen[path] = struct{}{}
+		units = append(units, loadedUnit{Path: path, Kind: kind})
+	}
+
+	for _, base := range baseDirectories() {
+		for _, known := range agents {
+			home := filepath.Join(base, known.HomeDir)
+			for _, kind := range known.LoadedFiles {
+				path := filepath.Join(home, kind.Path)
+				if isRegular(path) {
+					add(path, kind.Name)
+				}
+			}
+			for _, kind := range known.LoadedDirs {
+				entries, err := os.ReadDir(filepath.Join(home, kind.Path))
+				if err != nil {
+					continue
+				}
+				for _, entry := range entries {
+					if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+						continue
+					}
+					add(filepath.Join(home, kind.Path, entry.Name()), kind.Name)
+				}
+			}
+		}
+	}
+	return units
+}
+
+func isRegular(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}

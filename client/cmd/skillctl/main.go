@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	"github.com/random1st/skilltrust/internal/lint"
@@ -248,10 +249,47 @@ func runLint(args []string) int {
 		return exitUsage
 	}
 
+	// What else this machine's agents read and obey.
+	//
+	// Skills were the object because they were the product, not because they are the
+	// surface. A subagent, a slash command, a hook configuration and the standing
+	// instructions are all loaded at runtime and acted on, and nothing has looked at them
+	// since they were written. Saying so is the first honest thing this tool can do about
+	// them; checking them against a published copy is the next.
+	//
+	// Only on the text report, and only when nobody asked for a specific path: a machine
+	// scan should say what is on the machine, and a scan of one directory should not.
+	if strings.EqualFold(*format, "text") && flags.Arg(0) == "" {
+		reportLoaded(writer, loadedUnits())
+	}
+
 	if threshold != "" && run.AtOrAbove(threshold) > 0 {
 		return exitFindings
 	}
 	return exitClean
+}
+
+// reportLoaded names what the agents on this machine follow beyond their skills.
+func reportLoaded(writer io.Writer, units []loadedUnit) {
+	if len(units) == 0 {
+		return
+	}
+	counts := map[string]int{}
+	order := make([]string, 0, 4)
+	for _, unit := range units {
+		if counts[unit.Kind] == 0 {
+			order = append(order, unit.Kind)
+		}
+		counts[unit.Kind]++
+	}
+	sort.Strings(order)
+
+	fmt.Fprintf(writer, "\nAlso loaded and obeyed by your agents, and not checked by anything:\n")
+	for _, kind := range order {
+		fmt.Fprintf(writer, "  %-40s %d\n", kind, counts[kind])
+	}
+	fmt.Fprintf(writer, "%d in total. These are read at the start of a session the same way a "+
+		"skill is.\nNo catalog claims them yet, so nothing notices when one changes.\n", len(units))
 }
 
 func render(writer io.Writer, run lint.Reports, format string) error {
