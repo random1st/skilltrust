@@ -339,3 +339,47 @@ func TestDiffPrintedCommandKeepsReviewedCopyAfterAnotherRestore(t *testing.T) {
 		t.Fatalf("path metacharacters executed as shell code: %v", err)
 	}
 }
+
+// The saved copy is the artefact a person needs to send their change anywhere: into
+// their own skills repository, or one day to a service. Exporting is the only way those
+// bytes ever move, which is why it writes into an empty directory, refuses to merge
+// into somebody's tree, and says plainly that nothing has left the machine.
+func TestDiffExportsTheSavedCopyForTheirOwnRepository(t *testing.T) {
+	f := newRecoveryFixture(t)
+	saved, _ := f.keep(t, "our staging endpoint\n", time.Now())
+	// Client-managed files are not part of the skill and must not travel with it.
+	for _, name := range marketplace.ClientManagedRoots {
+		writeQuarantineSkill(t, filepath.Join(saved, name), "DO_NOT_EXPORT\n")
+	}
+	into := filepath.Join(t.TempDir(), "change")
+
+	output := capture(t, func() {
+		if code := runDiff([]string{"runbook", "--marketplace", "acme", "--claude-home", f.home,
+			"--quarantine", saved, "--export", into}); code != exitClean {
+			t.Fatalf("export exit %d", code)
+		}
+	})
+	if !strings.Contains(output, "Nothing has left it") || !strings.Contains(output, "skills repository") {
+		t.Fatalf("the export does not say where the bytes are or where to send them:\n%s", output)
+	}
+
+	body, err := os.ReadFile(filepath.Join(into, "SKILL.md"))
+	if err != nil || string(body) != "our staging endpoint\n" {
+		t.Fatalf("the exported skill is not the saved copy: %q, %v", body, err)
+	}
+	for _, name := range marketplace.ClientManagedRoots {
+		if _, err := os.Stat(filepath.Join(into, name)); err == nil {
+			t.Errorf("%s travelled with the skill", name)
+		}
+	}
+
+	// A second export into the same directory would quietly merge two copies, and a
+	// reader diffing the result would be reviewing something that never existed.
+	again := capture(t, func() {
+		if code := runDiff([]string{"runbook", "--marketplace", "acme", "--claude-home", f.home,
+			"--quarantine", saved, "--export", into}); code != exitUsage {
+			t.Fatalf("exporting into a non-empty directory exit %d", code)
+		}
+	})
+	_ = again
+}

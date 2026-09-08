@@ -27,6 +27,8 @@ func runDiff(args []string) int {
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: %s diff [flags] <plugin>\n\n"+
 			"Review a saved local change against the installed skill, without changing either.\n"+
+			"With --export, write that saved copy into an empty directory instead, so you can\n"+
+			"put it in your skills repository and publish it for everyone.\n"+
 			"Client dependencies, session locks, git metadata and signatures are excluded.\n"+
 			"The next command keeps the exact saved payload you reviewed.\n\nFlags:\n", commandName())
 		flags.PrintDefaults()
@@ -34,6 +36,7 @@ func runDiff(args []string) int {
 	market := flags.String("marketplace", "", "catalog publishing the plugin")
 	home := flags.String("claude-home", "", "client directory containing plugins/cache (default ~/.claude)")
 	quarantined := flags.String("quarantine", "", "exact saved copy (default: newest copy for this installation)")
+	export := flags.String("export", "", "write the saved copy into this directory instead of printing a diff")
 	savedVersion := flags.String("saved-version", "", "installed version the saved copy belonged to (for review across an upgrade)")
 	if err := parseArgs(flags, args); err != nil {
 		if err == flag.ErrHelp {
@@ -86,6 +89,17 @@ func runDiff(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("Installed: %q\nSaved:     %q\n", installed, selected)
+	if *export != "" {
+		written, err := exportPayload(saved, *export)
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Printf("Exported:  %q (%d file(s))\n", *export, written)
+		fmt.Println("These are the changed bytes, as they are on this computer. Nothing has left it.")
+		fmt.Println("To make this the version your organisation publishes, copy them over the skill in")
+		fmt.Println("your skills repository, review the diff there, and commit it the way you commit anything.")
+		return exitClean
+	}
 	changed, err := writePayloadDiff(os.Stdout, current, saved)
 	if err != nil {
 		return fail(err)
@@ -111,6 +125,56 @@ func runDiff(args []string) int {
 	fmt.Println("To keep this exact saved copy, replace the reason in this command:")
 	printNextCommand(adopt)
 	return exitFindings
+}
+
+// exportPayload writes the saved copy out so its bytes can travel where the person at
+// this computer decides to send them — into their own skills repository, or one day to a
+// service. It exists because that choice is theirs and needs an artefact to act on;
+// until somebody runs this, the changed copy has never left the machine, and that is the
+// one promise the whole product rests on.
+//
+// A directory rather than a patch: a patch has to represent binary files, mode changes
+// and file removals in a format some tool then has to accept, and the saved copy already
+// is the answer without any of that. What it costs is that the reader diffs it in their
+// own repository, which is where they were going to review it anyway.
+func exportPayload(saved *archive.Archive, directory string) (int, error) {
+	files, err := payloadFiles(saved)
+	if err != nil {
+		return 0, err
+	}
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return 0, err
+	}
+	// Refuse a directory that already holds something: this writes somebody's files, and
+	// merging them into an existing tree silently is how a review misses what changed.
+	if entries, err := os.ReadDir(root); err == nil && len(entries) > 0 {
+		return 0, fmt.Errorf("%s is not empty; export into a new directory so the copy is exactly what was saved", directory)
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		// The names come out of a payload this machine did not write, so every one is
+		// resolved and checked to land inside the directory that was asked for.
+		target := filepath.Join(root, filepath.FromSlash(name))
+		if !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+			return 0, fmt.Errorf("the saved copy names a path outside the export directory: %q", name)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return 0, err
+		}
+		mode := os.FileMode(0o600)
+		if files[name].mode&0o111 != 0 {
+			mode = 0o700
+		}
+		if err := os.WriteFile(target, files[name].body, mode); err != nil {
+			return 0, err
+		}
+	}
+	return len(names), nil
 }
 
 func recoveryHome(home string) (string, error) {
