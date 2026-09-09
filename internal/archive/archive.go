@@ -255,6 +255,23 @@ func collectFiles(
 				}
 			}
 
+			// What the filter excludes cannot object to anything.
+			//
+			// The entry-type refusals below decide what may be *in* the identity, so asking
+			// them about bytes that will never be in it is not strictness, it is a false
+			// refusal: an untracked symlink left in a working tree — a node_modules scratch
+			// directory, say — made an entire marketplace unsignable, though not one byte
+			// of it would have been signed. Skipping the subtree also stops the walk
+			// descending through build output the filter would discard file by file; on
+			// one real repository that was forty gigabytes of it.
+			//
+			// This changes nothing where it matters. `keep` is nil on the verification
+			// path, so every refusal stays exactly as strict for an installed copy — the
+			// only place a symlink could redirect what the identity covers.
+			if keep != nil && !keep(filepath.ToSlash(relative)) {
+				continue
+			}
+
 			switch {
 			case mode&os.ModeSymlink != 0:
 				return failf(KindEntryType,
@@ -277,10 +294,6 @@ func collectFiles(
 				return failf(KindEntryType,
 					"source entry %q has %d hard links; hard-linked files are denied",
 					relative, links)
-			}
-
-			if keep != nil && !keep(filepath.ToSlash(relative)) {
-				continue
 			}
 
 			if err := registry.registerFile(relative); err != nil {

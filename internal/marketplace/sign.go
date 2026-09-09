@@ -3,6 +3,7 @@ package marketplace
 import (
 	"fmt"
 	"os/exec"
+	"path"
 	"sort"
 	"strings"
 
@@ -169,8 +170,17 @@ func trackedFiles(directory string) map[string]struct{} {
 	}
 	tracked := map[string]struct{}{}
 	for _, name := range strings.Split(string(output), "\x00") {
-		if name != "" {
-			tracked[name] = struct{}{}
+		if name == "" {
+			continue
+		}
+		tracked[name] = struct{}{}
+		// Every directory on the way to a tracked file is tracked too, as far as this
+		// filter is concerned. The walk asks about directories before it descends, and a
+		// set of files alone would answer "no" to all of them and collect nothing. Naming
+		// the parents is also what lets the walk skip a subtree whole, instead of
+		// descending through build output to discard it a file at a time.
+		for parent := path.Dir(name); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			tracked[parent] = struct{}{}
 		}
 	}
 	if len(tracked) == 0 {
