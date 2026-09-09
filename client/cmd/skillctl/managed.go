@@ -445,12 +445,15 @@ func runSubscribe(args []string) int {
 			// pinned, the chain continues and so does the protection — re-running subscribe
 			// with the same keys, which people do out of habit, must not quietly re-open the
 			// replay window.
-			if reKey(publisherKeys(existing), publisherKeys(entry)) {
-				if err := os.Remove(snapshotStatePath(entry)); err != nil && !os.IsNotExist(err) {
-					return fail(err)
-				}
-				reKeyed = true
-			}
+			// Which keys are the notary's is pooled from both records before comparing.
+			// An older subscription may list the notary in its key set without ever
+			// having named it as one — the format that grouping came in later. Read on
+			// its own, such a record makes an unchanged notary look like a publisher key
+			// that still signs, so a real re-key would not be recognised and the machine
+			// would stay stuck. That is not hypothetical: it is the exact shape of the
+			// subscription this bug was found on.
+			notary := notaryIdentity(existing, entry)
+			reKeyed = reKey(publisherKeys(existing, notary), publisherKeys(entry, notary))
 			// Carrying these forward is what stops a re-subscribe from being a silent
 			// trust reset. Parties grouped by an earlier rotation would otherwise split
 			// back into one-key signers — handing a mid-rotation notary two votes — and a
@@ -466,8 +469,17 @@ func runSubscribe(args []string) int {
 	if !replaced {
 		subscriptions = append(subscriptions, entry)
 	}
+	// The mark is cleared only once the new pins are on disk. Doing it first left a window
+	// where a failure here would leave the old publisher still pinned and its rollback mark
+	// gone — a replay window opened by a supported command rather than by editing a file,
+	// which is the one thing the guard's honest description does not cover.
 	if err := saveSubscriptions(subscriptions); err != nil {
 		return fail(err)
+	}
+	if reKeyed {
+		if err := os.Remove(snapshotStatePath(entry)); err != nil && !os.IsNotExist(err) {
+			return fail(err)
+		}
 	}
 
 	fmt.Printf("catalog     %s\n", catalogName)
@@ -520,16 +532,29 @@ func snapshotStatePath(subscription Subscription) string {
 	return statePath(subscription.Name + ".sequence")
 }
 
+// notaryIdentity pools every key any of these records names as the notary's.
+//
+// Pooled rather than read per record because the grouping arrived after the first
+// subscriptions did. A record written before it lists the notary's key with no label, and
+// on its own is indistinguishable from a record with two publisher keys. The newer record
+// alongside it knows which one the notary is, and that knowledge is about the key, not
+// about the file it happens to be written in.
+func notaryIdentity(records ...Subscription) map[string]struct{} {
+	notary := map[string]struct{}{}
+	for _, record := range records {
+		for _, key := range record.Parties[notaryParty] {
+			notary[key] = struct{}{}
+		}
+	}
+	return notary
+}
+
 // publisherKeys is everything pinned for this subscription that is not the notary's.
 //
 // The sequence belongs to the publisher's chain: the notary countersigns whatever
 // sequence it is handed and rotates on its own timetable, so a notary rotation is not a
 // new chain and must not be read as one.
-func publisherKeys(subscription Subscription) []string {
-	notary := map[string]struct{}{}
-	for _, key := range subscription.Parties[notaryParty] {
-		notary[key] = struct{}{}
-	}
+func publisherKeys(subscription Subscription, notary map[string]struct{}) []string {
 	var keys []string
 	for _, key := range subscription.Keys() {
 		if _, isNotary := notary[key]; !isNotary {

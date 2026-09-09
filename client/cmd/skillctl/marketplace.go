@@ -112,10 +112,7 @@ func runMarketplaceSign(args []string) int {
 	indexPath := filepath.Join(repository, CatalogFileName)
 	previous, err := previousSnapshot(indexPath, key, *rekey)
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"skillctl: refusing to replace a signature this key cannot verify: %v\n"+
-				"           if the key that signed it is gone, say so: -rekey\n", err)
-		return exitUsage
+		return failPrevious("a signature", indexPath, err, *rekey)
 	}
 	if previous != nil {
 		snapshot.Sequence = previous.Sequence + 1
@@ -136,7 +133,7 @@ func runMarketplaceSign(args []string) int {
 	fmt.Printf("marketplace %s\n", manifest.Name)
 	fmt.Printf("signature   %s\n", indexPath)
 	fmt.Printf("sequence    %d\n", snapshot.Sequence)
-	reportRekey(*rekey && previous != nil, snapshot.Sequence)
+	reportRekey(previous, snapshot.Sequence)
 	fmt.Printf("signed      %d of %d plugin%s\n\n",
 		len(coverage.Signed), len(manifest.Plugins), plural(len(manifest.Plugins), "", "s"))
 	for _, managed := range coverage.Signed {
