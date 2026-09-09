@@ -373,6 +373,17 @@ func reportCoverage(coverage *marketplace.Coverage) {
 			fmt.Printf("    %s\n", name)
 		}
 	}
+	if len(coverage.Submodules) > 0 {
+		// Named rather than folded into "partially covered", because a submodule is not a
+		// build artefact somebody forgot to vendor — it is a deliberate pointer at another
+		// repository, and a recursive clone hands the consumer bytes this signature never
+		// saw. The publisher has to decide about that, so they have to be told where.
+		fmt.Printf("\n  outside the signature — submodules: git tracks the pointer, never the\n")
+		fmt.Printf("  contents, and a recursive clone still delivers them:\n")
+		for _, name := range coverage.Submodules {
+			fmt.Printf("    %s\n", name)
+		}
+	}
 	if len(coverage.Unversioned) > 0 {
 		fmt.Printf("\n  not signed — no version, so the installed directory cannot be named:\n")
 		for _, name := range coverage.Unversioned {

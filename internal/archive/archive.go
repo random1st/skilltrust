@@ -155,6 +155,15 @@ func BuildExcluding(sourceDir string, limits Limits, excludeRoots ...string) (*A
 // clone never has, so digesting the directory in front of the publisher describes a tree
 // that exists on exactly one machine. Passing the set of tracked files makes the signature
 // cover what a clone would contain, which is the only thing a consumer can reproduce.
+// keep is asked about every entry, files and directories alike, and a directory it refuses
+// is not descended into. A caller that answers only about files therefore prunes every
+// subtree and silently produces an empty archive — which is worse than any refusal, because
+// it succeeds. Whatever builds the filter must name the ancestors of everything it keeps;
+// `trackedFiles` in the marketplace package is the worked example.
+//
+// Passing nil means no filter, which is what every path that verifies an installed copy
+// does. That is not a default to change casually: a filter there would let data inside the
+// copy decide which of its own bytes the identity covers.
 func BuildFiltered(
 	sourceDir string, limits Limits, keep func(string) bool, excludeRoots ...string,
 ) (*Archive, error) {

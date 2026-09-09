@@ -2,8 +2,10 @@ package marketplace
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -72,15 +74,92 @@ func PluginLimits() archive.Limits {
 // identity. That makes it wrong for anything a consumer verifies — use DigestInstalled
 // for an installed copy.
 func DigestPlugin(directory string) (string, bool, error) {
+	digest, _, dependencies, err := digestPublished(directory)
+	return digest, dependencies, err
+}
+
+// digestPublished also reports the tracked paths the archive does not cover, because those
+// are precisely the bytes a clone will deliver and this digest will not describe.
+func digestPublished(directory string) (string, []string, bool, error) {
 	var keep func(string) bool
-	if tracked := trackedFiles(directory); tracked != nil {
+	tracked := trackedFiles(directory)
+	if tracked != nil {
 		keep = func(path string) bool { _, ok := tracked[path]; return ok }
 	}
 	built, err := archive.BuildFiltered(directory, PluginLimits(), keep, excludedRoots()...)
 	if err != nil {
-		return "", false, err
+		return "", nil, false, err
 	}
-	return built.Digest, hasDependencies(directory), nil
+	if missing := absentFromDisk(directory, tracked, built); len(missing) > 0 {
+		// Refused rather than reported. Every one of these is a file a clone hands the
+		// consumer and this signature does not mention, so the digest would be one nobody
+		// but this machine can reproduce and every install would read as tampering. It is
+		// a working-tree accident — a file moved or deleted without committing — and the
+		// publisher is standing right there and can fix it.
+		return "", nil, false, fmt.Errorf(
+			"%d tracked file(s) are missing from the working tree, so this digest would "+
+				"not match what a clone delivers: %s", len(missing), strings.Join(missing, ", "))
+	}
+	return built.Digest, gitlinks(directory, tracked), hasDependencies(directory), nil
+}
+
+// absentFromDisk is tracked paths that produced no archive member and are not directories.
+//
+// A gitlink is a tracked path that exists as a directory, so it is excluded here and
+// reported separately: its contents are a different repository's to vouch for.
+func absentFromDisk(directory string, tracked map[string]struct{}, built *archive.Archive) []string {
+	if tracked == nil {
+		return nil
+	}
+	covered := make(map[string]struct{}, len(built.Files))
+	for _, file := range built.Files {
+		covered[file.Path] = struct{}{}
+	}
+	var missing []string
+	for name := range tracked {
+		if _, ok := covered[name]; ok {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(directory, filepath.FromSlash(name)))
+		if err == nil && info.IsDir() {
+			continue // a directory, or a submodule; neither is a missing file
+		}
+		if excludedName(name) {
+			continue // client-managed or the signature itself, deliberately outside
+		}
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// gitlinks names submodules inside a plugin. git tracks the pointer, never the contents, so
+// nothing under one is inside the signature — and a recursive clone still delivers those
+// bytes. Reported rather than refused: they are somebody else's to vouch for, which is the
+// same reason vendored dependencies are reported instead of signed.
+func gitlinks(directory string, tracked map[string]struct{}) []string {
+	var found []string
+	for name := range tracked {
+		path := filepath.Join(directory, filepath.FromSlash(name))
+		if info, err := os.Lstat(path); err == nil && info.IsDir() {
+			if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+				found = append(found, name)
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// excludedName reports whether a path lies under an entry the identity never covers.
+func excludedName(name string) bool {
+	head, _, _ := strings.Cut(name, "/")
+	for _, excluded := range excludedRoots() {
+		if head == excluded {
+			return true
+		}
+	}
+	return false
 }
 
 // DigestInstalled computes the identity of an installed copy: every file counts.
@@ -106,6 +185,10 @@ type Coverage struct {
 	Unversioned []string
 	Remote      map[string][]string // source kind -> plugin names
 	Partial     []string            // signed, but with dependency code outside the signature
+	// Submodules are plugin-relative paths whose contents git tracks in another repository
+	// and this signature therefore does not cover, even though a recursive clone delivers
+	// them. Named individually because "partial" alone does not tell a publisher where.
+	Submodules []string
 }
 
 // Plan digests every plugin a marketplace repository owns and reports what it cannot sign.
@@ -131,12 +214,15 @@ func Plan(repository string, manifest *Manifest) (*Coverage, error) {
 			coverage.Unversioned = append(coverage.Unversioned, entry.Name)
 			continue
 		}
-		digest, dependencies, err := DigestPlugin(directory)
+		digest, submodules, dependencies, err := digestPublished(directory)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.Name, err)
 		}
-		if dependencies {
+		if dependencies || len(submodules) > 0 {
 			coverage.Partial = append(coverage.Partial, entry.Name)
+		}
+		for _, submodule := range submodules {
+			coverage.Submodules = append(coverage.Submodules, entry.Name+"/"+submodule)
 		}
 		coverage.Signed = append(coverage.Signed, catalog.Managed{
 			Name: entry.Name, Digest: digest, Version: version,
@@ -148,6 +234,7 @@ func Plan(repository string, manifest *Manifest) (*Coverage, error) {
 	})
 	sort.Strings(coverage.Unversioned)
 	sort.Strings(coverage.Partial)
+	sort.Strings(coverage.Submodules)
 	for kind := range coverage.Remote {
 		sort.Strings(coverage.Remote[kind])
 	}
