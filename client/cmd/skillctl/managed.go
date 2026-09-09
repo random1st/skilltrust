@@ -429,9 +429,28 @@ func runSubscribe(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	replaced := false
+	replaced, reKeyed := false, false
 	for index, existing := range subscriptions {
 		if existing.Name == catalogName {
+			// A re-key is a new chain, and the old chain's high-water mark is not about it.
+			//
+			// The sequence this machine has accepted belongs to whoever was signing at the
+			// time. When a publisher throws its key away and starts again, the new chain
+			// restarts at a low number, and a mark carried over from the old one refuses
+			// every index that chain will ever offer. Measured on a real machine, not
+			// imagined: after one re-key it sat at "seen 5, offered 2", and the only way
+			// forward was deleting a state file nothing tells you about.
+			//
+			// Only a complete change resets it. If any publisher key pinned before is still
+			// pinned, the chain continues and so does the protection — re-running subscribe
+			// with the same keys, which people do out of habit, must not quietly re-open the
+			// replay window.
+			if reKey(publisherKeys(existing), publisherKeys(entry)) {
+				if err := os.Remove(snapshotStatePath(entry)); err != nil && !os.IsNotExist(err) {
+					return fail(err)
+				}
+				reKeyed = true
+			}
 			// Carrying these forward is what stops a re-subscribe from being a silent
 			// trust reset. Parties grouped by an earlier rotation would otherwise split
 			// back into one-key signers — handing a mid-rotation notary two votes — and a
@@ -457,6 +476,13 @@ func runSubscribe(args []string) int {
 		fmt.Printf("index from  %s\n", entry.CatalogURL)
 	}
 	fmt.Printf("pinned keys %s\n", strings.Join(fingerprints(keyIDs), ", "))
+	if reKeyed {
+		// Said out loud, because it is the one thing here that lowers a protection. The
+		// person who ran this asked for a different publisher; they should be told that the
+		// replay guard starts again with it, not discover it from a file.
+		fmt.Printf("re-keyed    no key pinned before still signs; " +
+			"the rollback guard starts again from this catalog's next sequence\n")
+	}
 	if len(entry.Parties) > 0 {
 		for _, party := range sortedParties(entry.Parties) {
 			fmt.Printf("%-11s %s counts as one signer\n", party,
@@ -492,6 +518,45 @@ func statePath(catalogName string) string {
 
 func snapshotStatePath(subscription Subscription) string {
 	return statePath(subscription.Name + ".sequence")
+}
+
+// publisherKeys is everything pinned for this subscription that is not the notary's.
+//
+// The sequence belongs to the publisher's chain: the notary countersigns whatever
+// sequence it is handed and rotates on its own timetable, so a notary rotation is not a
+// new chain and must not be read as one.
+func publisherKeys(subscription Subscription) []string {
+	notary := map[string]struct{}{}
+	for _, key := range subscription.Parties[notaryParty] {
+		notary[key] = struct{}{}
+	}
+	var keys []string
+	for _, key := range subscription.Keys() {
+		if _, isNotary := notary[key]; !isNotary {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// reKey reports whether nothing that signed before still signs — the publisher started
+// over rather than added or dropped one key of several. An empty set on either side is not
+// a re-key: it means this subscription never named a publisher separately from its notary,
+// and guessing on absent evidence would reset a guard nobody asked to reset.
+func reKey(before, now []string) bool {
+	if len(before) == 0 || len(now) == 0 {
+		return false
+	}
+	still := map[string]struct{}{}
+	for _, key := range now {
+		still[key] = struct{}{}
+	}
+	for _, key := range before {
+		if _, kept := still[key]; kept {
+			return false
+		}
+	}
+	return true
 }
 
 // runSync brings every managed skill back to what its catalog publishes.

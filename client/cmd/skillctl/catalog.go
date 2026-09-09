@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"flag"
 	"fmt"
 	"os"
@@ -204,6 +203,7 @@ func runCatalogPublish(args []string) int {
 	keyPath := flags.String("key", defaultSigningKey(), "signing key")
 	validFor := flags.Duration("valid-for", 7*24*time.Hour,
 		"how long consumers may keep using this index before it must be refreshed")
+	rekey := flags.Bool("rekey", false, rekeyFlagUsage)
 
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
@@ -243,20 +243,19 @@ func runCatalogPublish(args []string) int {
 
 	// Republishing must not drop revocations or reuse a sequence: either would let a
 	// consumer that already saw a newer index quietly accept an older set of claims.
-	if existing, err := attest.LoadEnvelope(indexPath); err == nil {
-		// Open, not Verify: expiry is the promise this catalog makes to consumers, and
-		// holding the author to it would make a stale catalog impossible to refresh.
-		previous, _, err := catalog.Open(existing,
-			attest.NewTrustedKeys(key.Public().(ed25519.PublicKey)))
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"skillctl: refusing to replace an index this key cannot verify: %v\n", err)
-			return exitUsage
-		}
+	//
+	// Open, not Verify: expiry is the promise this catalog makes to consumers, and holding
+	// the author to it would make a stale catalog impossible to refresh.
+	previous, err := previousSnapshot(indexPath, key, *rekey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"skillctl: refusing to replace an index this key cannot verify: %v\n"+
+				"           if the key that signed it is gone, say so: -rekey\n", err)
+		return exitUsage
+	}
+	if previous != nil {
 		snapshot.Sequence = previous.Sequence + 1
 		snapshot.Revoked = previous.Revoked
-	} else if !os.IsNotExist(err) {
-		return fail(err)
 	}
 
 	for _, directory := range directories {

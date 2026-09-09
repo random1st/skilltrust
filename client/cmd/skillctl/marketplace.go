@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -73,6 +72,7 @@ func runMarketplaceSign(args []string) int {
 	keyPath := flags.String("key", defaultSigningKey(), "signing key")
 	validFor := flags.Duration("valid-for", 7*24*time.Hour,
 		"how long consumers may keep using this signature before refreshing")
+	rekey := flags.Bool("rekey", false, rekeyFlagUsage)
 	if err := parseArgs(flags, args); err != nil {
 		return exitUsage
 	}
@@ -110,18 +110,16 @@ func runMarketplaceSign(args []string) int {
 	}
 
 	indexPath := filepath.Join(repository, CatalogFileName)
-	if existing, err := attest.LoadEnvelope(indexPath); err == nil {
-		previous, _, err := catalog.Open(existing,
-			attest.NewTrustedKeys(key.Public().(ed25519.PublicKey)))
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"skillctl: refusing to replace a signature this key cannot verify: %v\n", err)
-			return exitUsage
-		}
+	previous, err := previousSnapshot(indexPath, key, *rekey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"skillctl: refusing to replace a signature this key cannot verify: %v\n"+
+				"           if the key that signed it is gone, say so: -rekey\n", err)
+		return exitUsage
+	}
+	if previous != nil {
 		snapshot.Sequence = previous.Sequence + 1
 		snapshot.Revoked = previous.Revoked
-	} else if !os.IsNotExist(err) {
-		return fail(err)
 	}
 
 	envelope, err := catalog.Sign(snapshot, key)
@@ -138,6 +136,7 @@ func runMarketplaceSign(args []string) int {
 	fmt.Printf("marketplace %s\n", manifest.Name)
 	fmt.Printf("signature   %s\n", indexPath)
 	fmt.Printf("sequence    %d\n", snapshot.Sequence)
+	reportRekey(*rekey && previous != nil, snapshot.Sequence)
 	fmt.Printf("signed      %d of %d plugin%s\n\n",
 		len(coverage.Signed), len(manifest.Plugins), plural(len(manifest.Plugins), "", "s"))
 	for _, managed := range coverage.Signed {
