@@ -2,6 +2,8 @@ package notary
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -233,7 +235,8 @@ func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleFetch(w http.ResponseWriter, r *http.Request) {
-	body, err := s.Serve(r.PathValue("org"), r.PathValue("marketplace"))
+	org, marketplace := r.PathValue("org"), r.PathValue("marketplace")
+	body, err := s.Serve(org, marketplace)
 	if errors.Is(err, ErrAbsent) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -242,8 +245,53 @@ func (s *Service) handleFetch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the catalog could not be read", http.StatusInternalServerError)
 		return
 	}
+	if !s.mayFetch(org, marketplace, body, bearer(r)) {
+		// Absent rather than forbidden, deliberately. A private catalog that answered 401
+		// would confirm its own existence, and the names here are the organisation's and
+		// its repository's — enough to tell somebody that a company they are interested in
+		// publishes skills, and what they are called.
+		http.Error(w, ErrAbsent.Error(), http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
+}
+
+// mayFetch decides whether this catalog is anybody's to read.
+//
+// The rule is the one the publish path already established: public means GitHub said so in
+// a token it minted, never the publisher claiming it. So a catalog whose provenance records
+// a public repository is served to anyone — that is the whole point of a catalog, and every
+// consumer following one today does so without a credential. Anything else needs the
+// organisation's token.
+//
+// It closes only what is positively known to be private, and that asymmetry is deliberate.
+// A catalog published with a static token records no provenance at all, and neither did
+// anything published before this field existed — those say nothing either way, and a
+// self-hosted notaryd serving its own machines is exactly that case. Refusing them would
+// break working deployments to protect them from a leak they may not have. Refusing a
+// repository GitHub called private breaks nothing, because nobody outside was ever meant
+// to read it.
+//
+// This was open to everyone until now: the names, versions and digests of a private
+// repository's skills were readable by anybody who guessed the path. A digest is a cheap
+// oracle — it confirms a guess about bytes nobody outside was meant to hold.
+func (s *Service) mayFetch(org, marketplace string, body []byte, token string) bool {
+	storage, ok := s.storage.(CatalogProvenanceStorage)
+	if !ok {
+		return true
+	}
+	// Keyed by the digest of exactly these bytes, which is how the publish path filed it.
+	sum := sha256.Sum256(body)
+	where, err := storage.GetCatalogProvenance(org, marketplace, hex.EncodeToString(sum[:]))
+	if err != nil || where.RepositoryVisibility == "" || where.RepositoryVisibility == "public" {
+		return true
+	}
+	if token == "" {
+		return false
+	}
+	_, err = s.authorize(org, token, func(o Org) Secret { return o.Token })
+	return err == nil
 }
 
 func payloadType(body []byte) string {
