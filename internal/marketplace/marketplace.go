@@ -28,6 +28,19 @@ const ManifestPath = ".claude-plugin/marketplace.json"
 // PluginManifestPath is where a plugin keeps its own manifest.
 const PluginManifestPath = ".claude-plugin/plugin.json"
 
+// CodexManifestPath is Codex's own manifest, and the reason this package reads two shapes.
+//
+// Codex has no marketplace format of its own: `codex plugin marketplace add` clones a
+// repository and reads the same .claude-plugin/marketplace.json, leaving an install record
+// beside it. Checked on a real machine rather than assumed — every marketplace under
+// ~/.codex/.tmp/marketplaces carries a .claude-plugin directory.
+//
+// What it does have is a plugin manifest at the repository root listing skill directories
+// instead of plugins. A repository published for Codex therefore names its signable units
+// in a different place and a different shape, and nothing below this file needs to know:
+// both are turned into the same Manifest.
+const CodexManifestPath = ".codex-plugin/plugin.json"
+
 // Entry is one plugin listed by a marketplace.
 //
 // Source is deliberately left as raw JSON. It is a string for a path inside the repository
@@ -48,10 +61,29 @@ type Manifest struct {
 	Plugins []Entry `json:"plugins"`
 }
 
-// Load reads the marketplace catalog from a repository checkout.
+// Load reads a repository's catalog, in whichever shape it publishes one.
+//
+// The Claude marketplace is tried first and a Codex plugin second, in that order because a
+// repository that has both is a Claude marketplace that also ships a Codex manifest — s5d
+// is exactly that — and the marketplace is the broader statement: it names plugins, one of
+// which the Codex manifest then details. Reading the narrower one first would sign part of
+// what the repository publishes and call it the whole.
 func Load(repository string) (*Manifest, error) {
 	path := filepath.Join(repository, filepath.FromSlash(ManifestPath))
 	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		codex, codexErr := loadCodex(repository)
+		if codexErr == nil {
+			return codex, nil
+		}
+		if os.IsNotExist(codexErr) {
+			// Neither shape is present. The Claude path is named because it is the one
+			// almost every repository means to have, and "no .codex-plugin either" would
+			// send somebody looking for the wrong file.
+			return nil, err
+		}
+		return nil, codexErr
+	}
 	if err != nil {
 		return nil, err
 	}
